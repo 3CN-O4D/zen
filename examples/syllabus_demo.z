@@ -1,0 +1,84 @@
+// Zen Syllabus Demo
+// Run: zen run examples/syllabus_demo.zen
+
+print "=== 1. Data Types ==="
+let name = "Zen"
+let count = 42
+let active = true
+let items = [1, "two", true]
+let config = {"lang": "Zen", "year": 2024}
+print name
+print count
+print active
+print items
+print config
+
+print ""
+print "=== 2. Operators ==="
+print 10 + 5
+print 10 > 5
+print "world" in "hello world"
+print 42 in [1, 2, 42]
+print "x" in {"x": 1, "y": 2}
+print "z" not in {"x": 1}
+print true and false
+print true or false
+print not false
+
+print ""
+print "=== 3. Control Flow ==="
+let x = 3
+while x > 0 {
+    print x
+    x = x - 1
+}
+
+for item in ["a", "b", "c"] {
+    print item
+}
+
+if 10 > 5 {
+    print "ten is greater"
+} else {
+    print "unexpected"
+}
+
+print ""
+print "=== 4. Functions ==="
+function double(n) {
+    return n * 2
+}
+print double(21)
+
+function add(a, b) {
+    return a + b
+}
+print add(3, 4)
+
+print ""
+print "=== 5. Browser ==="
+go "https://example.com"
+let title = text("h1")
+print "Title: " + title
+let links = attrs("a", "href")
+for link in links {
+    print "Link: " + link
+}
+
+print ""
+print "=== 6. File Ops ==="
+write_file("/tmp/zen_test.txt", "Hello from Zen!")
+let content = read_file("/tmp/zen_test.txt")
+print "Read: " + content
+print "Exists: " + file_exists("/tmp/zen_test.txt")
+
+print ""
+print "=== 7. Error Handling ==="
+try {
+    click ".does-not-exist"
+} catch {
+    print "Caught error safely"
+}
+
+print ""
+print "=== ALL DEMOS PASSED ==="

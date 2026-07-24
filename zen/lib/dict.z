@@ -1,0 +1,28 @@
+merge = function(a, b) {
+  result = {}
+  for k in a.keys() { result[k] = a[k] }
+  for k in b.keys() { result[k] = b[k] }
+  result
+}
+
+pick = function(d, keys) {
+  result = {}
+  for k in keys {
+    if d.has(k) { result[k] = d[k] }
+  }
+  result
+}
+
+omit = function(d, keys) {
+  result = {}
+  for k in d.keys() {
+    if not keys.includes(k) { result[k] = d[k] }
+  }
+  result
+}
+
+invert = function(d) {
+  result = {}
+  for k in d.keys() { result[d[k]] = k }
+  result
+}

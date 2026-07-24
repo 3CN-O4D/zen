@@ -1,0 +1,62 @@
+range = function(start, end = null) {
+  if end is null {
+    end = start
+    start = 0
+  }
+  result = []
+  i = start
+  while i < end {
+    result.push(i)
+    i = i + 1
+  }
+  result
+}
+
+flatten = function(list) {
+  result = []
+  for item in list {
+    if type(item) == "list" {
+      for sub in item {
+        result.push(sub)
+      }
+    } else {
+      result.push(item)
+    }
+  }
+  result
+}
+
+unique = function(list) {
+  seen = []
+  result = []
+  for item in list {
+    if not seen.includes(item) {
+      seen.push(item)
+      result.push(item)
+    }
+  }
+  result
+}
+
+chunk = function(list, n) {
+  result = []
+  i = 0
+  while i < list.len {
+    result.push(list[i:i + n])
+    i = i + n
+  }
+  result
+}
+
+partition = function(list, fn) {
+  pass = []
+  fail = []
+  for item in list {
+    if fn(item) {
+      pass.push(item)
+    } else {
+      fail.push(item)
+    }
+  }
+  [pass, fail]
+}

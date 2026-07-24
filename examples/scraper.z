@@ -1,0 +1,49 @@
+// Real-world data extraction example
+// zen run examples/scraper.zen
+// Extracts structured data from a page using find/find_all
+
+go "https://quotes.toscrape.com/"
+
+print "=== EXTRACTING QUOTES ==="
+
+// Find quote elements
+let quotes = find_all(".quote")
+
+print "Found " + quotes.count + " quotes\n"
+
+// Extract structured data
+let dataset = []
+
+quotes.each(function(q, i) {
+    let text = q.find(".text").text
+    let author = q.find(".author").text
+    let tags = q.find_all(".tag").texts
+
+    let entry = {
+        "index": i,
+        "text": text,
+        "author": author,
+        "tags": tags
+    }
+    dataset.append(entry)
+
+    print (i + 1) + ". " + author + ": " + text
+})
+
+print "\n=== DATA SUMMARY ==="
+print "Total entries: " + dataset.len
+
+// Extract all authors
+let authors = []
+for entry in dataset {
+    authors.append(entry.get("author"))
+}
+print "Authors: " + authors
+
+// Save structured data
+write_file("/tmp/quotes.json", dataset)
+print "\nData saved to /tmp/quotes.json"
+
+// Take a screenshot
+shot "/tmp/quotes_page.png"
+print "Screenshot saved"
