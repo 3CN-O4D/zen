@@ -256,12 +256,15 @@ class Shell:
         if self._buf:
             yellow_dots = c.yellow('...') if c.enabled else '...'
             return f'{yellow_dots} '
+        no_browser = ''
+        if self.browser and not self.browser.has_browser:
+            no_browser = c.yellow(' (no browser)')
         if page_count > 0 and title:
-            parts = f'{c.bright_cyan("zen")}{c.dim(f"[{page_count}]")}{c.dim(title)} {c.bright_cyan("❯")} '
+            parts = f'{c.bright_cyan("zen")}{no_browser}{c.dim(f"[{page_count}]")}{c.dim(title)} {c.bright_cyan("❯")} '
         elif page_count > 0:
-            parts = f'{c.bright_cyan("zen")}{c.dim(f"[{page_count}]")} {c.bright_cyan("❯")} '
+            parts = f'{c.bright_cyan("zen")}{no_browser}{c.dim(f"[{page_count}]")} {c.bright_cyan("❯")} '
         else:
-            parts = f'{c.bright_cyan("zen")} {c.bright_cyan("❯")} '
+            parts = f'{c.bright_cyan("zen")}{no_browser} {c.bright_cyan("❯")} '
         if for_readline and 'TERMUX_VERSION' not in os.environ:
             return f'\001{c.reset()}\002{parts}\001{c.reset()}\002'
         return parts
@@ -272,9 +275,13 @@ class Shell:
         if not HAS_PT:
             print(f'{c.yellow("Tip:")} install {c.bright_cyan("prompt-toolkit")} for auto-completion, syntax highlighting, and more ({c.yellow("pip install prompt-toolkit")})')
         print(f'Type {c.yellow(".help")} for commands, {c.yellow(".exit")} to quit')
-        print()
 
         self.browser.start()
+        if not self.browser.has_browser and self.browser._no_browser:
+            print(c.yellow(f'\n! {self.browser._no_browser.split(chr(10))[0]}'))
+            print(c.yellow('! Browser-dependent commands (go, click, fill, ...) will not work.'))
+        print()
+
         self.interpreter = Interpreter(self.browser)
 
         if self._use_pt:

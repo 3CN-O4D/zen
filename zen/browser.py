@@ -110,6 +110,15 @@ class Browser:
         self._mode = mode
         self._url_history = []
         self._timeout_ms = 30000
+        self._no_browser = None
+
+    @property
+    def has_browser(self):
+        if self._no_browser:
+            return False
+        if self._mode == 'http':
+            return True
+        return self._drission is not None
 
     @property
     def timeout_ms(self):
@@ -152,8 +161,13 @@ class Browser:
 
     @property
     def page(self):
+        if self._no_browser:
+            raise ZenBrowserError(self._no_browser)
         if self._drission is None:
             self.start()
+        if self._drission is None:
+            msg = self._no_browser or 'No browser available.'
+            raise ZenBrowserError(msg)
         return self._drission
 
     @property
@@ -211,7 +225,7 @@ class Browser:
             try:
                 self._drission = ChromiumPage(addr_or_opts=co)
             except (FileNotFoundError, OSError):
-                raise ZenBrowserError(
+                self._no_browser = (
                     "Cannot connect to browser.\n"
                     "  Make sure Chrome is running with --remote-debugging-port=9222\n"
                     "  Or use:  zen script.z --http  (HTTP-only mode)")
@@ -234,7 +248,7 @@ class Browser:
                 )
                 if bp:
                     msg += f"  Path tried:  {bp}\n"
-                raise ZenBrowserError(msg)
+                self._no_browser = msg
         return self
 
     def stop(self):
@@ -414,6 +428,9 @@ class Browser:
             self._safe(lambda: self.page.run_js(f'window.scrollBy({x}, {y})'), 'scrolling')
 
     def execute(self, code):
+        code = str(code).strip()
+        if not code.startswith('return ') and not code.startswith('return\n'):
+            code = 'return ' + code
         return self._safe(lambda: self.page.run_js(code), 'executing JS')
 
     def page_html(self):
@@ -421,65 +438,63 @@ class Browser:
 
     def page_text_markers(self):
         js = """
-        () => {
-            function extract(root) {
-                let parts = [];
-                for (let node of root.childNodes) {
-                    if (node.nodeType === 3) {
-                        let t = node.textContent.trim();
-                        if (t) parts.push(t);
-                    } else if (node.nodeType === 1) {
-                        let tag = node.tagName.toLowerCase();
-                        if (tag === 'br') {
-                            parts.push('\\n');
-                        } else if (tag === 'img') {
-                            parts.push('{[image]}');
-                        } else if (tag === 'video') {
-                            parts.push('{[video]}');
-                        } else if (tag === 'audio') {
-                            parts.push('{[audio]}');
-                        } else if (tag === 'iframe') {
-                            parts.push('{[iframe]}');
-                        } else if (tag === 'script' || tag === 'style') {
-                            continue;
-                        } else if (tag === 'p' || tag === 'div' || tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6' || tag === 'li') {
-                            let inner = extract(node).trim();
-                            if (inner) parts.push(inner + '\\n');
-                        } else {
-                            parts.push(extract(node));
-                        }
+        function extract(root) {
+            let parts = [];
+            for (let node of root.childNodes) {
+                if (node.nodeType === 3) {
+                    let t = node.textContent.trim();
+                    if (t) parts.push(t);
+                } else if (node.nodeType === 1) {
+                    let tag = node.tagName.toLowerCase();
+                    if (tag === 'br') {
+                        parts.push('\\n');
+                    } else if (tag === 'img') {
+                        parts.push('{[image]}');
+                    } else if (tag === 'video') {
+                        parts.push('{[video]}');
+                    } else if (tag === 'audio') {
+                        parts.push('{[audio]}');
+                    } else if (tag === 'iframe') {
+                        parts.push('{[iframe]}');
+                    } else if (tag === 'script' || tag === 'style') {
+                        continue;
+                    } else if (tag === 'p' || tag === 'div' || tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6' || tag === 'li') {
+                        let inner = extract(node).trim();
+                        if (inner) parts.push(inner + '\\n');
+                    } else {
+                        parts.push(extract(node));
                     }
                 }
-                return parts.join(' ').replace(/ +/g, ' ').replace(/\\n /g, '\\n');
             }
-            return extract(document.body).trim();
+            return parts.join(' ').replace(/ +/g, ' ').replace(/\\n /g, '\\n');
         }
+        return (document.body ? extract(document.body).trim() : '');
         """
         return self._safe(lambda: self.page.run_js(js), 'extracting page text')
 
     def page_links(self):
         return self._safe(
-            lambda: self.page.run_js('() => [...document.querySelectorAll("a[href]")].map(a => a.href)'),
+            lambda: self.page.run_js('return [...document.querySelectorAll("a[href]")].map(a => a.href)'),
             'getting page links')
 
     def page_images(self):
         return self._safe(
-            lambda: self.page.run_js('() => [...document.querySelectorAll("img[src]")].map(img => img.src)'),
+            lambda: self.page.run_js('return [...document.querySelectorAll("img[src]")].map(img => img.src)'),
             'getting page images')
 
     def page_forms(self):
         return self._safe(
-            lambda: self.page.run_js('() => [...document.querySelectorAll("form")].map(f => ({action: f.action || "", method: f.method || "get", id: f.id || "", inputs: [...f.querySelectorAll("input, select, textarea")].map(i => ({name: i.name || "", type: i.type || "text", id: i.id || "", placeholder: i.placeholder || ""}))}))'),
+            lambda: self.page.run_js('return [...document.querySelectorAll("form")].map(f => ({action: f.action || "", method: f.method || "get", id: f.id || "", inputs: [...f.querySelectorAll("input, select, textarea")].map(i => ({name: i.name || "", type: i.type || "text", id: i.id || "", placeholder: i.placeholder || ""}))}))'),
             'getting page forms')
 
     def page_inputs(self):
         return self._safe(
-            lambda: self.page.run_js('() => [...document.querySelectorAll("input, select, textarea")].map(i => ({name: i.name || "", type: i.type || "text", id: i.id || "", placeholder: i.placeholder || "", value: i.value || "", disabled: i.disabled, readonly: i.readOnly, required: i.required, checked: i.checked || false, tag: i.tagName.toLowerCase()}))'),
+            lambda: self.page.run_js('return [...document.querySelectorAll("input, select, textarea")].map(i => ({name: i.name || "", type: i.type || "text", id: i.id || "", placeholder: i.placeholder || "", value: i.value || "", disabled: i.disabled, readonly: i.readOnly, required: i.required, checked: i.checked || false, tag: i.tagName.toLowerCase()}))'),
             'getting page inputs')
 
     def page_buttons(self):
         return self._safe(
-            lambda: self.page.run_js('() => [...document.querySelectorAll("button, input[type=submit], input[type=button], input[type=reset], a.btn, [role=button]")].map(b => ({tag: b.tagName.toLowerCase(), type: b.type || "", id: b.id || "", text: (b.textContent || b.value || "").trim(), href: b.href || "", class: b.className || ""}))'),
+            lambda: self.page.run_js('return [...document.querySelectorAll("button, input[type=submit], input[type=button], input[type=reset], a.btn, [role=button]")].map(b => ({tag: b.tagName.toLowerCase(), type: b.type || "", id: b.id || "", text: (b.textContent || b.value || "").trim(), href: b.href || "", class: b.className || ""}))'),
             'getting page buttons')
 
     def download(self, url, path):
