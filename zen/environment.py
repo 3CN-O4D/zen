@@ -17,6 +17,12 @@ class ZenError(Exception):
         self.node = node
         super().__init__(message)
 
+class ZenBrowserError(ZenError):
+    pass
+
+class ZenFileError(ZenError):
+    pass
+
 
 class Environment:
     def __init__(self, parent=None):

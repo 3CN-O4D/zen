@@ -2,6 +2,7 @@ import os, time as _time_mod
 from . import nodes as ast
 from .environment import Environment, ZenReturn, ZenBreak, ZenContinue, ZenError, ZenElement, ZenList, ZenMethod, ConfigModule
 from .builtins import register_builtins, _parse_duration
+from .color import color
 
 _VOID = object()
 
@@ -146,7 +147,7 @@ class Interpreter:
             except ZenError as e:
                 msg = e.message
                 if 'Undefined variable' in msg:
-                    msg += "\n  \033[1;33mHint: URLs need quotes. Try: go \"https://example.com\"\033[0m"
+                    msg += "\n  " + color.yellow("Hint: URLs need quotes. Try: go \"https://example.com\"")
                 raise ZenError(msg)
             self.browser.go(url)
             return _VOID

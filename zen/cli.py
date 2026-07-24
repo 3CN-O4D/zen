@@ -1,5 +1,6 @@
 import sys
 import os
+import traceback
 import argparse
 
 from .lexer import Lexer, LexerError
@@ -8,6 +9,8 @@ from .interpreter import Interpreter, ZenError
 from .browser import Browser, set_config
 from .shell import Shell
 from .utils import read_file, resolve_path
+from .color import color
+from .environment import ZenBrowserError
 
 
 def _add_browser_args(sp):
@@ -42,6 +45,7 @@ Examples:
         """)
 
     parser.add_argument('--version', action='store_true', help='Show version')
+    parser.add_argument('--debug', action='store_true', help='Show full debug tracebacks')
 
     sub = parser.add_subparsers(dest='command', help='Command')
 
@@ -69,6 +73,9 @@ Examples:
 
     script_extra = []
     args, unknown = parser.parse_known_args()
+
+    if args.debug:
+        os.environ['ZEN_DEBUG'] = '1'
 
     headless = not (getattr(args, 'headful', False) or getattr(args, 'no_headless', False))
     set_config('headless', headless)
@@ -100,13 +107,34 @@ Examples:
     elif getattr(args, 'connect', None) is not None:
         browser_mode = 'connect'
 
+    try:
+        _dispatch(args, unknown, script_extra, headless, browser_mode)
+    except ZenBrowserError as e:
+        print(color.red(e.message))
+        if args.debug or 'ZEN_DEBUG' in os.environ:
+            traceback.print_exc()
+        sys.exit(1)
+    except (LexerError, ParseError) as e:
+        print(color.red(f"Error: {e}"))
+        sys.exit(1)
+    except ZenError as e:
+        print(color.red(f"Error: {e.message}"))
+        sys.exit(1)
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(color.red(f"Unexpected error: {e}"))
+        if args.debug or 'ZEN_DEBUG' in os.environ:
+            traceback.print_exc()
+        sys.exit(1)
+
+
+def _dispatch(args, unknown, script_extra, headless, browser_mode):
     if args.command == 'shell' or args.command is None:
         shell = Shell(headless=headless, browser_path=getattr(args, 'browser_path', None),
                       connect_port=getattr(args, 'connect', None), mode=browser_mode)
         try:
             shell.start()
-        except KeyboardInterrupt:
-            pass
         finally:
             shell.stop()
         return
@@ -114,7 +142,7 @@ Examples:
     if args.command == 'run':
         path = resolve_path(args.file)
         if not os.path.exists(path):
-            print(f"File not found: {path}")
+            print(color.red(f"File not found: {path}"))
             sys.exit(1)
         code = read_file(path)
         browser = Browser(
@@ -129,12 +157,6 @@ Examples:
             parser = Parser(lexer)
             program = parser.parse()
             interpreter.interpret(program)
-        except (LexerError, ParseError, ZenError) as e:
-            print(f"\033[1;31mError: {e}\033[0m")
-            sys.exit(1)
-        except Exception as e:
-            print(f"\033[1;31mRuntime Error: {e}\033[0m")
-            sys.exit(1)
         finally:
             browser.stop()
         return
@@ -153,9 +175,6 @@ Examples:
             if args.html:
                 print("---")
                 print(browser.page_html())
-        except Exception as e:
-            print(f"Error: {e}")
-            sys.exit(1)
         finally:
             browser.stop()
         return
@@ -170,10 +189,7 @@ Examples:
         try:
             browser.go(args.url)
             browser.shot(args.output)
-            print(f"Screenshot saved: {args.output}")
-        except Exception as e:
-            print(f"Error: {e}")
-            sys.exit(1)
+            print(color.green(f"Screenshot saved: {args.output}"))
         finally:
             browser.stop()
         return
@@ -190,9 +206,6 @@ Examples:
             texts = browser.texts(args.selector)
             for t in texts:
                 print(t)
-        except Exception as e:
-            print(f"Error: {e}")
-            sys.exit(1)
         finally:
             browser.stop()
         return

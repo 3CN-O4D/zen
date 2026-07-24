@@ -7,6 +7,7 @@ from .parser import Parser, ParseError
 from .interpreter import Interpreter, ZenError, _VOID
 from .environment import ZenElement, ZenList, ZenMethod, ZenRegexMatch
 from .browser import Browser
+from .color import color
 from . import __version__
 
 warnings.filterwarnings('ignore', message='coroutine.*was never awaited')
@@ -188,13 +189,13 @@ def _show_error_context(code, line, col, message):
         prefix = '>>>' if i == line - 1 else '   '
         print(f'  {prefix} {lines[i]}')
     print(f'      {" " * (col - 1)}^')
-    print(f'  \033[1;31mError: {message}\033[0m')
+    print(color.red(f'  Error: {message}'))
 
 def _show_error_context_for_token(code, token, message):
     if token:
         _show_error_context(code, token.line, token.col, message)
     else:
-        print(f'  \033[1;31mError: {message}\033[0m')
+        print(color.red(f'  Error: {message}'))
 
 
 def _format_result(val):
@@ -251,32 +252,26 @@ class Shell:
             except Exception:
                 pass
 
-        if for_readline:
-            cyan = '\001\033[1;36m\002'
-            reset = '\001\033[0m\002'
-            dim = '\001\033[2m\002'
-            yellow = '\001\033[1;33m\002'
-        else:
-            cyan = '\033[1;36m'
-            reset = '\033[0m'
-            dim = '\033[2m'
-            yellow = '\033[1;33m'
-
+        c = color
         if self._buf:
-            return f'\033[33m...\033[0m '
+            yellow_dots = c.yellow('...') if c.enabled else '...'
+            return f'{yellow_dots} '
         if page_count > 0 and title:
-            return f'{cyan}zen{dim}[{page_count}]{reset}{dim}{title}{reset} {cyan}❯{reset} '
+            parts = f'{c.bright_cyan("zen")}{c.dim(f"[{page_count}]")}{c.dim(title)} {c.bright_cyan("❯")} '
         elif page_count > 0:
-            return f'{cyan}zen{dim}[{page_count}]{reset} {cyan}❯{reset} '
+            parts = f'{c.bright_cyan("zen")}{c.dim(f"[{page_count}]")} {c.bright_cyan("❯")} '
         else:
-            return f'{cyan}zen ❯{reset} '
+            parts = f'{c.bright_cyan("zen")} {c.bright_cyan("❯")} '
+        if for_readline and 'TERMUX_VERSION' not in os.environ:
+            return f'\001{c.reset()}\002{parts}\001{c.reset()}\002'
+        return parts
 
     def start(self):
-        banner = f'\033[1;36mZen v{__version__} — Browser Automation Shell\033[0m'
-        print(banner)
+        c = color
+        print(c.bright_cyan(f'Zen v{__version__} — Browser Automation Shell'))
         if not HAS_PT:
-            print('\033[1;33mTip:\033[0m install \033[1;36mprompt-toolkit\033[0m for auto-completion, syntax highlighting, and more (\033[1;33mpip install prompt-toolkit\033[0m)')
-        print('Type \033[1;33m.help\033[0m for commands, \033[1;33m.exit\033[0m to quit')
+            print(f'{c.yellow("Tip:")} install {c.bright_cyan("prompt-toolkit")} for auto-completion, syntax highlighting, and more ({c.yellow("pip install prompt-toolkit")})')
+        print(f'Type {c.yellow(".help")} for commands, {c.yellow(".exit")} to quit')
         print()
 
         self.browser.start()
@@ -459,205 +454,213 @@ class Shell:
             return
 
     def _show_general_help(self):
-        print('\033[1;33mZen — Browser Automation Language\033[0m')
+        c = color
+        Y = c.yellow
+        C = c.bright_cyan
+        R = c.reset
+        print(C('Zen — Browser Automation Language'))
         print()
-        print('\033[1;36mData Types\033[0m')
-        print('  \033[33mNumber\033[0m  42, 3.14, -7')
-        print('  \033[33mString\033[0m  "hello", \'world\'')
-        print('  \033[33mBoolean\033[0m true, false')
-        print('  \033[33mNull\033[0m    null')
-        print('  \033[33mList\033[0m    [1, 2, 3]')
-        print('  \033[33mDict\033[0m    {"a": 1}')
+        print(C('Data Types'))
+        print(f'  {Y("Number")}  42, 3.14, -7')
+        print(f'  {Y("String")}  "hello", \'world\'')
+        print(f'  {Y("Boolean")} true, false')
+        print(f'  {Y("Null")}    null')
+        print(f'  {Y("List")}    [1, 2, 3]')
+        print(f'  {Y("Dict")}    {{"a": 1}}')
         print()
-        print('\033[1;36mOperators\033[0m')
-        print('  \033[33mArithmetic:\033[0m  +  -  *  /  %  **')
-        print('  \033[33mComparison:\033[0m  ==  !=  <  >  <=  >=')
-        print('  \033[33mMembership:\033[0m  in  not in')
-        print('  \033[33mLogical:\033[0m     and  or  not')
+        print(C('Operators'))
+        print(f'  {Y("Arithmetic:")}  +  -  *  /  %  **')
+        print(f'  {Y("Comparison:")}  ==  !=  <  >  <=  >=')
+        print(f'  {Y("Membership:")}  in  not in')
+        print(f'  {Y("Logical:")}     and  or  not')
         print()
-        print('\033[1;36mControl Flow\033[0m')
-        print('  \033[33mif\033[0m cond { } \033[33melse\033[0m { }')
-        print('  \033[33mwhile\033[0m cond { }')
-        print('  \033[33mfor\033[0m x in iterable { }')
-        print('  \033[33mfunction\033[0m name(params) { }')
-        print('  \033[33mreturn\033[0m value')
-        print('  \033[33mbreak\033[0m — exit current loop')
-        print('  \033[33mcontinue\033[0m — skip to next iteration')
-        print('  \033[33mtry\033[0m { } \033[33mcatch\033[0m err { }   (optional error var)')
-        print('  \033[33mtry\033[0m { } \033[33mcatch\033[0m { } \033[33mfinally\033[0m { }')
-        print('  \033[33minclude "file.z"\033[0m  — Include and run another Zen file')
+        print(C('Control Flow'))
+        print(f'  {Y("if")} cond {{ }} {Y("else")} {{ }}')
+        print(f'  {Y("while")} cond {{ }}')
+        print(f'  {Y("for")} x in iterable {{ }}')
+        print(f'  {Y("function")} name(params) {{ }}')
+        print(f'  {Y("return")} value')
+        print(f'  {Y("break")} — exit current loop')
+        print(f'  {Y("continue")} — skip to next iteration')
+        print(f'  {Y("try")} {{ }} {Y("catch")} err {{ }}   (optional error var)')
+        print(f'  {Y("try")} {{ }} {Y("catch")} {{ }} {Y("finally")} {{ }}')
+        print(f'  {Y("include \"file.z\"")}  — Include and run another Zen file')
         print()
-        print('\033[1;36mSelectors\033[0m')
-        print('  \033[33mCSS:\033[0m       find("div.class"), find_all("a[href]")')
-        print('  \033[33mText:\033[0m      find_by_text("Click Here")   (visible text)')
-        print('  \033[33mURL:\033[0m       find_by_url("example.com")  (link href)')
-        print('  \033[33mRegex:\033[0m     click "/submit|save/i"')
-        print('  \033[33mText sel:\033[0m  click by_text("Login")')
+        print(C('Selectors'))
+        print(f'  {Y("CSS:")}       find("div.class"), find_all("a[href]")')
+        print(f'  {Y("Text:")}      find_by_text("Click Here")   (visible text)')
+        print(f'  {Y("URL:")}       find_by_url("example.com")  (link href)')
+        print(f'  {Y("Regex:")}     click "/submit|save/i"')
+        print(f'  {Y("Text sel:")}  click by_text("Login")')
         print()
-        print('\033[1;36mModules\033[0m')
-        print('  \033[33mre.matches(pattern, str)\033[0m  → bool  — Full match test')
-        print('  \033[33mre.search(pattern, str)\033[0m    → ZenRegexMatch — First match with .group(), .groups(), .start, .end, .match')
-        print('  \033[33mre.findall(pattern, str)\033[0m   → list  — All non-overlapping matches')
-        print('  \033[33mre.split(pattern, str)\033[0m     → list  — Split by regex')
-        print('  \033[33mre.sub(pattern, repl, str)\033[0m → str   — Replace matches')
+        print(C('Modules'))
+        print(f'  {Y("re.matches(pattern, str)")}  → bool  — Full match test')
+        print(f'  {Y("re.search(pattern, str)")}    → ZenRegexMatch — First match with .group(), .groups(), .start, .end, .match')
+        print(f'  {Y("re.findall(pattern, str)")}   → list  — All non-overlapping matches')
+        print(f'  {Y("re.split(pattern, str)")}     → list  — Split by regex')
+        print(f'  {Y("re.sub(pattern, repl, str)")} → str   — Replace matches')
         print()
-        print('  \033[33m\033[1mhttp module:\033[0m')
-        print('  \033[33mhttp.get(url)\033[0m         → Response  — HTTP GET')
-        print('  \033[33mhttp.post(url, data)\033[0m   → Response  — HTTP POST')
-        print('  \033[33mhttp.put(url, data)\033[0m    → Response  — HTTP PUT')
-        print('  \033[33mhttp.del(url)\033[0m          → Response  — HTTP DELETE')
-        print('  \033[33mhttp.head(url)\033[0m         → Response  — HTTP HEAD')
-        print('  \033[33mhttp.patch(url, data)\033[0m  → Response  — HTTP PATCH')
+        print(f'  {c.bold(Y("http module:"))}')
+        print(f'  {Y("http.get(url)")}         → Response  — HTTP GET')
+        print(f'  {Y("http.post(url, data)")}   → Response  — HTTP POST')
+        print(f'  {Y("http.put(url, data)")}    → Response  — HTTP PUT')
+        print(f'  {Y("http.del(url)")}          → Response  — HTTP DELETE')
+        print(f'  {Y("http.head(url)")}         → Response  — HTTP HEAD')
+        print(f'  {Y("http.patch(url, data)")}  → Response  — HTTP PATCH')
         print('  Response methods: .status, .body, .headers, .json(), .ok')
         print()
-        print('  \033[33m\033[1mcookies module:\033[0m')
-        print('  \033[33mcookies.all()\033[0m    → list  — All cookies as [{name,value}]')
-        print('  \033[33mcookies.get(name)\033[0m → str  — Get cookie value')
-        print('  \033[33mcookies.set(n,v,path)\033[0m → bool — Set cookie')
-        print('  \033[33mcookies.clear()\033[0m  → bool  — Clear all cookies')
+        print(f'  {c.bold(Y("cookies module:"))}')
+        print(f'  {Y("cookies.all()")}    → list  — All cookies as [{{name,value}}]')
+        print(f'  {Y("cookies.get(name)")} → str  — Get cookie value')
+        print(f'  {Y("cookies.set(n,v,path)")} → bool — Set cookie')
+        print(f'  {Y("cookies.clear()")}  → bool  — Clear all cookies')
         print()
-        print('  \033[33m\033[1mstorage module:\033[0m')
-        print('  \033[33mstorage.get(key)\033[0m  → str   — localStorage.getItem')
-        print('  \033[33mstorage.set(k,v)\033[0m  → bool  — localStorage.setItem')
-        print('  \033[33mstorage.remove(k)\033[0m → bool  — localStorage.removeItem')
-        print('  \033[33mstorage.clear()\033[0m   → bool  — localStorage.clear')
-        print('  \033[33mstorage.all()\033[0m     → list  — All items as [{key,value}]')
+        print(f'  {c.bold(Y("storage module:"))}')
+        print(f'  {Y("storage.get(key)")}  → str   — localStorage.getItem')
+        print(f'  {Y("storage.set(k,v)")}  → bool  — localStorage.setItem')
+        print(f'  {Y("storage.remove(k)")} → bool  — localStorage.removeItem')
+        print(f'  {Y("storage.clear()")}   → bool  — localStorage.clear')
+        print(f'  {Y("storage.all()")}     → list  — All items as [{{key,value}}]')
         print()
-        print('  \033[33mnet.online()\033[0m   → bool — Check if browser is online')
-        print('  \033[33mnet.cookies()\033[0m  → str  — Get document.cookie')
-        print('  \033[33mnet.url()\033[0m      → str  — Get current URL')
-        print('  \033[33mcsv.read("path")\033[0m        → list  — Read CSV file')
-        print('  \033[33mcsv.write("path", rows)\033[0m → bool  — Write CSV file')
-        print('  \033[33mcsv.parse("text")\033[0m       → list  — Parse CSV string')
-        print('  \033[33mcsv.encode(rows)\033[0m        → str   — Encode to CSV string')
+        print(f'  {Y("net.online()")}   → bool — Check if browser is online')
+        print(f'  {Y("net.cookies()")}  → str  — Get document.cookie')
+        print(f'  {Y("net.url()")}      → str  — Get current URL')
+        print(f'  {Y("csv.read(\"path\")")}        → list  — Read CSV file')
+        print(f'  {Y("csv.write(\"path\", rows)")} → bool  — Write CSV file')
+        print(f'  {Y("csv.parse(\"text\")")}       → list  — Parse CSV string')
+        print(f'  {Y("csv.encode(rows)")}        → str   — Encode to CSV string')
         print('  Flat aliases: csv_read, csv_write, csv_parse, csv_encode')
         print()
-        print('  \033[33m\033[1mfs module (filesystem):\033[0m')
-        print('  \033[33mfs.list(path)\033[0m      → list  — List directory')
-        print('  \033[33mfs.read(path)\033[0m      → str   — Read text file')
-        print('  \033[33mfs.write(path, c)\033[0m  → bool  — Write text file')
-        print('  \033[33mfs.exists(path)\033[0m    → bool  — Check existence')
-        print('  \033[33mfs.is_file(path)\033[0m   → bool  — Is regular file?')
-        print('  \033[33mfs.is_dir(path)\033[0m    → bool  — Is directory?')
-        print('  \033[33mfs.size(path)\033[0m      → int   — File size in bytes')
-        print('  \033[33mfs.mtime(path)\033[0m     → float — Last modified time')
-        print('  \033[33mfs.mkdir(path)\033[0m     → bool  — Create directory')
-        print('  \033[33mfs.remove(path)\033[0m    → bool  — Remove file')
-        print('  \033[33mfs.rmdir(path)\033[0m     → bool  — Remove empty dir')
-        print('  \033[33mfs.rmtree(path)\033[0m    → bool  — Remove dir recursively')
-        print('  \033[33mfs.copy(src, dst)\033[0m  → bool  — Copy file')
-        print('  \033[33mfs.move(src, dst)\033[0m  → bool  — Move/rename file')
-        print('  \033[33mfs.glob(pattern)\033[0m   → list  — Glob file matching')
-        print('  \033[33mfs.join(a, b...)\033[0m   → str   — Join path parts')
-        print('  \033[33mfs.cwd()\033[0m           → str   — Current directory')
-        print('  \033[33mfs.cd(path)\033[0m        → bool  — Change directory')
-        print('  \033[33mfs.exec(cmd)\033[0m       → dict  — Run shell command ({returncode, stdout, stderr})')
-        print('  \033[33mfs.basename(path)\033[0m  → str   — Last path component')
-        print('  \033[33mfs.dirname(path)\033[0m   → str   — Parent directory')
+        print(f'  {c.bold(Y("fs module (filesystem):"))}')
+        print(f'  {Y("fs.list(path)")}      → list  — List directory')
+        print(f'  {Y("fs.read(path)")}      → str   — Read text file')
+        print(f'  {Y("fs.write(path, c)")}  → bool  — Write text file')
+        print(f'  {Y("fs.exists(path)")}    → bool  — Check existence')
+        print(f'  {Y("fs.is_file(path)")}   → bool  — Is regular file?')
+        print(f'  {Y("fs.is_dir(path)")}    → bool  — Is directory?')
+        print(f'  {Y("fs.size(path)")}      → int   — File size in bytes')
+        print(f'  {Y("fs.mtime(path)")}     → float — Last modified time')
+        print(f'  {Y("fs.mkdir(path)")}     → bool  — Create directory')
+        print(f'  {Y("fs.remove(path)")}    → bool  — Remove file')
+        print(f'  {Y("fs.rmdir(path)")}     → bool  — Remove empty dir')
+        print(f'  {Y("fs.rmtree(path)")}    → bool  — Remove dir recursively')
+        print(f'  {Y("fs.copy(src, dst)")}  → bool  — Copy file')
+        print(f'  {Y("fs.move(src, dst)")}  → bool  — Move/rename file')
+        print(f'  {Y("fs.glob(pattern)")}   → list  — Glob file matching')
+        print(f'  {Y("fs.join(a, b...)")}   → str   — Join path parts')
+        print(f'  {Y("fs.cwd()")}           → str   — Current directory')
+        print(f'  {Y("fs.cd(path)")}        → bool  — Change directory')
+        print(f'  {Y("fs.exec(cmd)")}       → dict  — Run shell command ({{returncode, stdout, stderr}})')
+        print(f'  {Y("fs.basename(path)")}  → str   — Last path component')
+        print(f'  {Y("fs.dirname(path)")}   → str   — Parent directory')
         print()
-        print('  \033[33m\033[1mpage module:\033[0m')
-        print('  \033[33mpage.html\033[0m      → str   — Full page HTML')
-        print('  \033[33mpage.text\033[0m      → str   — Visible page text')
-        print('  \033[33mpage.links\033[0m     → list  — All link URLs')
-        print('  \033[33mpage.images\033[0m    → list  — All image URLs')
-        print('  \033[33mpage.forms\033[0m     → list  — All forms with inputs')
-        print('  \033[33mpage.inputs\033[0m    → list  — All input/select/textarea fields')
-        print('  \033[33mpage.buttons\033[0m   → list  — All buttons and clickable elements')
-        print('  \033[33mpage.title\033[0m     → str   — Page title')
-        print('  \033[33mpage.url\033[0m       → str   — Current URL')
-        print('  \033[33mpage.source\033[0m    → str   — Alias for page.html')
+        print(f'  {c.bold(Y("page module:"))}')
+        print(f'  {Y("page.html")}      → str   — Full page HTML')
+        print(f'  {Y("page.text")}      → str   — Visible page text')
+        print(f'  {Y("page.links")}     → list  — All link URLs')
+        print(f'  {Y("page.images")}    → list  — All image URLs')
+        print(f'  {Y("page.forms")}     → list  — All forms with inputs')
+        print(f'  {Y("page.inputs")}    → list  — All input/select/textarea fields')
+        print(f'  {Y("page.buttons")}   → list  — All buttons and clickable elements')
+        print(f'  {Y("page.title")}     → str   — Page title')
+        print(f'  {Y("page.url")}       → str   — Current URL')
+        print(f'  {Y("page.source")}    → str   — Alias for page.html')
         print()
-        print('  \033[33m\033[1mUser agent & headers:\033[0m')
-        print('  \033[33muser_agent()\033[0m       → str   — Get browser user-agent')
-        print('  \033[33mset_user_agent("...")\033[0m — Override navigator.userAgent')
-        print('  \033[33mset_headers({...})\033[0m  — Set extra HTTP headers for all requests')
-        print('  \033[33mheaders()\033[0m          → dict  — Currently set extra headers')
+        print(f'  {c.bold(Y("User agent & headers:"))}')
+        print(f'  {Y("user_agent()")}       → str   — Get browser user-agent')
+        print(f'  {Y("set_user_agent(\"...\")")} — Override navigator.userAgent')
+        print(f'  {Y("set_headers({...})")}  — Set extra HTTP headers for all requests')
+        print(f'  {Y("headers()")}          → dict  — Currently set extra headers')
         print()
-        print('  \033[33m\033[1mSequence & math builtins:\033[0m')
-        print('  \033[33mrange(end)\033[0m         → list  — 0..end-1')
-        print('  \033[33mrange(start, end)\033[0m   → list  — start..end-1')
-        print('  \033[33mrange(start, end, step)\033[0m → list')
-        print('  \033[33minterval(start, end)\033[0m → list  — alias for range')
-        print('  \033[33minterval(start, end, step)\033[0m → list')
-        print('  \033[33mabs(v)\033[0m              → n     — Absolute value')
-        print('  \033[33mmin(a, b...)\033[0m        → n     — Minimum')
-        print('  \033[33mmax(a, b...)\033[0m        → n     — Maximum')
-        print('  \033[33mround(v, n?)\033[0m        → n     — Round')
-        print('  \033[33massert(cond, msg?)\033[0m  — Raise error if falsy')
-        print('  \033[33massert_eq(a, b, msg?)\033[0m — Raise error if a != b')
+        print(f'  {c.bold(Y("Sequence & math builtins:"))}')
+        print(f'  {Y("range(end)")}         → list  — 0..end-1')
+        print(f'  {Y("range(start, end)")}   → list  — start..end-1')
+        print(f'  {Y("range(start, end, step)")} → list')
+        print(f'  {Y("interval(start, end)")} → list  — alias for range')
+        print(f'  {Y("interval(start, end, step)")} → list')
+        print(f'  {Y("abs(v)")}              → n     — Absolute value')
+        print(f'  {Y("min(a, b...)")}        → n     — Minimum')
+        print(f'  {Y("max(a, b...)")}        → n     — Maximum')
+        print(f'  {Y("round(v, n?)")}        → n     — Round')
+        print(f'  {Y("assert(cond, msg?)")}  — Raise error if falsy')
+        print(f'  {Y("assert_eq(a, b, msg?)")} — Raise error if a != b')
         print()
-        print('  \033[33m\033[1mAlso flat builtins:\033[0m')
-        print('  \033[33mread_file\033[0m, \033[33mwrite_file\033[0m, \033[33mappend_file\033[0m, \033[33mfile_exists\033[0m, \033[33mlist_dir\033[0m,')
-        print('  \033[33mmkdir\033[0m, \033[33mremove_file\033[0m, \033[33mcopy_file\033[0m, \033[33mmove_file\033[0m, \033[33mrename_file\033[0m,')
-        print('  \033[33mpath_join\033[0m, \033[33mcwd\033[0m, \033[33mcd\033[0m, \033[33mglob\033[0m, \033[33mexec\033[0m, \033[33msh\033[0m, \033[33msystem\033[0m')
+        print(f'  {c.bold(Y("Also flat builtins:"))}')
+        print(f'  {Y("read_file")}, {Y("write_file")}, {Y("append_file")}, {Y("file_exists")}, {Y("list_dir")},')
+        print(f'  {Y("mkdir")}, {Y("remove_file")}, {Y("copy_file")}, {Y("move_file")}, {Y("rename_file")},')
+        print(f'  {Y("path_join")}, {Y("cwd")}, {Y("cd")}, {Y("glob")}, {Y("exec")}, {Y("sh")}, {Y("system")}')
         print()
-        print('\033[1;36mBrowser Builtins\033[0m')
+        print(C('Browser Builtins'))
         for k in sorted(_ZEN_BUILTIN_HELP):
             v = _ZEN_BUILTIN_HELP[k]
-            print(f'  \033[33m{k}\033[0m  {v}')
+            print(f'  {Y(k)}  {v}')
         print()
-        print('\033[1;36mSpecial Variables\033[0m')
-        print('  \033[33m_url\033[0m         Current page URL')
-        print('  \033[33m__url\033[0m        Previous page URL')
-        print('  \033[33m___url\033[0m       Page before that')
-        print('  \033[33m_time\033[0m        Current time (HH:MM:SS)')
-        print('  \033[33m_date\033[0m        Current date (YYYY-MM-DD)')
-        print('  \033[33m_dir\033[0m         Working directory')
-        print('  \033[33m_version\033[0m     Zen version')
-        print('  \033[33m_\033[0m            Last expression result')
-        print('  \033[33m_timeout\033[0m     Default timeout (ms, "3s", "1.5m")')
-        print('  \033[33m_page_html\033[0m   Raw page HTML')
-        print('  \033[33m_page_text\033[0m   Visible text with {[media]} markers')
-        print('  \033[33m_page_links\033[0m  All link URLs on page')
-        print('  \033[33m_page_images\033[0m All image URLs on page')
-        print('  \033[33m_page_urls\033[0m   All visited URLs this session')
-        print('  \033[33m_page_forms\033[0m   All forms on page')
-        print('  \033[33m_page_inputs\033[0m  All input/select/textarea fields')
-        print('  \033[33m_page_buttons\033[0m All buttons and clickable elements')
+        print(C('Special Variables'))
+        print(f'  {Y("_url")}         Current page URL')
+        print(f'  {Y("__url")}        Previous page URL')
+        print(f'  {Y("___url")}       Page before that')
+        print(f'  {Y("_time")}        Current time (HH:MM:SS)')
+        print(f'  {Y("_date")}        Current date (YYYY-MM-DD)')
+        print(f'  {Y("_dir")}         Working directory')
+        print(f'  {Y("_version")}     Zen version')
+        print(f'  {Y("_")}            Last expression result')
+        print(f'  {Y("_timeout")}     Default timeout (ms, "3s", "1.5m")')
+        print(f'  {Y("_page_html")}   Raw page HTML')
+        print(f'  {Y("_page_text")}   Visible text with {{[media]}} markers')
+        print(f'  {Y("_page_links")}  All link URLs on page')
+        print(f'  {Y("_page_images")} All image URLs on page')
+        print(f'  {Y("_page_urls")}   All visited URLs this session')
+        print(f'  {Y("_page_forms")}   All forms on page')
+        print(f'  {Y("_page_inputs")}  All input/select/textarea fields')
+        print(f'  {Y("_page_buttons")} All buttons and clickable elements')
         print()
-        print('\033[1;36mElement Methods (ZenElement)\033[0m')
-        print('  \033[33m.text\033[0m            \033[33m.html\033[0m            \033[33m.exists\033[0m            \033[33m.tag\033[0m')
-        print('  \033[33m.attr("href")\033[0m    \033[33m.click()\033[0m         \033[33m.fill("val")\033[0m')
-        print('  \033[33m.check()\033[0m         \033[33m.uncheck()\033[0m       \033[33m.select("opt")\033[0m    \033[33m.hover()\033[0m')
-        print('  \033[33m.screenshot("path")\033[0m')
-        print('  \033[33m.find("sel")\033[0m     \033[33m.find_all("sel")\033[0m')
-        print('  \033[33m.play()\033[0m          \033[33m.pause()\033[0m         \033[33m.download("path")\033[0m')
-        print('  \033[33m.muted\033[0m           \033[33m.volume\033[0m          \033[33m.current_time\033[0m')
-        print('  \033[33m.duration\033[0m        \033[33m.paused\033[0m          \033[33m.ended\033[0m           \033[33m.loop\033[0m')
+        print(C('Element Methods (ZenElement)'))
+        print(f'  {Y(".text")}            {Y(".html")}            {Y(".exists")}            {Y(".tag")}')
+        print(f'  {Y(".attr(\"href\")")}    {Y(".click()")}         {Y(".fill(\"val\")")}')
+        print(f'  {Y(".check()")}         {Y(".uncheck()")}       {Y(".select(\"opt\")")}    {Y(".hover()")}')
+        print(f'  {Y(".screenshot(\"path\")")}')
+        print(f'  {Y(".find(\"sel\")")}     {Y(".find_all(\"sel\")")}')
+        print(f'  {Y(".play()")}          {Y(".pause()")}         {Y(".download(\"path\")")}')
+        print(f'  {Y(".muted")}           {Y(".volume")}          {Y(".current_time")}')
+        print(f'  {Y(".duration")}        {Y(".paused")}          {Y(".ended")}           {Y(".loop")}')
         print()
-        print('\033[1;36mList Methods (ZenList)\033[0m')
-        print('  \033[33m.texts\033[0m  \033[33m.htmls\033[0m  \033[33m.tags\033[0m  \033[33m.count\033[0m  \033[33m.len\033[0m  \033[33m.first\033[0m')
-        print('  \033[33m.nth(n)\033[0m  \033[33m.attr(n)\033[0m  \033[33m.attrs(n)\033[0m  \033[33m.each(fn)\033[0m  \033[33m.sorted()\033[0m')
+        print(C('List Methods (ZenList)'))
+        print(f'  {Y(".texts")}  {Y(".htmls")}  {Y(".tags")}  {Y(".count")}  {Y(".len")}  {Y(".first")}')
+        print(f'  {Y(".nth(n)")}  {Y(".attr(n)")}  {Y(".attrs(n)")}  {Y(".each(fn)")}  {Y(".sorted()")}')
         print()
-        print('\033[1;36mString / List / Dict / Number Methods\033[0m')
-        print('  \033[33mString:\033[0m  .upper()  .lower()  .split()  .join()  .replace()  .strip()')
+        print(C('String / List / Dict / Number Methods'))
+        print(f'  {Y("String:")}  .upper()  .lower()  .split()  .join()  .replace()  .strip()')
         print('               .startswith()  .endswith()  .find()  .len  .format()')
-        print('  \033[33mList:\033[0m    .append()  .pop()  .sort()  .reverse()  .clear()  .len  .sorted()')
+        print(f'  {Y("List:")}    .append()  .pop()  .sort()  .reverse()  .clear()  .len  .sorted()')
         print('               .push()  .shift()  .unshift()  .includes()  .indexOf()  .join()')
-        print('  \033[33mDict:\033[0m    .keys()  .values()  .items()  .get()  .put()  .len  .clear()')
-        print('  \033[33mNumber:\033[0m  .times(fn)  .str()  .float()  .type')
-        print('  \033[33mAny:\033[0m     .str()  .int()  .float()  .bool()  .type')
+        print(f'  {Y("Dict:")}    .keys()  .values()  .items()  .get()  .put()  .len  .clear()')
+        print(f'  {Y("Number:")}  .times(fn)  .str()  .float()  .type')
+        print(f'  {Y("Any:")}     .str()  .int()  .float()  .bool()  .type')
         print()
-        print('\033[1;36mSlice Syntax\033[0m')
-        print('  \033[33mlist[start:end]\033[0m  \033[33mlist[start:]\033[0m  \033[33mlist[:end]\033[0m  \033[33mlist[::step]\033[0m')
+        print(C('Slice Syntax'))
+        print(f'  {Y("list[start:end]")}  {Y("list[start:]")}  {Y("list[:end]")}  {Y("list[::step]")}')
         print()
-        print('\033[1;36mShell Commands\033[0m')
-        print('  \033[33m.exit\033[0m / \033[33m.quit\033[0m   Exit the shell')
-        print('  \033[33m.help\033[0m [expr]    Show this help or expression details')
-        print('  \033[33m.clear\033[0m          Clear screen')
-        print('  \033[33m.url\033[0m            Show current URL')
-        print('  \033[33m.title\033[0m           Show page title')
-        print('  \033[33m.vars\033[0m           Show user variables')
-        print('  \033[33m.history\033[0m         Show URL navigation history')
-        print('  \033[33m.run\033[0m <file>      Run a .z script file')
-        print('  \033[33m.shot\033[0m <file>     Take page screenshot')
-        print('  \033[33m.type\033[0m <expr>     Show type of expression')
-        print('  \033[33m.dir\033[0m             Show current directory')
+        print(C('Shell Commands'))
+        print(f'  {Y(".exit")} / {Y(".quit")}   Exit the shell')
+        print(f'  {Y(".help")} [expr]    Show this help or expression details')
+        print(f'  {Y(".clear")}          Clear screen')
+        print(f'  {Y(".url")}            Show current URL')
+        print(f'  {Y(".title")}           Show page title')
+        print(f'  {Y(".vars")}           Show user variables')
+        print(f'  {Y(".history")}         Show URL navigation history')
+        print(f'  {Y(".run")} <file>      Run a .z script file')
+        print(f'  {Y(".shot")} <file>     Take page screenshot')
+        print(f'  {Y(".type")} <expr>     Show type of expression')
+        print(f'  {Y(".dir")}             Show current directory')
         print()
-        print('For detailed help on a specific function or expression, type \033[33m.help <expr>\033[0m')
-        print('  e.g., \033[33m.help find\033[0m, \033[33m.help find_all\033[0m, \033[33m.help _url\033[0m, \033[33m.help \"hello\"\033[0m')
+        print(f'For detailed help on a specific function or expression, type {Y(".help <expr>")}')
+        print(f'  e.g., {Y(".help find")}, {Y(".help find_all")}, {Y(".help _url")}, {Y(".help \"hello\"")}')
 
     def _show_help(self, expr):
+        c = color
+        Y = c.yellow
+        C = c.bright_cyan
+        G = c.green
         _NO_VALUE = object()
         val = _NO_VALUE
         eval_ok = False
@@ -679,28 +682,28 @@ class Shell:
         }
 
         if expr in dot_cmds:
-            print(f'\033[1;33m{expr}\033[0m')
+            print(Y(expr))
             print()
-            print(f'  \033[1;36mShell Command: {dot_cmds[expr]}\033[0m')
+            print(f'  {C(f"Shell Command: {dot_cmds[expr]}")}')
             print()
             return
 
         if expr == 'keywords':
-            print('\033[1;33mAll help topics\033[0m')
+            print(Y('All help topics'))
             print()
             for k in sorted(_ZEN_BUILTIN_HELP):
-                print(f'  \033[33m{k}\033[0m')
+                print(f'  {Y(k)}')
             for k in sorted(dot_cmds):
-                print(f'  \033[33m.{k}\033[0m')
+                print(f'  {Y(f".{k}")}')
             for k in ['include', 'csv', 're', 'net', 'http', 'cookies', 'storage', 'search']:
-                print(f'  \033[33m{k}\033[0m')
+                print(f'  {Y(k)}')
             print()
             return
 
         if expr == 'include':
-            print('\033[1;33minclude\033[0m')
+            print(Y('include'))
             print()
-            print('  \033[1;36minclude "file.z"\033[0m — Include and run another Zen file')
+            print(f'  {C("include \"file.z\"")} — Include and run another Zen file')
             print()
             print('  All functions, variables, and assignments in the included file')
             print('  become available in the current scope.')
@@ -708,55 +711,55 @@ class Shell:
             return
 
         if expr == 'csv':
-            print('\033[1;33mcsv\033[0m')
+            print(Y('csv'))
             print()
-            print('  \033[1;36mModule for CSV processing\033[0m')
-            print('  \033[33mcsv.read("path")\033[0m       → list — Read CSV file')
-            print('  \033[33mcsv.write("path", rows)\033[0m  → bool — Write CSV file')
-            print('  \033[33mcsv.parse("text")\033[0m      → list — Parse CSV string')
-            print('  \033[33mcsv.encode(rows)\033[0m       → str — Encode to CSV string')
+            print(f'  {C("Module for CSV processing")}')
+            print(f'  {Y("csv.read(\"path\")")}       → list — Read CSV file')
+            print(f'  {Y("csv.write(\"path\", rows)")}  → bool — Write CSV file')
+            print(f'  {Y("csv.parse(\"text\")")}      → list — Parse CSV string')
+            print(f'  {Y("csv.encode(rows)")}       → str — Encode to CSV string')
             print('  Flat aliases: csv_read, csv_write, csv_parse, csv_encode')
             print()
             return
 
         if expr == 're':
-            print('\033[1;33mre\033[0m')
+            print(Y('re'))
             print()
-            print('  \033[1;36mModule for regular expressions\033[0m')
-            print('  \033[33mre.matches(pattern, str)\033[0m  → bool — Test if whole string matches')
-            print('  \033[33mre.search(pattern, str)\033[0m    → ZenRegexMatch — First match')
-            print('  \033[33mre.findall(pattern, str)\033[0m   → list — All matches')
-            print('  \033[33mre.split(pattern, str)\033[0m     → list — Split by pattern')
-            print('  \033[33mre.sub(pattern, repl, str)\033[0m → str — Replace matches')
+            print(f'  {C("Module for regular expressions")}')
+            print(f'  {Y("re.matches(pattern, str)")}  → bool — Test if whole string matches')
+            print(f'  {Y("re.search(pattern, str)")}    → ZenRegexMatch — First match')
+            print(f'  {Y("re.findall(pattern, str)")}   → list — All matches')
+            print(f'  {Y("re.split(pattern, str)")}     → list — Split by pattern')
+            print(f'  {Y("re.sub(pattern, repl, str)")} → str — Replace matches')
             print()
-            print('  \033[1;36mZenRegexMatch methods:\033[0m')
-            print('    \033[33m.match\033[0m   — Full matched text (str)')
-            print('    \033[33m.start\033[0m   — Start position (int)')
-            print('    \033[33m.end\033[0m     — End position (int)')
-            print('    \033[33m.group(n)\033[0m — Capture group n (n=0 for full match)')
-            print('    \033[33m.groups()\033[0m — List of all capture groups')
+            print(f'  {C("ZenRegexMatch methods:")}')
+            print(f'    {Y(".match")}   — Full matched text (str)')
+            print(f'    {Y(".start")}   — Start position (int)')
+            print(f'    {Y(".end")}     — End position (int)')
+            print(f'    {Y(".group(n)")} — Capture group n (n=0 for full match)')
+            print(f'    {Y(".groups()")} — List of all capture groups')
             print()
             return
 
         if expr == 'net':
-            print('\033[1;33mnet\033[0m')
+            print(Y('net'))
             print()
-            print('  \033[1;36mModule for browser network info\033[0m')
-            print('  \033[33mnet.online()\033[0m   → bool — Is browser online?')
-            print('  \033[33mnet.cookies()\033[0m  → str — Get document.cookie')
-            print('  \033[33mnet.url()\033[0m      → str — Get current URL')
+            print(f'  {C("Module for browser network info")}')
+            print(f'  {Y("net.online()")}   → bool — Is browser online?')
+            print(f'  {Y("net.cookies()")}  → str — Get document.cookie')
+            print(f'  {Y("net.url()")}      → str — Get current URL')
             print()
             return
 
         if expr == 'search':
-            print('\033[1;33msearch\033[0m')
+            print(Y('search'))
             print()
-            print('  \033[1;36mFind elements by flexible query\033[0m')
-            print('  \033[33msearch("text")\033[0m       → Find by visible text (e.g., search("Login"))')
-            print('  \033[33msearch("div.class")\033[0m  → Find by CSS selector')
-            print('  \033[33msearch("/pattern/")\033[0m  → Find by regex text match')
-            print('  \033[33msearch("text=...")\033[0m   → Find by exact text')
-            print('  \033[33msearch("url=...")\033[0m    → Find by link URL')
+            print(f'  {C("Find elements by flexible query")}')
+            print(f'  {Y("search(\"text\")")}       → Find by visible text (e.g., search("Login"))')
+            print(f'  {Y("search(\"div.class\")")}  → Find by CSS selector')
+            print(f'  {Y("search(\"/pattern/\")")}  → Find by regex text match')
+            print(f'  {Y("search(\"text=...\")")}   → Find by exact text')
+            print(f'  {Y("search(\"url=...\")")}    → Find by link URL')
             print('  Returns a ZenList of matching elements.')
             print()
             return
@@ -772,19 +775,19 @@ class Shell:
         except Exception:
             pass
 
-        print(f'\033[1;33m{expr}\033[0m')
+        print(Y(expr))
         print()
 
         if doc:
-            print(f'  \033[1;36mBuiltin: {doc}\033[0m')
+            print(f'  {C(f"Builtin: {doc}")}')
             print()
 
         if eval_ok and val is not _VOID and val is not None:
             t = type(val).__name__
             if isinstance(val, ZenMethod):
                 t = 'method'
-            print(f'  Type: \033[1;36m{t}\033[0m')
-            print(f'  Value: \033[1;32m{_format_result(val)}\033[0m')
+            print(f'  Type: {C(t)}')
+            print(f'  Value: {G(_format_result(val))}')
 
             if isinstance(val, str):
                 print()
@@ -826,9 +829,9 @@ class Shell:
                         print(f'    .{name}')
 
         elif eval_ok and val is None:
-            print('  \033[1;33mnull\033[0m — The null value')
+            print(f'  {Y("null")} — The null value')
         else:
-            print('  \033[1;33m(no value or could not evaluate)\033[0m')
+            print(f'  {Y("(no value or could not evaluate)")}')
 
         print()
         if eval_ok and val is not _VOID and val is not None:
@@ -844,19 +847,19 @@ class Shell:
             lower = expr.lower()
             matches = {k: v for k, v in _ZEN_BUILTIN_HELP.items() if lower in k.lower() or lower in v.lower()}
             if matches:
-                print(f'  \033[1;36mMatching builtins for "{expr}":\033[0m')
+                print(f'  {C(f"Matching builtins for \"{expr}\":")}')
                 print()
                 for k in sorted(matches):
-                    print(f'  \033[33m{k}\033[0m — {matches[k]}')
+                    print(f'  {Y(k)} — {matches[k]}')
             else:
-                print('  \033[1;33m(no matching help topic)\033[0m')
+                print(f'  {Y("(no matching help topic)")}')
             print()
             return
         elif doc and not eval_ok:
             print('  Examples:')
             print(f'    {doc}')
         elif eval_ok and val is None:
-            print('  Use \033[1;36mnull\033[0m for the null value')
+            print(f'  Use {C("null")} for the null value')
 
     def _is_complete(self, code):
         stripped = code.strip()
@@ -888,7 +891,7 @@ class Shell:
                 if formatted:
                     print(formatted)
         except LexerError as e:
-            print(f'\033[1;31mLexer Error: {e.message}\033[0m')
+            print(color.red(f'Lexer Error: {e.message}'))
             _show_error_context(code, e.line, e.col, e.message)
         except ParseError as e:
             msg = e.message
@@ -901,11 +904,11 @@ class Shell:
                     for m in p.finditer(code):
                         start = max(0, m.start() - 4)
                         ctx = code[start:m.end() + 4]
-                        msg += "\n  \033[1;33mHint: '" + ctx.strip() + "' — keywords need spaces (e.g., '" + kw + " ...' not '" + m.group() + "')\033[0m"
+                        msg += "\n  " + color.yellow("Hint: '" + ctx.strip() + "' — keywords need spaces (e.g., '" + kw + " ...' not '" + m.group() + "')")
                         break
                     if '\n' in msg:
                         break
-            print(f'\033[1;31mParse Error: {msg}\033[0m')
+            print(color.red(f'Parse Error: {msg}'))
             if tok:
                 _show_error_context(code, tok.line, tok.col, msg)
         except ZenError as e:
@@ -914,13 +917,13 @@ class Shell:
                 msg = "Did you mean '.help'? Shell commands start with '.'"
             elif msg == 'Undefined variable: none':
                 msg = "Undefined variable: none. Did you mean 'null'?"
-            print(f'\033[1;31mRuntime Error: {msg}\033[0m')
+            print(color.red(f'Runtime Error: {msg}'))
             if e.node and hasattr(e.node, 'line'):
                 _show_error_context(code, e.node.line, e.node.col, msg)
         except Exception as e:
             err_type = type(e).__name__
             err_msg = str(e).split('\n')[0]
-            print(f'\033[1;31m{err_type}: {err_msg}\033[0m')
+            print(color.red(f'{err_type}: {err_msg}'))
 
     def stop(self):
         self.browser.stop()

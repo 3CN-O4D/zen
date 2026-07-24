@@ -1,7 +1,7 @@
 import os
 import re as _re
 import time as _time
-from .environment import ZenElement, ZenSelector, ZenList, ZenRegexMatch, ZenError
+from .environment import ZenElement, ZenSelector, ZenList, ZenRegexMatch, ZenError, ZenBrowserError
 
 _URL_RE = _re.compile(r'^[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
@@ -208,7 +208,13 @@ class Browser:
             addr = f'127.0.0.1:{self._connect_port}' if self._connect_port else '127.0.0.1:9222'
             co.set_address(addr)
             co.existing_only(True)
-            self._drission = ChromiumPage(addr_or_opts=co)
+            try:
+                self._drission = ChromiumPage(addr_or_opts=co)
+            except (FileNotFoundError, OSError):
+                raise ZenBrowserError(
+                    "Cannot connect to browser.\n"
+                    "  Make sure Chrome is running with --remote-debugging-port=9222\n"
+                    "  Or use:  zen script.z --http  (HTTP-only mode)")
         else:
             from DrissionPage import ChromiumPage, ChromiumOptions
             co = ChromiumOptions()
@@ -216,7 +222,19 @@ class Browser:
             bp = self._browser_path or get_config().get('browser_path') or _find_browser_path()
             if bp:
                 co.set_browser_path(bp)
-            self._drission = ChromiumPage(addr_or_opts=co)
+            try:
+                self._drission = ChromiumPage(addr_or_opts=co)
+            except (FileNotFoundError, OSError):
+                msg = (
+                    "No Chromium-based browser found.\n"
+                    "  Install one:   pkg install chromium          (Termux)\n"
+                    "                 apt install chromium-browser  (Debian/Ubuntu)\n"
+                    "                 brew install --cask chromium  (macOS)\n"
+                    "  Or use:        zen script.z --http           (HTTP-only, no browser)\n"
+                )
+                if bp:
+                    msg += f"  Path tried:  {bp}\n"
+                raise ZenBrowserError(msg)
         return self
 
     def stop(self):
