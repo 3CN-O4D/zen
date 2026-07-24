@@ -1,5 +1,65 @@
 import os
 import json
+try:
+    from .color import color
+except ImportError:
+    color = type('_', (), {'red': str, 'yellow': str, 'green': str})()
+
+_ERROR_COLORS = True
+
+def _strip(s):
+    global _ERROR_COLORS
+    try:
+        _ERROR_COLORS = _ERROR_COLORS and bool(os.environ.get('TERM')) and os.isatty(2)
+    except Exception:
+        _ERROR_COLORS = False
+    if not _ERROR_COLORS:
+        try:
+            import re
+            s = re.sub(r'\033\[[0-9;]*m', '', s)
+        except Exception:
+            pass
+    return s
+
+def format_error(file_path, error, source_lines):
+    """Format an error like Python traceback.
+
+    Args:
+        file_path: Path to the source file
+        error: Exception object (LexerError, ParseError, or ZenError)
+        source_lines: List of source code lines (0-indexed)
+
+    Returns:
+        Formatted error string
+    """
+    line = getattr(error, 'line', None)
+    col = getattr(error, 'col', None)
+    message = getattr(error, 'message', str(error))
+
+    if line is None:
+        # Try to get from token or node
+        token = getattr(error, 'token', None)
+        node = getattr(error, 'node', None)
+        if token:
+            line = getattr(token, 'line', None)
+            col = getattr(token, 'col', None)
+        elif node:
+            line = getattr(node, 'line', None)
+            col = getattr(node, 'col', None)
+
+    parts = []
+    parts.append(color.red('Traceback (most recent call last):'))
+    if line is not None:
+        parts.append(f'  File "{color.bright_cyan(file_path)}", line {color.yellow(str(line))}')
+        if source_lines and 0 <= line - 1 < len(source_lines):
+            src_line = source_lines[line - 1].rstrip('\n').rstrip('\r')
+            parts.append(f'    {src_line}')
+            if col is not None and col > 0:
+                pointer = ' ' * (col - 1) + '^'
+                parts.append(f'    {color.red(pointer)}')
+    error_type = type(error).__name__
+    parts.append(f'{color.red(error_type)}: {message}')
+    return '\n'.join(parts)
 
 class ZenReturn(Exception):
     def __init__(self, value):
@@ -389,6 +449,83 @@ class ZenList:
 
     def __repr__(self):
         return f"<ZenList: {len(self._elements)} elements>"
+
+
+def _bound_method(instance, fn):
+    def bound(*args, **kwargs):
+        return fn(instance, *args, **kwargs)
+    if hasattr(fn, '_is_zen_func'):
+        bound._is_zen_func = True
+    return bound
+
+
+class ZenClass:
+    def __init__(self, name, methods, parent=None, interpreter=None):
+        self._name = name
+        self._methods = dict(methods)
+        self._parent = parent
+        self._interpreter = interpreter
+
+    def _resolve(self, name):
+        if name in self._methods:
+            return self._methods[name]
+        if self._parent is not None:
+            if isinstance(self._parent, ZenClass):
+                return self._parent._resolve(name)
+            if isinstance(self._parent, dict):
+                return self._parent.get(name)
+        return None
+
+    def __call__(self, *args):
+        instance = ZenInstance({'__class__': self}, self, self._interpreter)
+        init = self._resolve('__init__')
+        if init is not None:
+            if self._interpreter:
+                fn = lambda inst, *a: self._interpreter._call_func(init, inst, *a)
+                fn(instance, *args)
+            else:
+                init(instance, *args)
+        return instance
+
+    def __repr__(self):
+        return f"<class {self._name}>"
+
+
+class ZenInstance:
+    def __init__(self, data, klass, interpreter=None):
+        self.__data = data
+        self.__klass = klass
+        self.__interp = interpreter
+
+    def __getattr__(self, name):
+        if name in ('__data', '__klass', '__interp', '_ZenInstance__data',
+                     '_ZenInstance__klass', '_ZenInstance__interp'):
+            return object.__getattribute__(self, name)
+        d = object.__getattribute__(self, '_ZenInstance__data')
+        if name in d:
+            return d[name]
+        k = object.__getattribute__(self, '_ZenInstance__klass')
+        method = k._resolve(name) if hasattr(k, '_resolve') else None
+        if method is not None:
+            interp = object.__getattribute__(self, '_ZenInstance__interp')
+            if interp:
+                from_node = method if hasattr(method, 'params') else None
+                if from_node:
+                    return _bound_method(self, lambda inst, *a: interp._call_func(from_node, inst, *a))
+                return _bound_method(self, lambda inst, *a: method(inst, *a))
+            return _bound_method(self, method)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        if name in ('__data', '__klass', '__interp', '_ZenInstance__data',
+                     '_ZenInstance__klass', '_ZenInstance__interp'):
+            object.__setattr__(self, name, value)
+        else:
+            d = object.__getattribute__(self, '_ZenInstance__data')
+            d[name] = value
+
+    def __repr__(self):
+        return f"<instance of {self.__klass._name if hasattr(self.__klass, '_name') else '?'}>"
 
 
 class PageModule:

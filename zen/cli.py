@@ -10,7 +10,7 @@ from .browser import Browser, set_config
 from .shell import Shell
 from .utils import read_file, resolve_path
 from .color import color
-from .environment import ZenBrowserError
+from .environment import ZenBrowserError, format_error
 
 
 def _add_browser_args(sp):
@@ -107,6 +107,14 @@ Examples:
     elif getattr(args, 'connect', None) is not None:
         browser_mode = 'connect'
 
+    src_path = getattr(args, 'file', None)
+    src_lines = None
+    if src_path and os.path.exists(src_path):
+        try:
+            src_lines = read_file(src_path).splitlines(True)
+        except Exception:
+            pass
+
     try:
         _dispatch(args, unknown, script_extra, headless, browser_mode)
     except ZenBrowserError as e:
@@ -115,10 +123,16 @@ Examples:
             traceback.print_exc()
         sys.exit(1)
     except (LexerError, ParseError) as e:
-        print(color.red(f"Error: {e}"))
+        if src_lines:
+            print(format_error(src_path, e, src_lines))
+        else:
+            print(color.red(f"Error: {e}"))
         sys.exit(1)
     except ZenError as e:
-        print(color.red(f"Error: {e.message}"))
+        if src_lines:
+            print(format_error(src_path, e, src_lines))
+        else:
+            print(color.red(f"Error: {e.message}"))
         sys.exit(1)
     except KeyboardInterrupt:
         pass

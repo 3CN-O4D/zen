@@ -174,3 +174,14 @@ class DictLiteral(Node):
 class Variable(Node):
     def __init__(self, name):
         self.name = name
+
+class Class(Node):
+    def __init__(self, name, body, parent=None):
+        self.name = name
+        self.body = body
+        self.parent = parent
+
+class New(Node):
+    def __init__(self, class_expr, args=None):
+        self.class_expr = class_expr
+        self.args = args or []

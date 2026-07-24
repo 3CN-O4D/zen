@@ -390,17 +390,17 @@ def register_builtins(env, browser):
             'uri': lambda: browser.url(),
         })
         env.define('cookies', {
-            'all': lambda: browser.execute('() => document.cookie.split("; ").filter(Boolean).map(c => { let [n,...v] = c.split("="); return {name:n.trim(), value:v.join("=")} })'),
-            'get': lambda name: browser.execute(f'() => document.cookie.split("; ").find(c => c.startsWith("{name}="))?.split("=").slice(1).join("=") || null'),
-            'set': lambda name, value, path='/': browser.execute(f'() => {{ document.cookie = "{name}={value}; path={path}"; return true }}'),
-            'clear': lambda: browser.execute('() => { document.cookie.split("; ").forEach(c => { let n = c.split("=")[0]; document.cookie = n + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/" }); return true }'),
+            'all': lambda: browser.execute('document.cookie.split("; ").filter(Boolean).map(c => { let [n,...v] = c.split("="); return {name:n.trim(), value:v.join("=")} })'),
+            'get': lambda name: browser.execute(f'document.cookie.split("; ").find(c => c.startsWith("{name}="))?.split("=").slice(1).join("=") || null'),
+            'set': lambda name, value, path='/': browser.execute(f'document.cookie = "{name}={value}; path={path}"'),
+            'clear': lambda: browser.execute('document.cookie.split("; ").forEach(c => { let n = c.split("=")[0]; document.cookie = n + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/" }) || true'),
         })
         env.define('storage', {
-            'get': lambda key: browser.execute(f'() => localStorage.getItem("{key}")'),
-            'set': lambda key, value: browser.execute(f'() => {{ localStorage.setItem("{key}", "{value}"); return true }}'),
-            'remove': lambda key: browser.execute(f'() => {{ localStorage.removeItem("{key}"); return true }}'),
-            'clear': lambda: browser.execute('() => { localStorage.clear(); return true }'),
-            'all': lambda: browser.execute('() => Object.entries(localStorage).map(([k,v]) => ({key:k, value:v}))'),
+            'get': lambda key: browser.execute(f'localStorage.getItem("{key}")'),
+            'set': lambda key, value: browser.execute(f'localStorage.setItem("{key}", "{value}") || true'),
+            'remove': lambda key: browser.execute(f'localStorage.removeItem("{key}") || true'),
+            'clear': lambda: browser.execute('localStorage.clear() || true'),
+            'all': lambda: browser.execute('Object.entries(localStorage).map(([k,v]) => ({key:k, value:v}))'),
         })
 
         env.define('page', PageModule(browser))

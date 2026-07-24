@@ -1,6 +1,6 @@
 import os, time as _time_mod
 from . import nodes as ast
-from .environment import Environment, ZenReturn, ZenBreak, ZenContinue, ZenError, ZenElement, ZenList, ZenMethod, ConfigModule
+from .environment import Environment, ZenReturn, ZenBreak, ZenContinue, ZenError, ZenElement, ZenList, ZenMethod, ConfigModule, ZenClass, ZenInstance, _bound_method
 from .builtins import register_builtins, _parse_duration
 from .color import color
 
@@ -47,7 +47,21 @@ class Interpreter:
                 lexer = Lexer(code)
                 parser = Parser(lexer)
                 program = parser.parse()
-                self.interpret(program)
+                old_env = self.current_env
+                self.current_env = self.current_env.child()
+                try:
+                    self.interpret(program)
+                    mod = {}
+                    for k, v in self.current_env.vars.items():
+                        if not k.startswith('_') or k in ('_', '_version'):
+                            mod[k] = v
+                            if not getattr(old_env, 'is_locked', lambda x: False)(k):
+                                old_env.define(k, v)
+                finally:
+                    self.current_env = old_env
+                mod_name = fname.replace('.z', '')
+                if not getattr(old_env, 'is_locked', lambda x: False)(mod_name):
+                    old_env.define(mod_name, mod)
             except Exception as e:
                 raise ZenError(f"Failed to load lib/{fname}: {e}")
 
@@ -96,7 +110,44 @@ class Interpreter:
             self._last_result = result
         return result
 
+    def _call_func(self, func_node, instance, *args):
+        old_env = self.current_env
+        self.current_env = self.current_env.child()
+        self.current_env.define('self', instance)
+        arg_idx = 0
+        for param in func_node.params:
+            if param == 'self':
+                continue
+            if arg_idx < len(args):
+                self.current_env.define(param, args[arg_idx])
+                arg_idx += 1
+            elif param in func_node.defaults:
+                self.current_env.define(param, self._eval(func_node.defaults[param]))
+            else:
+                raise ZenError(f"Missing argument: {param}")
+        try:
+            try:
+                self.current_env.lock('self')
+            except Exception:
+                pass
+            result = self._eval(func_node.body)
+            if isinstance(result, ZenReturn):
+                return result.value
+            return result
+        finally:
+            self.current_env = old_env
+
     def _eval(self, node):
+        try:
+            return self._eval_inner(node)
+        except ZenError as e:
+            if e.node is None:
+                e.node = node
+            raise
+        except Exception as e:
+            raise ZenError(str(e), node)
+
+    def _eval_inner(self, node):
         if isinstance(node, ast.Program):
             result = _VOID
             for stmt in node.statements:
@@ -131,7 +182,7 @@ class Interpreter:
                     self.global_env.define(node.target.name, value)
             elif isinstance(node.target, ast.Member):
                 obj = self._eval(node.target.obj)
-                if isinstance(obj, (ZenElement, ConfigModule)):
+                if isinstance(obj, (ZenElement, ConfigModule, ZenInstance)):
                     setattr(obj, node.target.name, value)
                 else:
                     raise ZenError(f"Cannot set property on {type(obj).__name__}")
@@ -427,6 +478,13 @@ class Interpreter:
             if node.name == 'type':
                 return type(obj).__name__
 
+            # --- ZenInstance ---
+            if isinstance(obj, ZenInstance):
+                try:
+                    return getattr(obj, node.name)
+                except AttributeError:
+                    raise ZenError(f"Instance has no attribute '{node.name}'", node)
+
             # --- ZenElement ---
             if isinstance(obj, ZenElement):
                 if node.name in ('text', 'html', 'exists', 'tag',
@@ -621,6 +679,8 @@ class Interpreter:
                 raise ZenError(f"Number has no attribute '{node.name}'", node)
 
             # --- generic object (fallback) ---
+            if obj is None:
+                raise ZenError(f"null has no attribute '{node.name}'", node)
             if node.name == 'len' and hasattr(obj, '__len__'):
                 return len(obj)
             if hasattr(obj, node.name):
@@ -657,20 +717,48 @@ class Interpreter:
 
         elif isinstance(node, ast.Include):
             path = str(self._eval(node.path))
-            if not os.path.isfile(path):
-                lib_path = os.path.join(os.path.dirname(__file__), 'lib', path)
-                if os.path.isfile(lib_path):
-                    path = lib_path
+            if not path.endswith('.z'):
+                path = path + '.z'
+            sep_path = path.replace('.', '/')
+            lib_dir = os.path.join(os.path.dirname(__file__), 'lib')
+            candidates = [
+                os.path.join(lib_dir, sep_path),
+                os.path.join(lib_dir, path),
+                path,
+                sep_path,
+            ]
+            resolved = None
+            for c in candidates:
+                if os.path.isfile(c):
+                    resolved = c
+                    break
+            if resolved is None:
+                libs = sorted(f for f in os.listdir(lib_dir) if f.endswith('.z'))
+                hint = ''
+                clean = path.rstrip('.z') + '.z'
+                if clean in libs:
+                    hint = f' (did you mean include "{clean}"?)'
                 else:
-                    raise ZenError(f"Include file not found: {path}")
-            with open(path) as f:
+                    hint = f' (available: {", ".join(libs)})'
+                raise ZenError(f"Include file not found: {path}{hint}")
+            with open(resolved) as f:
                 code = f.read()
             from .lexer import Lexer
             from .parser import Parser
             lexer = Lexer(code)
             parser = Parser(lexer)
             program = parser.parse()
-            return self.interpret(program)
+            old_env = self.current_env
+            self.current_env = self.current_env.child()
+            try:
+                result = self.interpret(program)
+                module = {}
+                for k, v in self.current_env.vars.items():
+                    if not k.startswith('_') or k in ('_', '_version'):
+                        module[k] = v
+                return module
+            finally:
+                self.current_env = old_env
 
         elif isinstance(node, ast.Literal):
             if node.value is None:
@@ -687,6 +775,31 @@ class Interpreter:
 
         elif isinstance(node, ast.DictLiteral):
             return {str(self._eval(k)): self._eval(v) for k, v in node.pairs}
+
+        elif isinstance(node, ast.Class):
+            methods = {}
+            for name, val_node in node.body.items():
+                if isinstance(val_node, ast.Function):
+                    methods[name] = val_node
+                elif isinstance(val_node, ast.Literal):
+                    methods[name] = val_node.value
+                else:
+                    methods[name] = self._eval(val_node)
+            parent_val = None
+            if node.parent is not None:
+                parent_val = self._eval(node.parent)
+                if not isinstance(parent_val, (ZenClass, dict)):
+                    raise ZenError("Parent class must be a class", node)
+            klass = ZenClass(node.name, methods, parent_val, self)
+            self.current_env.define(node.name, klass)
+            return klass
+
+        elif isinstance(node, ast.New):
+            klass = self._eval(node.class_expr)
+            if not isinstance(klass, (ZenClass, type)):
+                raise ZenError(f"Called 'new' on non-class: {klass}", node)
+            args = [self._eval(a) for a in node.args]
+            return klass(*args)
 
         else:
             raise ZenError(f"Unknown AST node: {type(node).__name__}")

@@ -17,6 +17,7 @@ KEYWORDS = {
     'back', 'forward', 'execute', 'download', 'and', 'or', 'not',
     'true', 'false', 'null', 'try', 'catch', 'top', 'bottom',
     'break', 'continue', 'include', 'import', 'require', 'is', 'finally',
+    'class', 'extends', 'new', 'self',
 }
 
 TOKEN_SPEC = [
@@ -99,6 +100,8 @@ class Lexer:
         self._tokenize()
 
     def _tokenize(self):
+        line = self.line
+        column = self.col
         while self.pos < len(self.text):
             match = TOKEN_RE.match(self.text, self.pos)
             if not match:
@@ -107,7 +110,7 @@ class Lexer:
 
             kind = match.lastgroup
             value = match.group()
-            column = self.col
+            line, column = self.line, self.col
 
             self._update_position(value)
 
@@ -117,23 +120,23 @@ class Lexer:
             if kind == 'STRING':
                 inner = value[1:-1]
                 s = _process_escapes(inner)
-                self.tokens.append(Token('STRING', s, self.line, column))
+                self.tokens.append(Token('STRING', s, line, column))
                 continue
 
             if kind == 'IDENT' and value in KEYWORDS:
                 if value == 'true':
-                    self.tokens.append(Token('BOOL', True, self.line, column))
+                    self.tokens.append(Token('BOOL', True, line, column))
                 elif value == 'false':
-                    self.tokens.append(Token('BOOL', False, self.line, column))
+                    self.tokens.append(Token('BOOL', False, line, column))
                 elif value == 'null':
-                    self.tokens.append(Token('NULL', None, self.line, column))
+                    self.tokens.append(Token('NULL', None, line, column))
                 else:
-                    self.tokens.append(Token(value.upper(), value, self.line, column))
+                    self.tokens.append(Token(value.upper(), value, line, column))
                 continue
 
-            self.tokens.append(Token(kind, value, self.line, column))
+            self.tokens.append(Token(kind, value, line, column))
 
-        self.tokens.append(Token('EOF', '', self.line, self.col))
+        self.tokens.append(Token('EOF', '', line, column))
 
     def _update_position(self, text):
         for ch in text:
