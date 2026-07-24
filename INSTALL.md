@@ -4,7 +4,6 @@
 
 ```bash
 pip install zen-browser-lang
-playwright install chromium
 ```
 
 ## From Source
@@ -14,13 +13,13 @@ git clone https://github.com/ecnord/zen
 cd zen
 pip install -r requirements.txt
 pip install -e .
-playwright install chromium
 ```
 
 ## Requirements
 
 - Python 3.8+
-- Chromium (installed via `playwright install chromium`)
+- Chrome or Chromium browser (for full browser automation)
+- DrissionPage (installed automatically with pip)
 
 ## Verify
 
