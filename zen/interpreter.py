@@ -3,6 +3,7 @@ from . import nodes as ast
 from .environment import Environment, ZenReturn, ZenBreak, ZenContinue, ZenError, ZenElement, ZenList, ZenMethod, ConfigModule, ZenClass, ZenInstance
 from .builtins import register_builtins, _parse_duration
 from .color import color
+from .compiler import ZenCompiler, CompileError
 
 _VOID = object()
 
@@ -34,6 +35,160 @@ _SPECIAL_VARS = {
     '_page_urls', '_page_forms',
     '_page_inputs', '_page_buttons',
 }
+
+def _format_value(v):
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return '[' + ', '.join(str(_format_value(x)) for x in v) + ']'
+    return str(v)
+
+class _CompiledEnv:
+    __slots__ = ('_env', '_browser', '__last__')
+    def __init__(self, env, browser):
+        self._env = env
+        self._browser = browser
+        self.__last__ = None
+
+    @property
+    def __browser__(self):
+        return self._browser
+
+    def _resolve(self, name):
+        env = self._env
+        while env is not None:
+            try:
+                return env.vars[name]
+            except KeyError:
+                env = env.parent
+        raise ZenError(f"Undefined variable: {name}")
+
+    def __getitem__(self, name):
+        try:
+            return self._env.vars[name]
+        except KeyError:
+            return self._resolve(name)
+
+    def __setitem__(self, name, val):
+        env = self._env
+        while env is not None:
+            if name in env.vars:
+                env.vars[name] = val
+                return
+            env = env.parent
+        self._env.vars[name] = val
+
+    def __contains__(self, name):
+        env = self._env
+        while env is not None:
+            if name in env.vars:
+                return True
+            env = env.parent
+        return False
+
+    def define(self, name, val):
+        self._env.vars[name] = val
+    def __range__(self, start, end):
+        return range(start, end + 1)
+    def __print__(self, *args):
+        parts = []
+        for v in args:
+            if isinstance(v, list):
+                for item in v:
+                    parts.append(str(_format_value(item)))
+            else:
+                parts.append(str(_format_value(v)))
+        if parts:
+            print(' '.join(parts), flush=True)
+        else:
+            print(flush=True)
+    def __binop__(self, op, a, b):
+        if op == 'PLUS':
+            if isinstance(a, str) or isinstance(b, str):
+                return str(a) + str(b)
+            return a + b
+        if op == 'MINUS': return a - b
+        if op == 'STAR': return a * b
+        if op == 'SLASH': return a / b
+        if op == 'MOD': return a % b
+        if op == 'POW': return a ** b
+        if op == 'AND': return a and b
+        if op == 'OR': return a or b
+        raise ZenError(f"Unknown binary op: {op}")
+    def __unaryop__(self, op, a):
+        if op == '-': return -a
+        if op in ('not', '!'): return not _is_truthy(a)
+        raise ZenError(f"Unknown unary op: {op}")
+    def __getattr__(self, obj, name):
+        from .environment import ZenMethod, ZenElement, ZenList, ZenInstance
+        if isinstance(obj, ZenMethod):
+            obj = obj()
+        if name in ('str', 'int', 'float', 'bool', 'type'):
+            return {'str': str, 'int': int, 'float': float, 'bool': bool, 'type': type(obj).__name__}[name]
+        if isinstance(obj, ZenInstance):
+            return getattr(obj, name)
+        if isinstance(obj, (ZenElement, ZenList)):
+            return getattr(obj, name)
+        if obj is None:
+            raise ZenError(f"null has no attribute '{name}'")
+        if isinstance(obj, dict):
+            if name in ('len', 'count'): return len(obj)
+            if name in ('keys', 'values', 'items'):
+                return lambda: list(getattr(obj, name)())
+            if name == 'get':
+                return lambda key, default=None: obj.get(key, default)
+            if name in obj:
+                return obj[name]
+        if isinstance(obj, str):
+            m = {'len': len, 'count': len, 'upper': str.upper, 'lower': str.lower,
+                 'strip': str.strip, 'trim': str.strip}
+            if name in m:
+                return m[name](obj) if name in ('len', 'count') else lambda: m[name](obj)
+            if name in ('split', 'replace', 'contains', 'starts_with', 'startsWith',
+                        'ends_with', 'endsWith', 'join'):
+                return getattr(obj, name.replace('starts_with', 'startswith').replace('startsWith', 'startswith')
+                                  .replace('ends_with', 'endswith').replace('endsWith', 'endswith'))
+        if isinstance(obj, (list, tuple)):
+            if name == 'len': return len(obj)
+            if name == 'count': return len(obj)
+            if name == 'first': return obj[0] if obj else None
+            if name == 'last': return obj[-1] if obj else None
+            if name in ('append', 'pop', 'push', 'sort', 'reverse', 'map', 'filter', 'each', 'join'):
+                return getattr(obj, name)
+        if isinstance(obj, (int, float)):
+            if name == 'times':
+                return lambda fn: [fn(i) for i in range(int(obj))]
+        if hasattr(obj, name):
+            attr = getattr(obj, name)
+            if callable(attr):
+                return attr
+            return attr
+        raise ZenError(f"Type {type(obj).__name__} has no attribute '{name}'")
+    def __set_prop__(self, obj, name, val):
+        setattr(obj, name, val)
+    def __safe_getattr__(self, obj, name):
+        if obj is None:
+            return None
+        return self.__getattr__(obj, name)
+    def __special__(self, name):
+        if name == '_url': return self._browser.current_url
+        if name == '__url':
+            u = getattr(self._browser, 'previous_url', None)
+            return u if u else ''
+        if name == '___url':
+            u = getattr(self._browser, 'older_url', None)
+            return u if u else ''
+        if name == '_time': return _time_mod.strftime('%H:%M:%S')
+        if name == '_date': return _time_mod.strftime('%Y-%m-%d')
+        if name == '_dir': return os.getcwd()
+        if name == '_version': return '0.1.0'
+        if name == '_timeout': return self._browser.timeout_ms
+        return ''
+    def __wait__(self, dur):
+        if isinstance(dur, (int, float)) and dur <= 60:
+            dur = str(int(dur)) + 's'
+        ms = _parse_duration(dur)
+        self._browser.wait(ms)
 
 class Interpreter:
     def __init__(self, browser, script_args=None):
@@ -123,7 +278,49 @@ class Interpreter:
             return self.browser.page_buttons()
         raise ZenError(f"Unknown special variable: {name}")
 
+    def _try_compiled(self, node):
+        try:
+            compiler = getattr(self, '_compiler', None)
+            if compiler is None:
+                from .compiler import ZenCompiler
+                self._compiler = ZenCompiler()
+            py_code, source = self._compiler.compile(node)
+            env = self.current_env
+            compiled_env = _CompiledEnv(env, self.browser)
+            ns = {
+                '__env__': compiled_env,
+                '__Return': ZenReturn,
+                '__Break': ZenBreak,
+                '__Continue': ZenContinue,
+            }
+            before = set(ns.keys())
+            exec(py_code, ns)
+            after = set(ns.keys())
+            for name in after - before:
+                val = ns[name]
+                if name == '__result__':
+                    continue
+                if env.has(name):
+                    try:
+                        env.set(name, val)
+                    except ZenError:
+                        env.define(name, val)
+                else:
+                    env.define(name, val)
+            return ns.get('__result__', _VOID)
+        except CompileError:
+            return None
+        except Exception as e:
+            if isinstance(e, (ZenReturn, ZenBreak, ZenContinue)):
+                raise
+            return None
+
     def interpret(self, node):
+        result = self._try_compiled(node)
+        if result is not None:
+            if result is not _VOID:
+                self._last_result = result
+            return result
         result = self._eval(node)
         if result is not _VOID:
             self._last_result = result
@@ -389,7 +586,12 @@ class Interpreter:
         elif isinstance(node, ast.While):
             result = _VOID
             while _is_truthy(self._eval(node.condition)):
-                result = self._eval(node.body)
+                try:
+                    result = self._eval(node.body)
+                except ZenBreak:
+                    break
+                except ZenContinue:
+                    continue
             return result
 
         elif isinstance(node, ast.Function):
