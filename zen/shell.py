@@ -391,7 +391,6 @@ class Shell:
 
         elif cmd[0] == 'title':
             try:
-                from .builtins import _execute_builtin
                 print(self.browser.title())
             except Exception as e:
                 print(f'Error: {e}')
