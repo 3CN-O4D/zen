@@ -6,6 +6,25 @@ from .color import color
 
 _VOID = object()
 
+_COMPARE_OPS = {
+    'IS': lambda a, b: a is b,
+    'EQ': lambda a, b: a == b, '==': lambda a, b: a == b,
+    'NEQ': lambda a, b: a != b, '!=': lambda a, b: a != b,
+    'LT': lambda a, b: a < b, '<': lambda a, b: a < b,
+    'GT': lambda a, b: a > b, '>': lambda a, b: a > b,
+    'LE': lambda a, b: a <= b, '<=': lambda a, b: a <= b,
+    'GE': lambda a, b: a >= b, '>=': lambda a, b: a >= b,
+}
+
+_ARITH_OPS = {
+    'PLUS': lambda a, b: a + b,
+    'MINUS': lambda a, b: a - b,
+    'STAR': lambda a, b: a * b,
+    'SLASH': lambda a, b: a / b,
+    'MOD': lambda a, b: a % b,
+    'POW': lambda a, b: a ** b,
+}
+
 _SPECIAL_VARS = {
     '_url', '__url', '___url',
     '_time', '_date', '_dir',
@@ -185,6 +204,8 @@ class Interpreter:
             return result
 
         elif isinstance(node, ast.Block):
+            if not node.statements:
+                return _VOID
             old_env = self.current_env
             self.current_env = self.current_env.child()
             try:
@@ -346,33 +367,29 @@ class Interpreter:
             iterable = self._eval(node.iterable)
             result = _VOID
             if hasattr(iterable, '__iter__'):
+                var_name = node.var_name
+                env = self.current_env
+                vars_dict = env.vars
+                had_old = var_name in vars_dict
+                old_val = vars_dict.get(var_name, None) if had_old else None
                 for item in iterable:
-                    old_env = self.current_env
-                    self.current_env = self.current_env.child()
                     try:
-                        self.current_env.define(node.var_name, item)
+                        vars_dict[var_name] = item
                         result = self._eval(node.body)
                     except ZenBreak:
                         break
                     except ZenContinue:
                         continue
-                    finally:
-                        self.current_env = old_env
+                if had_old:
+                    vars_dict[var_name] = old_val
+                else:
+                    vars_dict.pop(var_name, None)
             return result
 
         elif isinstance(node, ast.While):
             result = _VOID
             while _is_truthy(self._eval(node.condition)):
-                old_env = self.current_env
-                self.current_env = self.current_env.child()
-                try:
-                    result = self._eval(node.body)
-                except ZenBreak:
-                    break
-                except ZenContinue:
-                    continue
-                finally:
-                    self.current_env = old_env
+                result = self._eval(node.body)
             return result
 
         elif isinstance(node, ast.Function):
@@ -445,59 +462,41 @@ class Interpreter:
             return result
 
         elif isinstance(node, ast.BinaryOp):
-            left = self._eval(node.left)
+            node_op = node.op
 
-            if node.op == 'or':
+            if node_op == 'or':
+                left = self._eval(node.left)
                 if _is_truthy(left):
                     return left
-                right = self._eval(node.right)
-                return right
-            elif node.op == 'and':
+                return self._eval(node.right)
+            elif node_op == 'and':
+                left = self._eval(node.left)
                 if not _is_truthy(left):
                     return left
-                right = self._eval(node.right)
-                return right
+                return self._eval(node.right)
 
-            right = self._eval(node.right) if hasattr(node, 'right') else None
-            if node.op == 'PLUS':
-                if isinstance(left, str) or isinstance(right, str):
-                    return str(left) + str(right)
-                return left + right
-            if node.op == 'MINUS':
-                return left - right
-            if node.op == 'STAR':
-                return left * right
-            if node.op == 'SLASH':
-                return left / right
-            if node.op == 'MOD':
-                return left % right
-            if node.op == 'POW':
-                return left ** right
-            if node.op == 'IS':
-                return left is right
-            if node.op in ('EQ', '=='):
-                return left == right
-            if node.op in ('NEQ', '!='):
-                return left != right
-            if node.op == 'LT':
-                return left < right
-            if node.op == 'GT':
-                return left > right
-            if node.op == 'LE':
-                return left <= right
-            if node.op == 'GE':
-                return left >= right
-            if node.op == 'IN':
-                if isinstance(right, (list, tuple)):
-                    return left in right
+            if node_op in _COMPARE_OPS:
+                left = self._eval(node.left)
+                right = self._eval(node.right)
+                return _COMPARE_OPS[node_op](left, right)
+
+            if node_op == 'IN':
+                left = self._eval(node.left)
+                right = self._eval(node.right)
                 if isinstance(right, str):
                     return str(left) in right
                 if isinstance(right, dict):
                     return left in right
                 if hasattr(right, '__contains__'):
                     return left in right
-                return False
-            raise ZenError(f"Unknown operator: {node.op}")
+                return left in right if isinstance(right, (list, tuple)) else False
+
+            left = self._eval(node.left)
+            right = self._eval(node.right)
+            if node_op == 'PLUS':
+                if isinstance(left, str) or isinstance(right, str):
+                    return str(left) + str(right)
+            return _ARITH_OPS[node_op](left, right)
 
         elif isinstance(node, ast.UnaryOp):
             operand = self._eval(node.operand)

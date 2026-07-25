@@ -1,6 +1,8 @@
 import re
+from collections import deque
 
 class Token:
+    __slots__ = ('type', 'value', 'line', 'col')
     def __init__(self, type, value, line, col):
         self.type = type
         self.value = value
@@ -21,11 +23,32 @@ KEYWORDS = {
 }
 
 TOKEN_SPEC = [
+    ('WS',       r'[ \t\r]+'),
+    ('NEWLINE',  r'\n'),
+    ('IDENT',    r'[a-zA-Z_][a-zA-Z0-9_]*'),
     ('NUMBER',   r'-?\d+(?:\.\d+)?'),
     ('STRING',   r'"""(?:(?!""")[\s\S])*"""|\'\'\'(?:(?!\'\'\')[\s\S])*\'\'\'|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\''),
     ('COMMENT',  r'//[^\n]*'),
     ('HASH_COMMENT', r'#[^\n]*'),
     ('BLOCK_COMMENT', r'/\*[\s\S]*?\*/'),
+    ('ELLIPSIS', r'\.\.\.'),
+    ('DOT_DOT',  r'\.\.'),
+    ('SAFE_DOT', r'\?\.'),
+    ('INC',      r'\+\+'),
+    ('DEC',      r'--'),
+    ('POW',      r'\*\*'),
+    ('PLUS_ASSIGN',  r'\+\='),
+    ('MINUS_ASSIGN', r'-='),
+    ('STAR_ASSIGN',  r'\*='),
+    ('SLASH_ASSIGN', r'/='),
+    ('MOD_ASSIGN',   r'%='),
+    ('PIPE_PIPE',  r'\|\|'),
+    ('AMPERSAND_AMPERSAND', r'&&'),
+    ('EQ',       r'=='),
+    ('NEQ',      r'!='),
+    ('LE',       r'<='),
+    ('GE',       r'>='),
+    ('RARROW',   r'->'),
     ('LPAREN',   r'\('),
     ('RPAREN',   r'\)'),
     ('LBRACE',   r'\{'),
@@ -34,27 +57,9 @@ TOKEN_SPEC = [
     ('RBRACKET', r'\]'),
     ('SEMICOLON', r';'),
     ('COMMA',    r','),
-    ('ELLIPSIS', r'\.\.\.'),
-    ('DOT_DOT',  r'\.\.'),
     ('AT',       r'@'),
-    ('SAFE_DOT', r'\?\.'),
     ('DOT',      r'\.'),
     ('COLON',    r':'),
-    ('PIPE_PIPE',  r'\|\|'),
-    ('AMPERSAND_AMPERSAND', r'&&'),
-    ('INC',      r'\+\+'),
-    ('DEC',      r'--'),
-    ('EQ',       r'=='),
-    ('NEQ',      r'!='),
-    ('LE',       r'<='),
-    ('GE',       r'>='),
-    ('PLUS_ASSIGN',  r'\+\='),
-    ('MINUS_ASSIGN', r'-='),
-    ('STAR_ASSIGN',  r'\*='),
-    ('SLASH_ASSIGN', r'/='),
-    ('MOD_ASSIGN',   r'%='),
-    ('POW',      r'\*\*'),
-    ('RARROW',   r'->'),
     ('ASSIGN',   r'='),
     ('LT',       r'<'),
     ('GT',       r'>'),
@@ -64,9 +69,6 @@ TOKEN_SPEC = [
     ('SLASH',    r'/'),
     ('MOD',      r'%'),
     ('BANG',     r'!'),
-    ('IDENT',    r'[a-zA-Z_][a-zA-Z0-9_]*'),
-    ('NEWLINE',  r'\n'),
-    ('WS',       r'[ \t\r]+'),
 ]
 
 TOKEN_RE = re.compile('|'.join(f'(?P<{name}>{pattern})' for name, pattern in TOKEN_SPEC))
@@ -115,7 +117,7 @@ class LexerError(Exception):
 class Lexer:
     def __init__(self, text):
         self.text = text
-        self.tokens = []
+        self.tokens = deque()
         self.pos = 0
         self.line = 1
         self.col = 1
@@ -164,19 +166,19 @@ class Lexer:
         self.tokens.append(Token('EOF', '', line, column))
 
     def _update_position(self, text):
-        for ch in text:
-            if ch == '\n':
-                self.line += 1
-                self.col = 1
-            else:
-                self.col += 1
+        nl = text.count('\n')
+        if nl:
+            self.line += nl
+            self.col = len(text) - text.rfind('\n')
+        else:
+            self.col += len(text)
         self.pos += len(text)
 
     def peek(self):
         return self.tokens[0] if self.tokens else Token('EOF', '', self.line, self.col)
 
     def next(self):
-        return self.tokens.pop(0) if self.tokens else Token('EOF', '', self.line, self.col)
+        return self.tokens.popleft() if self.tokens else Token('EOF', '', self.line, self.col)
 
     def expect(self, *types):
         token = self.next()
