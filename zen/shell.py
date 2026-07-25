@@ -1,5 +1,6 @@
 import sys
 import os
+import signal
 import warnings
 import asyncio
 from .lexer import Lexer, LexerError
@@ -277,6 +278,10 @@ class Shell:
         return parts
 
     def start(self):
+        try:
+            signal.signal(signal.SIGINT, signal.default_int_handler)
+        except (AttributeError, ValueError):
+            pass
         c = color
         print(c.bright_cyan(f'Zen v{__version__} — Browser Automation Shell'))
         if not HAS_PT:
@@ -310,7 +315,7 @@ class Shell:
             try:
                 if self._use_pt:
                     try:
-                        line = self._pt_session.prompt(self._build_prompt(for_readline=False), handle_sigint=False).strip()
+                        line = self._pt_session.prompt(self._build_prompt(for_readline=False)).strip()
                     except RuntimeError as e:
                         if 'asyncio.run() cannot be called' in str(e):
                             self._use_pt = False
