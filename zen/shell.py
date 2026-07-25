@@ -37,11 +37,12 @@ except ImportError:
 
 _ZEN_KEYWORDS = [
     'let', 'go', 'fill', 'with', 'click', 'wait', 'for', 'in',
-    'if', 'else', 'while', 'function', 'def', 'return', 'print', 'input',
+    'if', 'elif', 'else', 'while', 'function', 'def', 'return', 'print', 'input',
     'into', 'scroll', 'to', 'by', 'shot', 'full', 'refresh',
     'back', 'forward', 'execute', 'download', 'and', 'or', 'not',
     'true', 'false', 'null', 'try', 'catch', 'top', 'bottom',
     'break', 'continue', 'include',
+    'switch', 'case', 'default', 'with', 'as',
     'first', 'nth', 'text', 'texts', 'attr', 'attrs',
 ]
 
@@ -159,6 +160,12 @@ _ZEN_BUILTIN_HELP = {
     'assert': 'assert(cond, msg?) — Raise error if cond is falsy',
     'assert_eq': 'assert_eq(a, b, msg?) — Raise error if a != b',
     'assertEq': 'assertEq(a, b, msg?) — Alias for assert_eq',
+    'switch': 'switch expr { case val { } default { } } — Multi-branch value match',
+    'case': 'case val { } — Branch within a switch statement',
+    'default': 'default { } — Fallback branch in switch',
+    'with': 'with expr as name { } — Temporary block scope',
+    'elif': 'elif cond { } — Else-if chaining (alternative: else if)',
+    'class': 'class Name { } or class { } — Define or create class as expression',
 }
 
 
@@ -476,16 +483,27 @@ class Shell:
         print(f'  {Y("Dict")}    {{"a": 1}}')
         print()
         print(C('Operators'))
-        print(f'  {Y("Arithmetic:")}  +  -  *  /  %  **')
-        print(f'  {Y("Comparison:")}  ==  !=  <  >  <=  >=')
-        print(f'  {Y("Membership:")}  in  not in')
-        print(f'  {Y("Logical:")}     and  or  not')
+        print(f'  {Y("Arithmetic:")}     +  -  *  /  %  **')
+        print(f'  {Y("Compound:")}       +=  -=  *=  /=  %=')
+        print(f'  {Y("Incr/Decr:")}      x++  x--')
+        print(f'  {Y("Comparison:")}     ==  !=  <  >  <=  >=')
+        print(f'  {Y("Chained:")}        a < b < c')
+        print(f'  {Y("Identity:")}       is  is not')
+        print(f'  {Y("Membership:")}     in  not in')
+        print(f'  {Y("Logical:")}        and  or  not')
+        print(f'  {Y("Ternary:")}        val if cond else val')
+        print(f'  {Y("Range:")}          x -> y  (also x .. y, x to y)')
+        print(f'  {Y("Range step:")}     x -> y by n  (also x -> y @ n)')
+        print(f'  {Y("Spread:")}         [...xs]  {{...ds}}  (unpack into list/dict)')
+        print(f'  {Y("Safe nav:")}       obj?.prop  (null if obj is null)')
         print()
         print(C('Control Flow'))
-        print(f'  {Y("if")} cond {{ }} {Y("else")} {{ }}')
+        print(f'  {Y("if")} cond {{ }} {Y("elif")} cond {{ }} {Y("else")} {{ }}')
+        print(f'  {Y("switch")} expr {{ {Y("case")} val {{ }} {Y("default")} {{ }} }}')
         print(f'  {Y("while")} cond {{ }}')
         print(f'  {Y("for")} x in iterable {{ }}')
         print(f'  {Y("function")} name(params) {{ }}')
+        print(f'  {Y("with")} expr {Y("as")} name {{ }}  — temporary block scope')
         print(f'  {Y("return")} value')
         print(f'  {Y("break")} — exit current loop')
         print(f'  {Y("continue")} — skip to next iteration')
@@ -597,6 +615,19 @@ class Shell:
         print(f'  {Y("mkdir")}, {Y("remove_file")}, {Y("copy_file")}, {Y("move_file")}, {Y("rename_file")},')
         print(f'  {Y("path_join")}, {Y("cwd")}, {Y("cd")}, {Y("glob")}, {Y("exec")}, {Y("sh")}, {Y("system")}')
         print()
+        print(C('Classes'))
+        print(f'  {Y("class Name { }")}          — define a class')
+        print(f'  {Y("class Name extends P { }")} — inheritance')
+        print(f'  {Y("let cls = class { }")}      — class as expression')
+        print(f'  {Y("new ClassName(args)")}      — instantiate')
+        print(f'  {Y("self")}                     — instance reference in methods')
+        print()
+        print(C('String Features'))
+        print(f'  {Y("Interpolation:")} "hello {name}" — embed variable')
+        print(f'  {Y("Escapes:")} \\n \\t \\r \\\\ \\" \\\' \\0')
+        print(f'  {Y("Hex/Unicode:")} \\xNN \\uNNNN \\UNNNNNNNN')
+        print(f'  {Y("Triple quotes:")} """multi\\nline""" ')
+        print()
         print(C('Browser Builtins'))
         for k in sorted(_ZEN_BUILTIN_HELP):
             v = _ZEN_BUILTIN_HELP[k]
@@ -621,6 +652,14 @@ class Shell:
         print(f'  {Y("_page_inputs")}  All input/select/textarea fields')
         print(f'  {Y("_page_buttons")} All buttons and clickable elements')
         print()
+        print(C('Variables & Assignment'))
+        print(f'  {Y("let x = val")}      — declare variable')
+        print(f'  {Y("x = val")}          — assign/reassign')
+        print(f'  {Y("x += val")}         — compound assignment')
+        print(f'  {Y("x++")}              — increment')
+        print(f'  {Y("a, b = 1, 2")}      — tuple unpacking')
+        print(f'  {Y("a, _ = [1, 2]")}    — _ throwaway value')
+        print()
         print(C('Element Methods (ZenElement)'))
         print(f'  {Y(".text")}            {Y(".html")}            {Y(".exists")}            {Y(".tag")}')
         print(f'  {Y(".attr(\"href\")")}    {Y(".click()")}         {Y(".fill(\"val\")")}')
@@ -637,12 +676,13 @@ class Shell:
         print()
         print(C('String / List / Dict / Number Methods'))
         print(f'  {Y("String:")}  .upper()  .lower()  .split()  .join()  .replace()  .strip()')
-        print('               .startswith()  .endswith()  .find()  .len  .format()')
-        print(f'  {Y("List:")}    .append()  .pop()  .sort()  .reverse()  .clear()  .len  .sorted()')
+        print('               .startswith()  .endswith()  .find()  .len  .count  .format()')
+        print(f'  {Y("List:")}    .append()  .pop()  .sort()  .reverse()  .clear()  .len  .count  .sorted()')
         print('               .push()  .shift()  .unshift()  .includes()  .indexOf()  .join()')
-        print(f'  {Y("Dict:")}    .keys()  .values()  .items()  .get()  .put()  .len  .clear()')
+        print(f'  {Y("Dict:")}    .keys()  .values()  .items()  .get()  .put()  .len  .count  .clear()')
         print(f'  {Y("Number:")}  .times(fn)  .str()  .float()  .type')
         print(f'  {Y("Any:")}     .str()  .int()  .float()  .bool()  .type')
+        print(f'  {Y("Interp:")}  "hello {{name}}" — embed variable in string')
         print()
         print(C('Slice Syntax'))
         print(f'  {Y("list[start:end]")}  {Y("list[start:]")}  {Y("list[:end]")}  {Y("list[::step]")}')
