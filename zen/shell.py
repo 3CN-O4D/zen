@@ -310,7 +310,7 @@ class Shell:
             try:
                 if self._use_pt:
                     try:
-                        line = self._pt_session.prompt(self._build_prompt(for_readline=False)).strip()
+                        line = self._pt_session.prompt(self._build_prompt(for_readline=False), handle_sigint=False).strip()
                     except RuntimeError as e:
                         if 'asyncio.run() cannot be called' in str(e):
                             self._use_pt = False
@@ -325,7 +325,9 @@ class Shell:
             except KeyboardInterrupt:
                 self._buf = []
                 self._prompt_prefix = ''
-                print()
+                if self._use_pt:
+                    self._pt_session.app.invalidate()
+                print(color.yellow('^C'))
                 continue
 
             if not line:
@@ -966,6 +968,8 @@ class Shell:
             print(color.red(f'Runtime Error: {msg}'))
             if e.node and hasattr(e.node, 'line'):
                 _show_error_context(code, e.node.line, e.node.col, msg)
+        except KeyboardInterrupt:
+            print(color.yellow('\nKeyboardInterrupt'))
         except Exception as e:
             err_type = type(e).__name__
             err_msg = str(e).split('\n')[0]
