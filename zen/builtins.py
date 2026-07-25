@@ -2,13 +2,12 @@ import time as _time
 import os
 import json as _json
 import urllib.request as _urllib
-import urllib.parse as _urlparse
 import random as _random
 import math as _math
 import datetime as _datetime
 import socket as _socket
 import base64 as _base64
-from .environment import ZenElement, ZenSelector, ZenList, ZenRegexMatch, HttpResponse, ZenError, PageModule, ConfigModule
+from .environment import ZenElement, ZenSelector, ZenRegexMatch, HttpResponse, ZenError, PageModule, ConfigModule
 from .browser import get_config, set_config
 
 

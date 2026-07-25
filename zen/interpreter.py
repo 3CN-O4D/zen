@@ -1,6 +1,6 @@
 import os, time as _time_mod
 from . import nodes as ast
-from .environment import Environment, ZenReturn, ZenBreak, ZenContinue, ZenError, ZenElement, ZenList, ZenMethod, ConfigModule, ZenClass, ZenInstance, _bound_method
+from .environment import Environment, ZenReturn, ZenBreak, ZenContinue, ZenError, ZenElement, ZenList, ZenMethod, ConfigModule, ZenClass, ZenInstance
 from .builtins import register_builtins, _parse_duration
 from .color import color
 
