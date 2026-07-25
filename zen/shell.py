@@ -624,7 +624,7 @@ class Shell:
         print(f'  {Y("self")}                     — instance reference in methods')
         print()
         print(C('String Features'))
-        print(f'  {Y("Interpolation:")} "hello {name}" — embed variable')
+        print(f'  {Y("Interpolation:")} "hello {{name}}" — embed variable')
         print(f'  {Y("Escapes:")} \\n \\t \\r \\\\ \\" \\\' \\0')
         print(f'  {Y("Hex/Unicode:")} \\xNN \\uNNNN \\UNNNNNNNN')
         print(f'  {Y("Triple quotes:")} """multi\\nline""" ')
