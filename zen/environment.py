@@ -370,11 +370,16 @@ class ZenRegexMatch:
 
 
 class HttpResponse:
-    def __init__(self, status, body, headers):
+    def __init__(self, status, body, headers, raw=None):
         self.status = status
         self.body = body
         self.headers = dict(headers)
         self.ok = 200 <= status < 400
+        self._raw = raw if raw is not None else body.encode('utf-8')
+
+    @property
+    def bytes(self):
+        return self._raw
 
     def json(self):
         return json.loads(self.body)

@@ -130,10 +130,11 @@ class Interpreter:
                 self.current_env.lock('self')
             except Exception:
                 pass
-            result = self._eval(func_node.body)
-            if isinstance(result, ZenReturn):
-                return result.value
-            return result
+            try:
+                result = self._eval(func_node.body)
+                return result
+            except ZenReturn as ret:
+                return ret.value
         finally:
             self.current_env = old_env
 
@@ -152,6 +153,29 @@ class Interpreter:
             raise
         except Exception as e:
             raise ZenError(str(e), node)
+
+    def _assign_single(self, target, value):
+        if isinstance(target, ast.Variable):
+            if target.name == '_':
+                return value
+            if target.name == '_timeout':
+                self.browser.timeout_ms = _parse_duration(value)
+                return value
+            if self.current_env.has(target.name):
+                self.current_env.set(target.name, value)
+            else:
+                self.current_env.define(target.name, value)
+        elif isinstance(target, ast.Member):
+            obj = self._eval(target.obj)
+            if isinstance(obj, (ZenElement, ConfigModule, ZenInstance)):
+                setattr(obj, target.name, value)
+            else:
+                raise ZenError(f"Cannot set property on {type(obj).__name__}")
+        elif isinstance(target, ast.Index):
+            obj = self._eval(target.obj)
+            index = self._eval(target.index)
+            obj[index] = value
+        return value
 
     def _eval_inner(self, node):
         if isinstance(node, ast.Program):
@@ -178,25 +202,25 @@ class Interpreter:
 
         elif isinstance(node, ast.Assign):
             value = self._eval(node.value)
-            if isinstance(node.target, ast.Variable):
-                if node.target.name == '_timeout':
-                    self.browser.timeout_ms = _parse_duration(value)
+            if isinstance(node.target, ast.ListLiteral):
+                targets = node.target.elements
+                if isinstance(value, (list, tuple)):
+                    if len(targets) != len(value):
+                        raise ZenError(
+                            f"Cannot unpack {len(value)} values into {len(targets)} targets")
+                    for t, v in zip(targets, value):
+                        self._assign_single(t, v)
                     return value
-                if self.current_env.has(node.target.name):
-                    self.current_env.set(node.target.name, value)
-                else:
-                    self.global_env.define(node.target.name, value)
-            elif isinstance(node.target, ast.Member):
-                obj = self._eval(node.target.obj)
-                if isinstance(obj, (ZenElement, ConfigModule, ZenInstance)):
-                    setattr(obj, node.target.name, value)
-                else:
-                    raise ZenError(f"Cannot set property on {type(obj).__name__}")
-            elif isinstance(node.target, ast.Index):
-                obj = self._eval(node.target.obj)
-                index = self._eval(node.target.index)
-                obj[index] = value
-            return value
+                if hasattr(value, '__iter__'):
+                    vals = list(value)
+                    if len(targets) != len(vals):
+                        raise ZenError(
+                            f"Cannot unpack {len(vals)} values into {len(targets)} targets")
+                    for t, v in zip(targets, vals):
+                        self._assign_single(t, v)
+                    return value
+                raise ZenError(f"Cannot unpack {type(value).__name__}")
+            return self._assign_single(node.target, value)
 
         elif isinstance(node, ast.Go):
             try:
@@ -294,6 +318,29 @@ class Interpreter:
             elif node.else_branch:
                 return self._eval(node.else_branch)
             return _VOID
+
+        elif isinstance(node, ast.Switch):
+            val = self._eval(node.expr)
+            matched = False
+            for case_val_node, body in node.cases:
+                case_val = self._eval(case_val_node)
+                if case_val == val:
+                    matched = True
+                    return self._eval(body)
+            if not matched and node.default_body:
+                return self._eval(node.default_body)
+            return _VOID
+
+        elif isinstance(node, ast.With):
+            val = self._eval(node.expr)
+            old_env = self.current_env
+            self.current_env = self.current_env.child()
+            try:
+                if node.name:
+                    self.current_env.define(node.name, val)
+                return self._eval(node.body)
+            finally:
+                self.current_env = old_env
 
         elif isinstance(node, ast.For):
             iterable = self._eval(node.iterable)
@@ -399,41 +446,48 @@ class Interpreter:
 
         elif isinstance(node, ast.BinaryOp):
             left = self._eval(node.left)
-            right = self._eval(node.right) if hasattr(node, 'right') else None
 
             if node.op == 'or':
-                return _is_truthy(left) or _is_truthy(right)
+                if _is_truthy(left):
+                    return left
+                right = self._eval(node.right)
+                return right
             elif node.op == 'and':
-                return _is_truthy(left) and _is_truthy(right)
-            elif node.op == 'PLUS':
+                if not _is_truthy(left):
+                    return left
+                right = self._eval(node.right)
+                return right
+
+            right = self._eval(node.right) if hasattr(node, 'right') else None
+            if node.op == 'PLUS':
                 if isinstance(left, str) or isinstance(right, str):
                     return str(left) + str(right)
                 return left + right
-            elif node.op == 'MINUS':
+            if node.op == 'MINUS':
                 return left - right
-            elif node.op == 'STAR':
+            if node.op == 'STAR':
                 return left * right
-            elif node.op == 'SLASH':
+            if node.op == 'SLASH':
                 return left / right
-            elif node.op == 'MOD':
+            if node.op == 'MOD':
                 return left % right
-            elif node.op == 'POW':
+            if node.op == 'POW':
                 return left ** right
-            elif node.op == 'IS':
+            if node.op == 'IS':
                 return left is right
-            elif node.op in ('EQ', '=='):
+            if node.op in ('EQ', '=='):
                 return left == right
-            elif node.op in ('NEQ', '!='):
+            if node.op in ('NEQ', '!='):
                 return left != right
-            elif node.op == 'LT':
+            if node.op == 'LT':
                 return left < right
-            elif node.op == 'GT':
+            if node.op == 'GT':
                 return left > right
-            elif node.op == 'LE':
+            if node.op == 'LE':
                 return left <= right
-            elif node.op == 'GE':
+            if node.op == 'GE':
                 return left >= right
-            elif node.op == 'IN':
+            if node.op == 'IN':
                 if isinstance(right, (list, tuple)):
                     return left in right
                 if isinstance(right, str):
@@ -473,8 +527,20 @@ class Interpreter:
                 return callee
             raise ZenError(f"Not callable: {callee}")
 
+        elif isinstance(node, ast.SafeMember):
+            obj = self._eval(node.obj)
+            if obj is None:
+                return None
+            member = ast.Member(node.obj, node.name)
+            member.line = getattr(node, 'line', 0)
+            member.col = getattr(node, 'col', 0)
+            return self._eval_inner(member)
+
         elif isinstance(node, ast.Member):
             obj = self._eval(node.obj)
+
+            if isinstance(obj, ZenMethod):
+                obj = obj()
 
             # --- universal (available on all types) ---
             if node.name == 'str':
@@ -533,7 +599,7 @@ class Interpreter:
 
             # --- dict ---
             if isinstance(obj, dict):
-                if node.name == 'len':
+                if node.name in ('len', 'count'):
                     return len(obj)
                 if node.name in ('is_empty', 'isEmpty'):
                     return len(obj) == 0
@@ -565,7 +631,7 @@ class Interpreter:
 
             # --- str ---
             if isinstance(obj, str):
-                if node.name == 'len':
+                if node.name in ('len', 'count'):
                     return len(obj)
                 if node.name in ('is_empty', 'isEmpty'):
                     return len(obj) == 0
@@ -627,7 +693,7 @@ class Interpreter:
 
             # --- list ---
             if isinstance(obj, list):
-                if node.name == 'len':
+                if node.name in ('len', 'count'):
                     return len(obj)
                 if node.name in ('is_empty', 'isEmpty'):
                     return len(obj) == 0
@@ -770,6 +836,19 @@ class Interpreter:
             finally:
                 self.current_env = old_env
 
+        elif isinstance(node, ast.Ternary):
+            cond = self._eval(node.cond)
+            return self._eval(node.then_val) if _is_truthy(cond) else self._eval(node.else_val)
+
+        elif isinstance(node, ast.InterpolatedString):
+            parts = []
+            for is_expr, val in node.parts:
+                if is_expr:
+                    parts.append(str(self.current_env.get(val)))
+                else:
+                    parts.append(val)
+            return ''.join(parts)
+
         elif isinstance(node, ast.Literal):
             if node.value is None:
                 return None
@@ -781,10 +860,37 @@ class Interpreter:
             return self.current_env.get(node.name)
 
         elif isinstance(node, ast.ListLiteral):
-            return [self._eval(e) for e in node.elements]
+            result = []
+            for e in node.elements:
+                if isinstance(e, ast.Spread):
+                    val = self._eval(e.expr)
+                    if isinstance(val, list):
+                        result.extend(val)
+                    else:
+                        result.append(val)
+                else:
+                    result.append(self._eval(e))
+            return result
+
+        elif isinstance(node, ast.Range):
+            start = int(self._eval(node.start))
+            end = int(self._eval(node.end))
+            step = int(self._eval(node.step)) if node.step is not None else 1
+            end_adj = end + 1 if step > 0 else end - 1
+            return list(range(start, end_adj, step))
 
         elif isinstance(node, ast.DictLiteral):
-            return {str(self._eval(k)): self._eval(v) for k, v in node.pairs}
+            result = {}
+            for k, v in node.pairs:
+                if isinstance(k, ast.Spread):
+                    val = self._eval(k.expr)
+                    if isinstance(val, dict):
+                        result.update(val)
+                    else:
+                        raise ZenError(f"Cannot spread non-dict in dict literal")
+                else:
+                    result[str(self._eval(k))] = self._eval(v)
+            return result
 
         elif isinstance(node, ast.Class):
             methods = {}

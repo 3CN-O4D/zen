@@ -7,6 +7,7 @@ import random as _random
 import math as _math
 import datetime as _datetime
 import socket as _socket
+import base64 as _base64
 from .environment import ZenElement, ZenSelector, ZenList, ZenRegexMatch, HttpResponse, ZenError, PageModule, ConfigModule
 from .browser import get_config, set_config
 
@@ -180,7 +181,7 @@ def register_builtins(env, browser):
     env.define('assert_eq', lambda a, b, msg=None: _assert_eq_fn(a, b, msg))
     env.define('assertEq', lambda a, b, msg=None: _assert_eq_fn(a, b, msg))
 
-    env.define('range', lambda start, end=None, step=1: list(range(start, end) if end is not None else range(start)))
+    env.define('range', lambda start, end=None, step=1: list(range(start, end, step) if end is not None else range(start)))
     env.define('interval', lambda start, end, step=1: list(range(start, end, step)))
     env.define('abs', lambda v: abs(v))
     env.define('min', lambda *args: min(args))
@@ -272,6 +273,8 @@ def register_builtins(env, browser):
     env.define('readBinary', lambda path: _read_binary(str(path)))
     env.define('write_binary', lambda path, data: _write_binary(str(path), data))
     env.define('writeBinary', lambda path, data: _write_binary(str(path), data))
+    env.define('base64_decode', lambda s: _base64.b64decode(str(s)))
+    env.define('b64decode', lambda s: _base64.b64decode(str(s)))
 
     env.define('rmdir', lambda path: os.rmdir(str(path)))
     env.define('remove_dir', lambda path: os.rmdir(str(path)))
@@ -404,6 +407,8 @@ def register_builtins(env, browser):
         })
 
         env.define('page', PageModule(browser))
+
+        env.define('popup', _PopupModule(browser))
 
     env.define('random', {
         'random': lambda: _random.random(),
@@ -678,11 +683,13 @@ def _http_request(method, url, data=None, json=None, headers=None, timeout=30):
             req.add_header(str(k), str(v))
     try:
         resp = _urllib.urlopen(req, timeout=int(timeout))
-        body = resp.read().decode('utf-8', errors='replace')
-        return HttpResponse(resp.status, body, resp.getheaders())
+        raw = resp.read()
+        body = raw.decode('utf-8', errors='replace')
+        return HttpResponse(resp.status, body, resp.getheaders(), raw=raw)
     except _urllib.HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')
-        return HttpResponse(e.code, body, e.headers)
+        raw = e.read()
+        body = raw.decode('utf-8', errors='replace')
+        return HttpResponse(e.code, body, e.headers, raw=raw)
     except Exception as e:
         raise ZenError(f'HTTP {method} {url}: {e}')
 
@@ -698,3 +705,540 @@ def _parse_duration(dur):
     if s.endswith('s'):
         return float(s[:-1]) * 1000
     return float(s)
+
+
+class _PopupModule:
+    """Comprehensive popup handler for any web framework.
+
+    Detects and interacts with:
+      - SweetAlert2       (.swal2-popup)
+      - SweetAlert1       (.sweet-alert)
+      - Bootstrap modal   (.modal.show / .in)
+      - jQuery UI dialog  (.ui-dialog)
+      - Material UI       (.MuiDialog-root)
+      - Ant Design        (.ant-modal)
+      - Element UI        (.el-dialog)
+      - Vuetify           (.v-dialog)
+      - Native browser    (alert/confirm/prompt via DrissionPage)
+      - Generic overlays  (any fixed/absolute element with high z-index + backdrop)
+    """
+
+    POPUP_SELECTORS = [
+        '.swal2-popup',
+        '.sweet-alert',
+        '.modal.show, .modal.fade.in, .modal[style*="display: block"]',
+        '.ui-dialog',
+        '.MuiDialog-root',
+        '.ant-modal',
+        '.el-dialog',
+        '.v-dialog',
+    ]
+
+    BUTTON_SELECTORS = [
+        '.swal2-confirm',
+        '.swal2-cancel',
+        '.swal2-deny',
+        '.ui-dialog .ui-dialog-buttonpane button',
+        '.modal.show .modal-footer button, .modal.fade.in .modal-footer button',
+        '.MuiDialog-root .MuiDialogActions-root button',
+        '.ant-modal .ant-modal-footer button',
+        '.el-dialog .el-dialog__footer button',
+        '.v-dialog .v-card-actions button',
+    ]
+
+    def __init__(self, browser):
+        self._browser = browser
+
+    def _js(self, code):
+        """Execute JS returning raw value."""
+        return self._browser.execute(code)
+
+    def _js_obj(self, code):
+        """Execute JS that returns a simple object (serialised via JSON)."""
+        wrapped = f"JSON.stringify((function(){{{code}}})())"
+        raw = self._browser.execute(wrapped)
+        if isinstance(raw, str):
+            import json as _json
+            try:
+                return _json.loads(raw)
+            except Exception:
+                return None
+        return raw
+
+    # ── Generic popup scan ────────────────────────────────────
+
+    def _known_popup_selectors(self):
+        """Return CSS selector matching any known framework popup."""
+        return ', '.join(self.POPUP_SELECTORS)
+
+    def _heuristic_scan(self):
+        """Find any visible popup-like element via heuristics (last resort)."""
+        return self._js_obj("""
+            var all = document.querySelectorAll('body > *, div, section, aside');
+            var candidates = [];
+            var maxZ = 0;
+            var topEl = null;
+
+            for (var i = 0; i < all.length; i++) {
+                var el = all[i];
+                if (el.offsetParent === null && window.getComputedStyle(el).display === 'none') continue;
+                var cs = window.getComputedStyle(el);
+                if (cs.position !== 'fixed' && cs.position !== 'absolute') continue;
+                var z = parseInt(cs.zIndex);
+                if (isNaN(z)) z = 0;
+                if (z < 100) continue;
+                if (z > maxZ) { maxZ = z; topEl = el; }
+            }
+
+            if (!topEl) return null;
+
+            return {
+                element: 'heuristic',
+                title: (topEl.querySelector('h1, h2, h3, h4, .title, .modal-title, .ui-dialog-title') || {}).innerText || '',
+                content: (topEl.querySelector('p, .content, .modal-body, .message, .ui-dialog-content') || {}).innerText || '',
+                buttons: Array.from(topEl.querySelectorAll('button, a.btn')).map(function(b) { return b.innerText.trim(); }).filter(Boolean),
+                visible: true
+            };
+        """)
+
+    def _detect_any_popup(self):
+        """Return info dict for whatever popup is visible, or None."""
+        # 1 — Known framework selectors
+        found = self._js("(function(){ var s='" + self._known_popup_selectors().replace("'", "\\'") + "'; return document.querySelector(s) !== null ? document.querySelector(s).className : null; })()")
+        if found:
+            return self._extract_popup_info(found)
+
+        # 2 — Native browser dialogs (alert/confirm/prompt)
+        try:
+            alert_exists = self._browser._drission.wait.alert_exists(timeout=0.1)
+            if alert_exists:
+                return {'type': 'native', 'visible': True}
+        except Exception:
+            pass
+
+        # 3 — Heuristic: any fixed/absolute element with z-index ≥ 100
+        heur = self._heuristic_scan()
+        if heur and heur.get('buttons') or heur.get('title') or heur.get('content'):
+            heur['type'] = 'heuristic'
+            return heur
+
+        return None
+
+    def _extract_popup_info(self, class_name):
+        """Given a class match, extract full popup info."""
+        cls = str(class_name)
+
+        # ── SweetAlert2 ────────────────────────────────────────
+        if 'swal2' in cls:
+            v = self._vis_fn()
+            return {
+                'type': 'sweetalert2',
+                'title': self._js("document.querySelector('.swal2-title') ? document.querySelector('.swal2-title').innerText.trim() : ''"),
+                'content': self._js("document.querySelector('.swal2-html-container') ? document.querySelector('.swal2-html-container').innerText.trim() : ''"),
+                'icon': self._js("document.querySelector('.swal2-icon') ? document.querySelector('.swal2-icon').className : ''"),
+                'prompt': self._js("document.querySelector('.swal2-input') !== null && document.querySelector('.swal2-input').offsetParent !== null"),
+                'prompt_value': self._js("document.querySelector('.swal2-input') ? document.querySelector('.swal2-input').value : ''"),
+                'prompt_placeholder': self._js("document.querySelector('.swal2-input') ? document.querySelector('.swal2-input').placeholder : ''"),
+                'has_confirm': self._js(v + "(document.querySelector('.swal2-confirm'))"),
+                'has_cancel': self._js(v + "(document.querySelector('.swal2-cancel'))"),
+                'has_deny': self._js(v + "(document.querySelector('.swal2-deny'))"),
+                'has_close': self._js(v + "(document.querySelector('.swal2-close'))"),
+                'confirm_text': self._js("document.querySelector('.swal2-confirm') ? document.querySelector('.swal2-confirm').innerText.trim() : 'OK'"),
+                'cancel_text': self._js("document.querySelector('.swal2-cancel') ? document.querySelector('.swal2-cancel').innerText.trim() : 'Cancel'"),
+                'deny_text': self._js("document.querySelector('.swal2-deny') ? document.querySelector('.swal2-deny').innerText.trim() : 'No'"),
+                'visible': True,
+            }
+
+        # ── Bootstrap modal ─────────────────────────────────────
+        if 'modal' in cls:
+            return {
+                'type': 'bootstrap_modal',
+                'title': self._js("document.querySelector('.modal.show .modal-title, .modal.fade.in .modal-title') ? document.querySelector('.modal.show .modal-title, .modal.fade.in .modal-title').innerText.trim() : ''"),
+                'content': self._js("document.querySelector('.modal.show .modal-body, .modal.fade.in .modal-body') ? document.querySelector('.modal.show .modal-body, .modal.fade.in .modal-body').innerText.trim() : ''"),
+                'has_close': self._js("document.querySelector('.modal.show .close, .modal.fade.in .close') !== null"),
+                'buttons': self._js("Array.from(document.querySelectorAll('.modal.show .modal-footer button, .modal.fade.in .modal-footer button')).map(function(b){return b.innerText.trim()})"),
+                'visible': True,
+            }
+
+        # ── jQuery UI Dialog ────────────────────────────────────
+        if 'ui-dialog' in cls:
+            return {
+                'type': 'jquery_ui',
+                'title': self._js("document.querySelector('.ui-dialog .ui-dialog-title') ? document.querySelector('.ui-dialog .ui-dialog-title').innerText.trim() : ''"),
+                'content': self._js("document.querySelector('.ui-dialog .ui-dialog-content') ? document.querySelector('.ui-dialog .ui-dialog-content').innerText.trim() : ''"),
+                'buttons': self._js("Array.from(document.querySelectorAll('.ui-dialog .ui-dialog-buttonpane button')).map(function(b){return b.innerText.trim()})"),
+                'visible': True,
+            }
+
+        # ── Material UI ─────────────────────────────────────────
+        if 'MuiDialog' in cls:
+            return {
+                'type': 'material_ui',
+                'title': self._js("document.querySelector('.MuiDialog-root .MuiDialogTitle-root') ? document.querySelector('.MuiDialog-root .MuiDialogTitle-root').innerText.trim() : ''"),
+                'content': self._js("document.querySelector('.MuiDialog-root .MuiDialogContent-root') ? document.querySelector('.MuiDialog-root .MuiDialogContent-root').innerText.trim() : ''"),
+                'buttons': self._js("Array.from(document.querySelectorAll('.MuiDialog-root .MuiDialogActions-root button')).map(function(b){return b.innerText.trim()})"),
+                'visible': True,
+            }
+
+        # ── Ant Design ──────────────────────────────────────────
+        if 'ant-modal' in cls:
+            return {
+                'type': 'antd',
+                'title': self._js("document.querySelector('.ant-modal .ant-modal-title') ? document.querySelector('.ant-modal .ant-modal-title').innerText.trim() : ''"),
+                'content': self._js("document.querySelector('.ant-modal .ant-modal-body') ? document.querySelector('.ant-modal .ant-modal-body').innerText.trim() : ''"),
+                'buttons': self._js("Array.from(document.querySelectorAll('.ant-modal .ant-modal-footer button')).map(function(b){return b.innerText.trim()})"),
+                'visible': True,
+            }
+
+        # ── Element UI ───────────────────────────────────────────
+        if 'el-dialog' in cls:
+            return {
+                'type': 'element_ui',
+                'title': self._js("document.querySelector('.el-dialog .el-dialog__title') ? document.querySelector('.el-dialog .el-dialog__title').innerText.trim() : ''"),
+                'content': self._js("document.querySelector('.el-dialog .el-dialog__body') ? document.querySelector('.el-dialog .el-dialog__body').innerText.trim() : ''"),
+                'buttons': self._js("Array.from(document.querySelectorAll('.el-dialog .el-dialog__footer button')).map(function(b){return b.innerText.trim()})"),
+                'visible': True,
+            }
+
+        # ── Vuetify ──────────────────────────────────────────────
+        if 'v-dialog' in cls:
+            return {
+                'type': 'vuetify',
+                'title': self._js("document.querySelector('.v-dialog .v-card-title') ? document.querySelector('.v-dialog .v-card-title').innerText.trim() : ''"),
+                'content': self._js("document.querySelector('.v-dialog .v-card-text') ? document.querySelector('.v-dialog .v-card-text').innerText.trim() : ''"),
+                'buttons': self._js("Array.from(document.querySelectorAll('.v-dialog .v-card-actions button')).map(function(b){return b.innerText.trim()})"),
+                'visible': True,
+            }
+
+        # ── Unknown / fallback ────────────────────────────────────
+        return {'type': 'unknown', 'visible': True}
+
+    def _vis_fn(self):
+        return "(function(el){ return el && el.offsetParent !== null && window.getComputedStyle(el).display !== 'none' && el.offsetHeight > 0 })"
+
+    # ── Public core API ──────────────────────────────────────────
+
+    def is_open(self):
+        """Returns True if any popup is currently visible."""
+        return self._js("""
+            (function(){
+                var s = '.swal2-popup,.sweet-alert,.modal.show,.modal.fade.in,.modal[style*=\"display: block\"],.ui-dialog,.MuiDialog-root,.ant-modal,.el-dialog,.v-dialog';
+                if (document.querySelector(s)) return true;
+                var all = document.querySelectorAll('body > *');
+                for (var i = 0; i < all.length; i++) {
+                    var el = all[i];
+                    if (el.offsetParent === null) continue;
+                    var cs = window.getComputedStyle(el);
+                    if (cs.position === 'fixed' || cs.position === 'absolute') {
+                        var z = parseInt(cs.zIndex);
+                        if (!isNaN(z) && z >= 100) return true;
+                    }
+                }
+                return false;
+            })()
+        """)
+
+    def info(self):
+        """Return full info dict for the current popup, or None."""
+        return self._detect_any_popup()
+
+    def alert(self, info=None):
+        """Print the popup in a nice ASCII box in the terminal."""
+        if info is None:
+            info = self._detect_any_popup()
+        if info is None:
+            print("No popup currently visible")
+            return
+
+        t = info.get('type', 'unknown')
+        if t in ('sweetalert2',):
+            self._render_swal2(info)
+        elif t == 'native':
+            self._render_native()
+        else:
+            self._render_generic(info)
+
+    def _render_swal2(self, info):
+        width = max(50, min(len(info.get('content', '')) + 10, 70))
+        lines = ['+' + '-' * width + '+']
+        lines.append('|' + ' ' * width + '|')
+
+        title = info.get('title', '')
+        if title:
+            t = '⚠ ' + title if 'warning' in info.get('icon', '') else title
+            pad = (width - len(t)) // 2
+            lines.append('|' + ' ' * pad + t + ' ' * (width - pad - len(t)) + '|')
+            lines.append('|' + ' ' * width + '|')
+
+        content = info.get('content', '')
+        for line in self._word_wrap(content, width - 4):
+            lines.append('|' + '  ' + line + ' ' * (width - 2 - len(line)) + '|')
+        lines.append('|' + ' ' * width + '|')
+
+        if info.get('prompt'):
+            ph = info.get('prompt_placeholder') or info.get('prompt_value') or '...'
+            inp = '[ ' + ph + ' ]'
+            pad = (width - len(inp)) // 2
+            lines.append('|' + ' ' * pad + inp + ' ' * (width - pad - len(inp)) + '|')
+            lines.append('|' + ' ' * width + '|')
+
+        btn_parts = []
+        if info.get('has_confirm'):  btn_parts.append('[' + info.get('confirm_text', 'OK') + ']')
+        if info.get('has_cancel'):   btn_parts.append('[' + info.get('cancel_text', 'Cancel') + ']')
+        if info.get('has_deny'):     btn_parts.append('[' + info.get('deny_text', 'No') + ']')
+        if btn_parts:
+            btn_line = ' '.join(btn_parts)
+            pad = (width - len(btn_line)) // 2
+            lines.append('|' + ' ' * pad + btn_line + ' ' * (width - pad - len(btn_line)) + '|')
+
+        lines.append('|' + ' ' * width + '|')
+        lines.append('+' + '-' * width + '+')
+        for l in lines:
+            print(l)
+        if info.get('prompt'):
+            print(">> Popup has an input field — use popup.fill('text') to type")
+
+    def _render_native(self):
+        print('+' + '-' * 50 + '+')
+        print('|' + ' ' * 50 + '|')
+        print('|' + ' ' * 14 + 'NATIVE BROWSER DIALOG' + ' ' * 14 + '|')
+        print('|' + ' ' * 50 + '|')
+        print('|' + ' ' * 8 + 'Use popup.accept() or popup.dismiss()' + ' ' * 7 + '|')
+        print('|' + ' ' * 50 + '|')
+        print('+' + '-' * 50 + '+')
+
+    def _render_generic(self, info):
+        title = info.get('title', 'POPUP')
+        content = info.get('content', '')
+        buttons = info.get('buttons', [])
+        width = max(50, min(max(len(content), len(title)) + 10, 72))
+
+        lines = ['+' + '-' * width + '+']
+        lines.append('|' + ' ' * width + '|')
+        pad = (width - len(title)) // 2
+        lines.append('|' + ' ' * pad + title + ' ' * (width - pad - len(title)) + '|')
+        lines.append('|' + ' ' * width + '|')
+        for line in self._word_wrap(content, width - 4):
+            lines.append('|' + '  ' + line + ' ' * (width - 2 - len(line)) + '|')
+        lines.append('|' + ' ' * width + '|')
+        if buttons:
+            btn_line = '  '.join('[' + b + ']' for b in buttons)
+            if len(btn_line) <= width:
+                pad = (width - len(btn_line)) // 2
+                lines.append('|' + ' ' * pad + btn_line + ' ' * (width - pad - len(btn_line)) + '|')
+            else:
+                for b in buttons:
+                    item = '[' + b + ']'
+                    pad = (width - len(item)) // 2
+                    lines.append('|' + ' ' * pad + item + ' ' * (width - pad - len(item)) + '|')
+        lines.append('|' + ' ' * width + '|')
+        lines.append('+' + '-' * width + '+')
+        for l in lines:
+            print(l)
+
+    def _word_wrap(self, text, max_width):
+        words = text.split(' ')
+        lines = []
+        line = ''
+        for word in words:
+            test = (line + ' ' + word).strip()
+            if len(test) > max_width:
+                if line:
+                    lines.append(line)
+                line = word
+            else:
+                line = test
+        if line:
+            lines.append(line)
+        return lines
+
+    def _wait(self, seconds=0.5):
+        _time.sleep(seconds)
+
+    # ── Actions ──────────────────────────────────────────────────
+
+    def _click_selector(self, selector):
+        """Click the first element matching a CSS selector."""
+        q = selector.replace("'", "\\'")
+        self._js("document.querySelector('" + q + "')?.click()")
+        self._wait()
+
+    def click_ok(self):
+        """Click the primary confirm/OK button (SweetAlert2)."""
+        self._click_selector('.swal2-confirm')
+
+    def click_cancel(self):
+        """Click the cancel button (SweetAlert2)."""
+        self._click_selector('.swal2-cancel')
+
+    def click_deny(self):
+        """Click the deny/no button (SweetAlert2)."""
+        self._click_selector('.swal2-deny')
+
+    def click(self, text=None):
+        """Click any button by text, or the primary action button."""
+        if text:
+            safe = text.replace("'", "\\'")
+            self._js("Array.from(document.querySelectorAll('button')).find(function(b){ return b.innerText.includes('" + safe + "') })?.click()")
+        else:
+            # Try most common primary buttons
+            self._js("""
+                (function(){
+                    var s = '.swal2-confirm,.modal.show .modal-footer .btn-primary,.modal.fade.in .modal-footer .btn-primary,.MuiDialogActions-root button:first-child,.ant-modal-footer button:first-child,.el-dialog__footer .el-button--primary,.v-card-actions button:first-child,.ui-dialog-buttonpane button:first-child';
+                    var el = document.querySelector(s);
+                    if (el) { el.click(); return true; }
+                    var btns = Array.from(document.querySelectorAll('button'));
+                    var primary = btns.find(function(b){ return b.innerText.toLowerCase().includes('ok') || b.innerText.toLowerCase().includes('confirm') || b.innerText.toLowerCase().includes('yes') });
+                    if (primary) { primary.click(); return true; }
+                    if (btns.length > 0) { btns[0].click(); return true; }
+                    return false;
+                })()
+            """)
+        self._wait()
+
+    def fill(self, text):
+        """Type text into a SweetAlert2 prompt input."""
+        safe = text.replace("'", "\\'").replace('"', '\\"')
+        self._js("""
+            (function(){
+                var inp = document.querySelector('.swal2-input');
+                if (!inp) return false;
+                inp.value = '""" + safe + """';
+                inp.dispatchEvent(new Event('input', {bubbles:true}));
+                inp.dispatchEvent(new Event('change', {bubbles:true}));
+                return true;
+            })()
+        """)
+        self._wait(0.2)
+
+    def dismiss(self):
+        """Dismiss popup — close button if available, else confirm."""
+        self._js("""
+            (function(){
+                var close = document.querySelector('.swal2-close') || document.querySelector('.modal .close') || document.querySelector('.ui-dialog .ui-dialog-titlebar-close');
+                if (close) { close.click(); return true; }
+                var confirm = document.querySelector('.swal2-confirm');
+                if (confirm) { confirm.click(); return true; }
+                var btns = Array.from(document.querySelectorAll('button'));
+                if (btns.length) { btns[btns.length - 1].click(); return true; }
+                return false;
+            })()
+        """)
+        self._wait()
+
+    def close(self):
+        """Close popup via its close/X button only."""
+        self._js("""
+            (function(){
+                var close = document.querySelector('.swal2-close') || document.querySelector('.modal .close') || document.querySelector('.ui-dialog .ui-dialog-titlebar-close') || document.querySelector('.ant-modal-close') || document.querySelector('.el-dialog__headerbtn');
+                if (close) { close.click(); return true; }
+                return false;
+            })()
+        """)
+        self._wait()
+
+    # ── Native dialog handling (alert/confirm/prompt) ─────────
+
+    def accept(self, prompt_text=None):
+        """Accept/confirm a native browser dialog (alert/confirm/prompt)."""
+        try:
+            args = {'accept': True}
+            if prompt_text is not None:
+                args['prompt_text'] = str(prompt_text)
+            self._browser._drission.handle_alert(**args)
+            return True
+        except Exception:
+            # Fallback: try clicking known OK buttons
+            self.click_ok()
+            return False
+
+    def reject(self):
+        """Dismiss/cancel a native browser dialog."""
+        try:
+            self._browser._drission.handle_alert(accept=False)
+            return True
+        except Exception:
+            return False
+
+    # ── Blocking ────────────────────────────────────────────────
+
+    def block(self):
+        """Override native dialogs + SweetAlert2 to suppress popups."""
+        self._js("""
+            (function(){
+                if (window.__popup_blocked) return;
+                window.__popup_blocked = true;
+
+                // Native dialogs
+                window.__native_alert = window.alert;
+                window.__native_confirm = window.confirm;
+                window.__native_prompt = window.prompt;
+                window.alert = function(){};
+                window.confirm = function(){ return true; };
+                window.prompt = function(){ return ''; };
+
+                // SweetAlert2
+                if (window.Swal) {
+                    window.__origSwal = window.Swal;
+                    window.Swal = function(){ return Promise.resolve({isConfirmed:false,isDenied:false,isDismissed:true}); };
+                }
+                if (window.swal) {
+                    window.__origSwal2 = window.swal;
+                    window.swal = function(){ return Promise.resolve({isConfirmed:false,isDenied:false,isDismissed:true}); };
+                }
+            })()
+        """)
+        print("Popups blocked: native dialogs + SweetAlert2 intercepted")
+
+    def unblock(self):
+        """Restore original popup behaviour (reloads the page)."""
+        self._js("""
+            (function(){
+                if (window.__native_alert) window.alert = window.__native_alert;
+                if (window.__native_confirm) window.confirm = window.__native_confirm;
+                if (window.__native_prompt) window.prompt = window.__native_prompt;
+                if (window.__origSwal) window.Swal = window.__origSwal;
+                if (window.__origSwal2) window.swal = window.__origSwal2;
+                window.__popup_blocked = false;
+            })()
+        """)
+        print("Popups unblocked")
+
+    # ── Convenience aliases ──────────────────────────────────────
+
+    def confirm(self):
+        self.click_ok()
+
+    def cancel(self):
+        self.click_cancel()
+
+    def deny(self):
+        self.click_deny()
+
+    def watch(self):
+        return self._detect_any_popup()
+
+    def wait_and_watch(self, seconds=2):
+        _time.sleep(float(seconds))
+        return self._detect_any_popup()
+
+    def is_error(self):
+        info = self._detect_any_popup()
+        if info is None:
+            return False
+        if info.get('type') == 'sweetalert2':
+            t = info.get('title', '').lower()
+            c = info.get('content', '').lower()
+            icon = info.get('icon', '').lower()
+            return any(kw in icon for kw in ['warning', 'error']) or any(kw in t for kw in ['warning', 'error']) or any(kw in c for kw in ['wrong', 'fail', 'invalid', 'error'])
+        return False
+
+    def is_success(self):
+        info = self._detect_any_popup()
+        if info is None:
+            return False
+        if info.get('type') == 'sweetalert2':
+            t = info.get('title', '').lower()
+            c = info.get('content', '').lower()
+            return any(kw in t for kw in ['success', 'done']) or any(kw in c for kw in ['success', 'saved', 'welcome'])
+        return False

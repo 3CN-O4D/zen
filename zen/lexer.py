@@ -12,17 +12,17 @@ class Token:
 
 KEYWORDS = {
     'let', 'go', 'fill', 'with', 'click', 'wait', 'for', 'in',
-    'if', 'else', 'while', 'function', 'def', 'return', 'print', 'input',
+    'if', 'elif', 'else', 'while', 'function', 'def', 'return', 'print', 'input',
     'into', 'scroll', 'to', 'by', 'shot', 'full', 'refresh',
     'back', 'forward', 'execute', 'download', 'and', 'or', 'not',
     'true', 'false', 'null', 'try', 'catch', 'top', 'bottom',
     'break', 'continue', 'include', 'import', 'require', 'is', 'finally',
-    'class', 'extends', 'new', 'self',
+    'class', 'extends', 'new', 'self', 'switch', 'case', 'default', 'as',
 }
 
 TOKEN_SPEC = [
     ('NUMBER',   r'-?\d+(?:\.\d+)?'),
-    ('STRING',   r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\''),
+    ('STRING',   r'"""(?:(?!""")[\s\S])*"""|\'\'\'(?:(?!\'\'\')[\s\S])*\'\'\'|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\''),
     ('COMMENT',  r'//[^\n]*'),
     ('HASH_COMMENT', r'#[^\n]*'),
     ('BLOCK_COMMENT', r'/\*[\s\S]*?\*/'),
@@ -34,15 +34,27 @@ TOKEN_SPEC = [
     ('RBRACKET', r'\]'),
     ('SEMICOLON', r';'),
     ('COMMA',    r','),
+    ('ELLIPSIS', r'\.\.\.'),
+    ('DOT_DOT',  r'\.\.'),
+    ('AT',       r'@'),
+    ('SAFE_DOT', r'\?\.'),
     ('DOT',      r'\.'),
     ('COLON',    r':'),
     ('PIPE_PIPE',  r'\|\|'),
     ('AMPERSAND_AMPERSAND', r'&&'),
+    ('INC',      r'\+\+'),
+    ('DEC',      r'--'),
     ('EQ',       r'=='),
     ('NEQ',      r'!='),
     ('LE',       r'<='),
     ('GE',       r'>='),
+    ('PLUS_ASSIGN',  r'\+\='),
+    ('MINUS_ASSIGN', r'-='),
+    ('STAR_ASSIGN',  r'\*='),
+    ('SLASH_ASSIGN', r'/='),
+    ('MOD_ASSIGN',   r'%='),
     ('POW',      r'\*\*'),
+    ('RARROW',   r'->'),
     ('ASSIGN',   r'='),
     ('LT',       r'<'),
     ('GT',       r'>'),
@@ -75,8 +87,18 @@ def _process_escapes(s):
     while i < len(s):
         if s[i] == '\\' and i + 1 < len(s):
             e = s[i + 1]
-            result.append(_ESCAPE_MAP.get(e, '\\' + e))
-            i += 2
+            if e == 'x' and i + 3 < len(s):
+                result.append(chr(int(s[i+2:i+4], 16)))
+                i += 4
+            elif e == 'u' and i + 5 < len(s):
+                result.append(chr(int(s[i+2:i+6], 16)))
+                i += 6
+            elif e == 'U' and i + 9 < len(s):
+                result.append(chr(int(s[i+2:i+10], 16)))
+                i += 10
+            else:
+                result.append(_ESCAPE_MAP.get(e, '\\' + e))
+                i += 2
         else:
             result.append(s[i])
             i += 1
@@ -118,7 +140,10 @@ class Lexer:
                 continue
 
             if kind == 'STRING':
-                inner = value[1:-1]
+                if value.startswith('"""') or value.startswith("'''"):
+                    inner = value[3:-3]
+                else:
+                    inner = value[1:-1]
                 s = _process_escapes(inner)
                 self.tokens.append(Token('STRING', s, line, column))
                 continue

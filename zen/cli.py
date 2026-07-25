@@ -28,6 +28,10 @@ def main():
     if argv and not argv[0].startswith('-') and argv[0] not in ('shell', 'run', 'open', 'shot', 'scrape'):
         if os.path.isfile(argv[0]) or argv[0].endswith('.z'):
             argv.insert(0, 'run')
+    elif argv and '-e' in argv:
+        ei = argv.index('-e')
+        if ei == 0 or argv[ei - 1] not in ('shell', 'run', 'open', 'shot', 'scrape'):
+            argv.insert(0, 'run')
     sys.argv = [sys.argv[0]] + argv
 
     parser = argparse.ArgumentParser(
@@ -53,7 +57,9 @@ Examples:
     _add_browser_args(shell_parser)
 
     run_parser = sub.add_parser('run', help='Run a .z script file')
-    run_parser.add_argument('file', help='Path to .z script')
+    run_parser.add_argument('file', nargs='?', help='Path to .z script')
+    run_parser.add_argument('-e', '--eval', action='append', dest='eval_stmts',
+                            help='Inline Zen code (can be used multiple times)')
     _add_browser_args(run_parser)
 
     open_parser = sub.add_parser('open', help='Open a URL')
@@ -109,7 +115,10 @@ Examples:
 
     src_path = getattr(args, 'file', None)
     src_lines = None
-    if src_path and os.path.exists(src_path):
+    eval_stmts = getattr(args, 'eval_stmts', None)
+    if eval_stmts:
+        src_path = '<eval>'
+    elif src_path and os.path.exists(src_path):
         try:
             src_lines = read_file(src_path).splitlines(True)
         except Exception:
@@ -154,11 +163,18 @@ def _dispatch(args, unknown, script_extra, headless, browser_mode):
         return
 
     if args.command == 'run':
-        path = resolve_path(args.file)
-        if not os.path.exists(path):
-            print(color.red(f"File not found: {path}"))
-            sys.exit(1)
-        code = read_file(path)
+        eval_stmts = getattr(args, 'eval_stmts', None)
+        if eval_stmts:
+            code = '\n'.join(eval_stmts)
+            src_path = '<eval>'
+            src_lines = code.splitlines(True)
+        else:
+            path = resolve_path(args.file)
+            if not os.path.exists(path):
+                print(color.red(f"File not found: {path}"))
+                sys.exit(1)
+            code = read_file(path)
+            src_path = path
         browser = Browser(
             headless=headless,
             browser_path=getattr(args, 'browser_path', None),

@@ -181,6 +181,43 @@ class Class(Node):
         self.body = body
         self.parent = parent
 
+class Ternary(Node):
+    def __init__(self, then_val, cond, else_val):
+        self.then_val = then_val
+        self.cond = cond
+        self.else_val = else_val
+
+class InterpolatedString(Node):
+    def __init__(self, parts):
+        self.parts = parts
+
+class Spread(Node):
+    def __init__(self, expr):
+        self.expr = expr
+
+class SafeMember(Node):
+    def __init__(self, obj, name):
+        self.obj = obj
+        self.name = name
+
+class Switch(Node):
+    def __init__(self, expr, cases, default_body=None):
+        self.expr = expr
+        self.cases = cases
+        self.default_body = default_body
+
+class With(Node):
+    def __init__(self, expr, name, body):
+        self.expr = expr
+        self.name = name
+        self.body = body
+
+class Range(Node):
+    def __init__(self, start, end, step=None):
+        self.start = start
+        self.end = end
+        self.step = step
+
 class New(Node):
     def __init__(self, class_expr, args=None):
         self.class_expr = class_expr

@@ -70,6 +70,8 @@ class Parser:
                 tok2 = self._peek_token(1)
                 if tok2 and tok2.type == 'COLON':
                     return True
+            elif self._check('ELLIPSIS'):
+                return True
             elif self._check('RBRACE'):
                 return True
             return False
@@ -140,7 +142,13 @@ class Parser:
         elif self._check('CONTINUE'):
             return self._parse_continue()
         elif self._check('CLASS'):
+            if self._peek_token(1) and self._peek_token(1).type == 'LBRACE':
+                return self._parse_expression_statement()
             return self._parse_class()
+        elif self._check('SWITCH'):
+            return self._parse_switch()
+        elif self._check('WITH'):
+            return self._parse_with()
         elif self._check('INCLUDE') or self._check('IMPORT') or self._check('REQUIRE'):
             return self._parse_include()
         elif self._check('TRY'):
@@ -257,7 +265,9 @@ class Parser:
 
     def _parse_class(self):
         self._advance()
-        name = self._expect('IDENT').value
+        name = None
+        if self._check('IDENT') and not self._check('LBRACE'):
+            name = self._expect('IDENT').value
         parent = None
         if self._match('EXTENDS'):
             parent = self._parse_expression()
@@ -275,8 +285,67 @@ class Parser:
                 body[f'_stmt_{id(stmt)}'] = stmt
         return self._node(ast.Class, name, body, parent)
 
+    def _parse_interpolated(self, value):
+        parts = []
+        i = 0
+        while i < len(value):
+            if value[i] == '{' and i + 1 < len(value):
+                j = i + 1
+                while j < len(value) and (value[j].isalnum() or value[j] == '_'):
+                    j += 1
+                if j > i + 1 and j < len(value) and value[j] == '}':
+                    var_name = value[i+1:j]
+                    parts.append((True, var_name))
+                    i = j + 1
+                    continue
+            j = value.find('{', i)
+            if j == -1:
+                parts.append((False, value[i:]))
+                break
+            parts.append((False, value[i:j]))
+            i = j
+        if len(parts) == 1 and not parts[0][0]:
+            return self._node(ast.Literal, parts[0][1])
+        return self._node(ast.InterpolatedString, parts)
+
+    def _parse_switch(self):
+        self._advance()
+        expr = self._parse_expression()
+        self._skip_newlines()
+        self._expect('LBRACE')
+        cases = []
+        default_body = None
+        while not self._check('RBRACE') and not self._check('EOF'):
+            self._skip_newlines()
+            if self._match('CASE'):
+                self._skip_newlines()
+                case_val = self._parse_expression()
+                self._skip_newlines()
+                body = self._parse_block()
+                cases.append((case_val, body))
+            elif self._match('DEFAULT'):
+                self._skip_newlines()
+                default_body = self._parse_block()
+            else:
+                raise ParseError("Expected 'case' or 'default' in switch", self.current)
+            self._skip_newlines()
+        self._expect('RBRACE')
+        return self._node(ast.Switch, expr, cases, default_body)
+
+    def _parse_with(self):
+        self._advance()
+        expr = self._parse_expression()
+        name = None
+        if self._match('AS'):
+            name = self._expect('IDENT').value
+        body = self._parse_block()
+        return self._node(ast.With, expr, name, body)
+
     def _parse_if(self):
         self._advance()
+        return self._parse_if_tail()
+
+    def _parse_if_tail(self):
         condition = self._parse_expression()
         then_branch = self._parse_block()
         else_branch = None
@@ -284,10 +353,12 @@ class Parser:
         if self._match('ELSE'):
             self._skip_newlines()
             if self._check('IF'):
-                elseif = self._parse_if()
-                else_branch = self._node(ast.Block, [elseif])
+                self._advance()
+                else_branch = self._node(ast.Block, [self._parse_if_tail()])
             else:
                 else_branch = self._parse_block()
+        elif self._match('ELIF'):
+            else_branch = self._node(ast.Block, [self._parse_if_tail()])
         return self._node(ast.If, condition, then_branch, else_branch)
 
     def _parse_for(self):
@@ -390,15 +461,76 @@ class Parser:
 
     def _parse_expression_statement(self):
         expr = self._parse_expression()
-        if self._match('ASSIGN'):
+
+        # Tuple unpacking: expr, expr, ... = rhs
+        if self._check('COMMA'):
+            targets = [expr]
+            while self._match('COMMA'):
+                self._skip_newlines()
+                if self._check('ASSIGN'):
+                    break
+                targets.append(self._parse_expression())
+                self._skip_newlines()
+            if self._match('ASSIGN'):
+                for t in targets:
+                    if not isinstance(t, (ast.Variable, ast.Member, ast.Index)):
+                        raise ParseError("Invalid unpacking target", self.current)
+                self._skip_newlines()
+                rhs_values = [self._parse_expression()]
+                while self._match('COMMA'):
+                    self._skip_newlines()
+                    rhs_values.append(self._parse_expression())
+                    self._skip_newlines()
+                value_node = rhs_values[0] if len(rhs_values) == 1 else self._node(ast.ListLiteral, rhs_values)
+                return self._node(ast.Assign, self._node(ast.ListLiteral, targets), value_node)
+            raise ParseError("Unexpected comma in expression statement", self.current)
+
+        # Compound assignment (desugar to simple assign)
+        compound_ops = {
+            'PLUS_ASSIGN': 'PLUS',
+            'MINUS_ASSIGN': 'MINUS',
+            'STAR_ASSIGN': 'STAR',
+            'SLASH_ASSIGN': 'SLASH',
+            'MOD_ASSIGN': 'MOD',
+        }
+        op_token = self._match(*compound_ops.keys())
+        if op_token:
             if not isinstance(expr, (ast.Variable, ast.Member, ast.Index)):
+                raise ParseError("Invalid compound assignment target", self.current)
+            self._skip_newlines()
+            right = self._parse_expression()
+            value = self._node(ast.BinaryOp, expr, compound_ops[op_token.type], right)
+            return self._node(ast.Assign, expr, value)
+
+        if self._match('ASSIGN'):
+            if not isinstance(expr, (ast.Variable, ast.Member, ast.Index, ast.ListLiteral)):
                 raise ParseError("Invalid assignment target", self.current)
+            self._skip_newlines()
             value = self._parse_expression()
             return self._node(ast.Assign, expr, value)
         return expr
 
     def _parse_expression(self):
-        return self._parse_or()
+        return self._parse_ternary()
+
+    def _parse_ternary(self):
+        then_val = self._parse_range()
+        if self._match('IF'):
+            cond = self._parse_range()
+            self._expect('ELSE')
+            else_val = self._parse_ternary()
+            return self._node(ast.Ternary, then_val, cond, else_val)
+        return then_val
+
+    def _parse_range(self):
+        left = self._parse_or()
+        if self._match('TO') or self._match('RARROW') or self._match('DOT_DOT'):
+            right = self._parse_range()
+            step = None
+            if self._match('BY') or self._match('AT'):
+                step = self._parse_range()
+            return self._node(ast.Range, left, right, step)
+        return left
 
     def _parse_or(self):
         left = self._parse_and()
@@ -423,16 +555,31 @@ class Parser:
     def _parse_comparison(self):
         left = self._parse_addition()
         op_token = self._match('EQ', 'NEQ', 'LT', 'GT', 'LE', 'GE', 'IN', 'IS')
-        if op_token:
+        if not op_token:
+            if self._check('NOT'):
+                peek = self._peek_token(1)
+                if peek and peek.type == 'IN':
+                    self._advance()
+                    self._advance()
+                    right = self._parse_addition()
+                    binop = self._node(ast.BinaryOp, left, 'IN', right)
+                    return self._node(ast.UnaryOp, 'not', binop)
+            return left
+        if op_token.type == 'IS' and self._match('NOT'):
             right = self._parse_addition()
-            return self._node(ast.BinaryOp, left, op_token.type, right)
-        if self._check('NOT') and self.lexer.peek().type == 'IN':
-            self._advance()
-            self._advance()
-            right = self._parse_addition()
-            binop = self._node(ast.BinaryOp, left, 'IN', right)
+            binop = self._node(ast.BinaryOp, left, 'IS', right)
             return self._node(ast.UnaryOp, 'not', binop)
-        return left
+        right = self._parse_addition()
+        result = self._node(ast.BinaryOp, left, op_token.type, right)
+        while True:
+            next_op = self._match('EQ', 'NEQ', 'LT', 'GT', 'LE', 'GE')
+            if not next_op:
+                break
+            next_right = self._parse_addition()
+            chain = self._node(ast.BinaryOp, right, next_op.type, next_right)
+            result = self._node(ast.BinaryOp, result, 'and', chain)
+            right = next_right
+        return result
 
     def _parse_addition(self):
         left = self._parse_term()
@@ -474,6 +621,13 @@ class Parser:
         if left is None:
             left = self._parse_atom()
         while True:
+            if self._check('INC', 'DEC'):
+                incdec = self._advance()
+                if not isinstance(left, (ast.Variable, ast.Member, ast.Index)):
+                    raise ParseError("Invalid increment/decrement target", self.current)
+                op = 'PLUS' if incdec.type == 'INC' else 'MINUS'
+                value = self._node(ast.BinaryOp, left, op, self._node(ast.Literal, 1))
+                left = self._node(ast.Assign, left, value)
             if self._check('LPAREN'):
                 self._advance()
                 self._skip_newlines()
@@ -484,10 +638,15 @@ class Parser:
                     self._skip_newlines()
                     while self._match('COMMA'):
                         self._skip_newlines()
+                        if self._check('RPAREN'):
+                            break
                         self._parse_one_call_arg(args, kwargs)
                         self._skip_newlines()
                 self._expect('RPAREN')
                 left = self._node(ast.Call, left, args, kwargs)
+            elif self._match('SAFE_DOT'):
+                name = self._parse_member_name()
+                left = self._node(ast.SafeMember, left, name)
             elif self._check('DOT'):
                 self._advance()
                 name = self._parse_member_name()
@@ -540,10 +699,10 @@ class Parser:
         'PRINT', 'EXECUTE', 'DOWNLOAD', 'SHOT', 'INPUT',
         'WAIT', 'CLICK', 'FILL', 'GO', 'SCROLL', 'REFRESH',
         'BACK', 'FORWARD', 'WITH', 'FOR', 'RETURN', 'WAIT',
-        'BREAK', 'CONTINUE', 'IF', 'ELSE', 'WHILE', 'FUNCTION',
+        'BREAK', 'CONTINUE', 'IF', 'ELSE', 'ELIF', 'WHILE', 'FUNCTION',
         'AND', 'OR', 'NOT', 'TRY', 'CATCH', 'LET', 'IN', 'INTO',
         'TO', 'BY', 'FULL', 'TOP', 'BOTTOM', 'INCLUDE', 'IMPORT', 'REQUIRE',
-        'CLASS', 'EXTENDS', 'NEW', 'SELF',
+        'CLASS', 'EXTENDS', 'NEW', 'SELF', 'SWITCH', 'CASE', 'DEFAULT', 'AS',
     }
 
     def _parse_one_call_arg(self, args, kwargs):
@@ -559,6 +718,7 @@ class Parser:
             args.append(self._parse_expression())
 
     def _parse_atom(self):
+        self._skip_newlines()
         if self._match('NEW'):
             class_expr = self._parse_call_chain()
             if isinstance(class_expr, ast.Call):
@@ -573,6 +733,8 @@ class Parser:
             return self._node(ast.Literal, val)
         if self._check('STRING'):
             tok = self._advance()
+            if '{' in tok.value and '}' in tok.value:
+                return self._parse_interpolated(tok.value)
             return self._node(ast.Literal, tok.value)
         if self._check('BOOL'):
             tok = self._advance()
@@ -580,6 +742,8 @@ class Parser:
         if self._check('NULL'):
             self._advance()
             return self._node(ast.Literal, None)
+        if self._check('CLASS'):
+            return self._parse_class()
         if self._check('FUNCTION'):
             return self._parse_anonymous_function()
         if self._check('INCLUDE') or self._check('IMPORT') or self._check('REQUIRE'):
@@ -623,35 +787,46 @@ class Parser:
         self._skip_newlines()
         elements = []
         if not self._check('RBRACKET'):
-            elements.append(self._parse_expression())
+            self._parse_one_list_element(elements)
             self._skip_newlines()
             while self._match('COMMA'):
                 self._skip_newlines()
-                elements.append(self._parse_expression())
+                if self._check('RBRACKET'):
+                    break
+                self._parse_one_list_element(elements)
                 self._skip_newlines()
         self._expect('RBRACKET')
         return self._node(ast.ListLiteral, elements)
+
+    def _parse_one_list_element(self, elements):
+        if self._match('ELLIPSIS'):
+            elements.append(self._node(ast.Spread, self._parse_expression()))
+        else:
+            elements.append(self._parse_expression())
 
     def _parse_dict(self):
         self._advance()
         self._skip_newlines()
         pairs = []
         if not self._check('RBRACE'):
+            self._parse_one_dict_pair(pairs)
+            self._skip_newlines()
+            while self._match('COMMA'):
+                self._skip_newlines()
+                if self._check('RBRACE'):
+                    break
+                self._parse_one_dict_pair(pairs)
+                self._skip_newlines()
+        self._expect('RBRACE')
+        return self._node(ast.DictLiteral, pairs)
+
+    def _parse_one_dict_pair(self, pairs):
+        if self._match('ELLIPSIS'):
+            pairs.append((self._node(ast.Spread, self._parse_expression()), None))
+        else:
             key = self._parse_expression()
             self._skip_newlines()
             self._expect('COLON')
             self._skip_newlines()
             value = self._parse_expression()
             pairs.append((key, value))
-            self._skip_newlines()
-            while self._match('COMMA'):
-                self._skip_newlines()
-                key = self._parse_expression()
-                self._skip_newlines()
-                self._expect('COLON')
-                self._skip_newlines()
-                value = self._parse_expression()
-                pairs.append((key, value))
-                self._skip_newlines()
-        self._expect('RBRACE')
-        return self._node(ast.DictLiteral, pairs)
