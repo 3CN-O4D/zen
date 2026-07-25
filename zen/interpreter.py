@@ -144,6 +144,12 @@ class Interpreter:
             if e.node is None:
                 e.node = node
             raise
+        except ZenReturn:
+            raise
+        except ZenBreak:
+            raise
+        except ZenContinue:
+            raise
         except Exception as e:
             raise ZenError(str(e), node)
 
@@ -377,6 +383,10 @@ class Interpreter:
             try:
                 try:
                     result = self._eval(node.try_body)
+                except ZenBreak:
+                    raise
+                except ZenContinue:
+                    raise
                 except Exception as e:
                     err_name = node.err_var or 'error'
                     self.current_env.define(err_name, str(e))
