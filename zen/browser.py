@@ -114,7 +114,7 @@ class Browser:
 
     @property
     def has_browser(self):
-        if self._no_browser:
+        if self._no_browser or self._mode == 'none':
             return False
         if self._mode == 'http':
             return True
@@ -229,6 +229,8 @@ class Browser:
                     "Cannot connect to browser.\n"
                     "  Make sure Chrome is running with --remote-debugging-port=9222\n"
                     "  Or use:  zen script.z --http  (HTTP-only mode)")
+        elif self._mode == 'none':
+            pass
         else:
             from DrissionPage import ChromiumPage, ChromiumOptions
             co = ChromiumOptions()
