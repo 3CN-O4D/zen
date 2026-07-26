@@ -78,7 +78,7 @@ class Scope:
     def is_local(self, name):
         if name in self.vars:
             return True
-        if self.parent and not self.parent.is_func:
+        if self.parent:
             return self.parent.is_local(name)
         return False
     
@@ -536,9 +536,13 @@ class ZenCompiler:
         elif isinstance(callee, zen_ast.Member):
             obj = self._expr(callee.obj, scope)
             method = callee.name
-            args = ', '.join(self._expr(a, scope) for a in node.args)
-            if obj is None:
+            args_raw = [self._expr(a, scope) for a in node.args]
+            if obj is None or any(a is None for a in args_raw):
                 return None
+            # split('') -> list(obj)
+            if method == 'split' and len(args_raw) == 1 and args_raw[0] == "''":
+                return f"list({obj})"
+            args = ', '.join(args_raw)
             # Check for known method patterns
             if isinstance(callee.obj, zen_ast.Variable) and not scope.is_local(callee.obj.name):
                 return f"__env__._getattr({obj}, '{method}')({args})"
