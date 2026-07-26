@@ -21,6 +21,7 @@ def _add_browser_args(sp):
     sp.add_argument('--connect', nargs='?', const=9222, type=int, default=None,
                     help='Connect to running browser on port (default 9222)')
     sp.add_argument('--http', action='store_true', help='HTTP-only mode (no browser, uses requests)')
+    sp.add_argument('--no-browser', action='store_true', help='Language-only mode, no browser')
 
 
 def main():

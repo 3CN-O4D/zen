@@ -119,7 +119,7 @@ class _CompiledEnv:
         if op == '-': return -a
         if op in ('not', '!'): return not _is_truthy(a)
         raise ZenError(f"Unknown unary op: {op}")
-    def __getattr__(self, obj, name):
+    def _getattr(self, obj, name):
         from .environment import ZenMethod, ZenElement, ZenList, ZenInstance
         if isinstance(obj, ZenMethod):
             obj = obj()
@@ -158,6 +158,10 @@ class _CompiledEnv:
         if isinstance(obj, (int, float)):
             if name == 'times':
                 return lambda fn: [fn(i) for i in range(int(obj))]
+            if name == 'round':
+                return lambda *a: round(obj, *a)
+            if name == 'trunc':
+                return lambda: int(obj)
         if hasattr(obj, name):
             attr = getattr(obj, name)
             if callable(attr):
@@ -278,6 +282,8 @@ class Interpreter:
             return self.browser.page_buttons()
         raise ZenError(f"Unknown special variable: {name}")
 
+    _COMPILED_SENTINEL = object()
+
     def _try_compiled(self, node):
         try:
             compiler = getattr(self, '_compiler', None)
@@ -307,7 +313,8 @@ class Interpreter:
                         env.define(name, val)
                 else:
                     env.define(name, val)
-            return ns.get('__result__', _VOID)
+            result = ns.get('__result__', _VOID)
+            return self._COMPILED_SENTINEL if result is None else result
         except CompileError:
             return None
         except Exception as e:
@@ -318,6 +325,8 @@ class Interpreter:
     def interpret(self, node):
         result = self._try_compiled(node)
         if result is not None:
+            if result is self._COMPILED_SENTINEL:
+                result = None
             if result is not _VOID:
                 self._last_result = result
             return result
@@ -953,6 +962,10 @@ class Interpreter:
             if isinstance(obj, (int, float)):
                 if node.name == 'times':
                     return ZenMethod('times', lambda fn: [fn(i) for i in range(int(obj))])
+                if node.name == 'round':
+                    return ZenMethod('round', lambda *a: round(obj, *a))
+                if node.name == 'trunc':
+                    return ZenMethod('trunc', lambda: int(obj))
                 raise ZenError(f"Number has no attribute '{node.name}'", node)
 
             # --- generic object (fallback) ---
@@ -990,10 +1003,21 @@ class Interpreter:
                 return obj[index]
             if isinstance(obj, ZenList):
                 return obj.nth(int(index))
-            return obj[int(index)]
+            try:
+                return obj[index]
+            except (TypeError, ValueError):
+                return obj[int(index)]
 
         elif isinstance(node, ast.Include):
-            path = str(self._eval(node.path))
+            val = self._eval(node.path)
+            if isinstance(val, dict) or type(val).__name__ == '_EmojiModule':
+                name = node.path.name if hasattr(node.path, 'name') else '...'
+                raise ZenError(
+                    f"Include expects a file path (string), got a module. "
+                    f"The module `{name}`"
+                    f" is already available as a built-in — use it directly."
+                )
+            path = str(val)
             if not path.endswith('.z'):
                 path = path + '.z'
             sep_path = path.replace('.', '/')
@@ -1076,7 +1100,7 @@ class Interpreter:
         elif isinstance(node, ast.Range):
             start = int(self._eval(node.start))
             end = int(self._eval(node.end))
-            step = int(self._eval(node.step)) if node.step is not None else 1
+            step = int(self._eval(node.step)) if node.step is not None else (1 if start <= end else -1)
             end_adj = end + 1 if step > 0 else end - 1
             return list(range(start, end_adj, step))
 

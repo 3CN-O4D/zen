@@ -3,6 +3,9 @@ import os
 import signal
 import warnings
 import asyncio
+import threading
+import itertools
+import time
 from .lexer import Lexer, LexerError
 from .parser import Parser, ParseError
 from .interpreter import Interpreter, ZenError, _VOID
@@ -197,13 +200,13 @@ def _show_error_context(code, line, col, message):
         prefix = '>>>' if i == line - 1 else '   '
         print(f'  {prefix} {lines[i]}')
     print(f'      {" " * (col - 1)}^')
-    print(color.red(f'  Error: {message}'))
+    print(f'  Error: {message}')
 
 def _show_error_context_for_token(code, token, message):
     if token:
         _show_error_context(code, token.line, token.col, message)
     else:
-        print(color.red(f'  Error: {message}'))
+            print(f'  Error: {message}')
 
 
 def _format_result(val):
@@ -234,6 +237,15 @@ def _format_result(val):
         return repr(val)
     return str(val)
 
+def _browser_spinner(stop):
+    for c in itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']):
+        if stop.is_set():
+            print('\033[2K\r', end='', flush=True)
+            break
+        print(f'\r  {c} Initializing browser backend... \033[?25l', end='', flush=True)
+        time.sleep(0.08)
+    print('\033[?25h', end='', flush=True)
+
 class Shell:
 
     def __init__(self, headless=True, browser_path=None, connect_port=None, mode='browser'):
@@ -260,39 +272,43 @@ class Shell:
             except Exception:
                 pass
 
-        c = color
         if self._buf:
-            yellow_dots = c.yellow('...') if c.enabled else '...'
-            return f'{yellow_dots} '
-        no_browser = ''
-        if self.browser and not self.browser.has_browser:
-            no_browser = c.yellow(' (no browser)')
+            return '... '
+        no_browser = ' (no browser)' if (self.browser and not self.browser.has_browser) else ''
         if page_count > 0 and title:
-            parts = f'{c.bright_cyan("zen")}{no_browser}{c.dim(f"[{page_count}]")}{c.dim(title)} {c.bright_cyan("❯")} '
+            return f'zen{no_browser}[{page_count}]{title[:40]} ❯ '
         elif page_count > 0:
-            parts = f'{c.bright_cyan("zen")}{no_browser}{c.dim(f"[{page_count}]")} {c.bright_cyan("❯")} '
-        else:
-            parts = f'{c.bright_cyan("zen")}{no_browser} {c.bright_cyan("❯")} '
-        if for_readline and 'TERMUX_VERSION' not in os.environ:
-            return f'\001{c.reset()}\002{parts}\001{c.reset()}\002'
-        return parts
+            return f'zen{no_browser}[{page_count}] ❯ '
+        return f'zen{no_browser} ❯ '
 
     def start(self):
         try:
             signal.signal(signal.SIGINT, signal.default_int_handler)
         except (AttributeError, ValueError):
             pass
-        c = color
-        print(c.bright_cyan(f'Zen v{__version__} — Browser Automation Shell'))
+        print(f'Zen v{__version__} — Browser Automation Shell')
         if not HAS_PT:
-            print(f'{c.yellow("Tip:")} install {c.bright_cyan("prompt-toolkit")} for auto-completion, syntax highlighting, and more ({c.yellow("pip install prompt-toolkit")})')
-        print(f'Type {c.yellow(".help")} for commands, {c.yellow(".exit")} to quit')
+            print('Tip: install prompt-toolkit for auto-completion (pip install prompt-toolkit)')
+        print('Type .help for commands, .exit to quit')
+        print()
 
-        self.browser.start()
+        if self.browser._mode == 'browser':
+            stop = threading.Event()
+            t = threading.Thread(target=_browser_spinner, args=(stop,), daemon=True)
+            t.start()
+            try:
+                self.browser.start()
+            finally:
+                stop.set()
+                t.join(1)
+        else:
+            self.browser.start()
         if not self.browser.has_browser and self.browser._no_browser:
             print(c.yellow(f'\n! {self.browser._no_browser.split(chr(10))[0]}'))
             print(c.yellow('! Browser-dependent commands (go, click, fill, ...) will not work.'))
-        print()
+            print()
+        elif self.browser._mode == 'none':
+            print('  Language-only mode. Browser commands unavailable.\n')
 
         self.interpreter = Interpreter(self.browser)
 
@@ -325,14 +341,14 @@ class Shell:
                 else:
                     line = input(self._build_prompt(for_readline=True)).strip()
             except EOFError:
-                print()
+                print('Goodbye!')
                 break
             except KeyboardInterrupt:
                 self._buf = []
                 self._prompt_prefix = ''
                 if self._use_pt:
                     self._pt_session.app.invalidate()
-                print(color.yellow('^C'))
+                print('^C')
                 continue
 
             if not line:
@@ -944,7 +960,7 @@ class Shell:
                 if formatted:
                     print(formatted)
         except LexerError as e:
-            print(color.red(f'Lexer Error: {e.message}'))
+            print(f'Lexer Error: {e.message}')
             _show_error_context(code, e.line, e.col, e.message)
         except ParseError as e:
             msg = e.message
@@ -957,11 +973,11 @@ class Shell:
                     for m in p.finditer(code):
                         start = max(0, m.start() - 4)
                         ctx = code[start:m.end() + 4]
-                        msg += "\n  " + color.yellow("Hint: '" + ctx.strip() + "' — keywords need spaces (e.g., '" + kw + " ...' not '" + m.group() + "')")
+                        msg += "\n  " + "Hint: '" + ctx.strip() + "' — keywords need spaces (e.g., '" + kw + " ...' not '" + m.group() + "')"
                         break
                     if '\n' in msg:
                         break
-            print(color.red(f'Parse Error: {msg}'))
+            print(f'Parse Error: {msg}')
             if tok:
                 _show_error_context(code, tok.line, tok.col, msg)
         except ZenError as e:
@@ -970,15 +986,15 @@ class Shell:
                 msg = "Did you mean '.help'? Shell commands start with '.'"
             elif msg == 'Undefined variable: none':
                 msg = "Undefined variable: none. Did you mean 'null'?"
-            print(color.red(f'Runtime Error: {msg}'))
+            print(f'Runtime Error: {msg}')
             if e.node and hasattr(e.node, 'line'):
                 _show_error_context(code, e.node.line, e.node.col, msg)
         except KeyboardInterrupt:
-            print(color.yellow('\nKeyboardInterrupt'))
+            print('\nKeyboardInterrupt')
         except Exception as e:
             err_type = type(e).__name__
             err_msg = str(e).split('\n')[0]
-            print(color.red(f'{err_type}: {err_msg}'))
+            print(f'{err_type}: {err_msg}')
 
     def stop(self):
         self.browser.stop()

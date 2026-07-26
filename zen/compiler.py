@@ -208,7 +208,11 @@ class ZenCompiler:
             end = self._expr(node.end, scope)
             if start is None or end is None:
                 return None
-            return f"list(range({start}, {end} + 1))"
+            step = self._expr(node.step, scope) if node.step is not None else None
+            if step:
+                return f"list(range({start}, {end} + 1, {step}))"
+            # Auto-detect direction: range(start, end+1, 1) or range(start, end-1, -1)
+            return f"list(range({start}, ({end} + 1) if {start} <= {end} else ({end} - 1), 1 if {start} <= {end} else -1))"
 
         if t == 'ListLiteral':
             elts = []
@@ -521,7 +525,7 @@ class ZenCompiler:
 
     def _gen_call(self, node, scope):
         callee = node.callee
-        # Handle method calls like x.y() -> converted to __env__.__getattr__ call
+        # Handle method calls like x.y() -> converted to __env__._getattr call
         if isinstance(callee, zen_ast.Variable):
             name = callee.name
             if name in ('print', 'println'):
@@ -536,7 +540,7 @@ class ZenCompiler:
                 return None
             # Check for known method patterns
             if isinstance(callee.obj, zen_ast.Variable) and not scope.is_local(callee.obj.name):
-                return f"__env__.__getattr__({obj}, '{method}')({args})"
+                return f"__env__._getattr({obj}, '{method}')({args})"
             return f"{obj}.{method}({args})"
         else:
             c = self._expr(callee, scope)
@@ -554,6 +558,4 @@ class ZenCompiler:
         name = node.name
         if obj is None:
             return None
-        if isinstance(node.obj, zen_ast.Variable) and not scope.is_local(node.obj.name):
-            return f"__env__.__getattr__({obj}, '{name}')"
-        return f"({obj}).{name}"
+        return f"__env__._getattr({obj}, '{name}')"
