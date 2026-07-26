@@ -2,6 +2,7 @@ import sys
 import os
 import traceback
 import argparse
+from time import sleep
 
 from .lexer import Lexer, LexerError
 from .parser import Parser, ParseError
@@ -21,7 +22,7 @@ def _add_browser_args(sp):
     sp.add_argument('--connect', nargs='?', const=9222, type=int, default=None,
                     help='Connect to running browser on port (default 9222)')
     sp.add_argument('--http', action='store_true', help='HTTP-only mode (no browser, uses requests)')
-    sp.add_argument('--no-browser', action='store_true', help='Language-only mode, no browser')
+    sp.add_argument('--no-browser', action='store_true', help='Language-only mode (no browser)')
 
 
 def main():
@@ -41,12 +42,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  zen run script.z              Run a Zen script
-  zen shell                     Start interactive shell
-  zen open https://example.com  Open a URL and print title
-  zen shot https://example.com  Take a screenshot
-  zen script.z --connect        Run script attached to your browser
-  zen script.z --http           Run script with HTTP only (no browser)
+  zen run script.z               Run a Zen script
+  zen shell                      Start interactive shell
+  zen open https://example.com   Open a URL and print title
+  zen shot https://example.com   Take a screenshot
+  zen script.z --connect         Run script attached to your browser
+  zen script.z --http            Run script with HTTP only (no browser)
+  zen --no-browser               Language-only mode (fast startup, no browser)
         """)
 
     parser.add_argument('--version', action='store_true', help='Show version')
@@ -113,6 +115,8 @@ Examples:
         browser_mode = 'http'
     elif getattr(args, 'connect', None) is not None:
         browser_mode = 'connect'
+    elif getattr(args, 'no_browser', False) or '--no-browser' in unknown:
+        browser_mode = 'none'
 
     src_path = getattr(args, 'file', None)
     src_lines = None
@@ -218,7 +222,10 @@ def _dispatch(args, unknown, script_extra, headless, browser_mode):
             mode=browser_mode,
         )
         try:
+            browser.start()
             browser.go(args.url)
+            browser.wait_for_network()
+            sleep(1)
             browser.shot(args.output)
             print(color.green(f"Screenshot saved: {args.output}"))
         finally:
