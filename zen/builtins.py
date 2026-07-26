@@ -817,6 +817,7 @@ def register_builtins(env, browser):
     env.define('float', lambda v: float(v))
     env.define('bool', lambda v: bool(v))
     env.define('list', lambda v: list(v))
+    env.define('exit', lambda code=0: os._exit(int(code)))
 
     env.define('assert', lambda cond, msg=None: _assert_fn(cond, msg))
     env.define('assert_eq', lambda a, b, msg=None: _assert_eq_fn(a, b, msg))
