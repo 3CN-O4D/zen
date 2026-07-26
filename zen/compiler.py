@@ -127,7 +127,8 @@ class ZenCompiler:
                 st_t = type(st).__name__
                 if st_t in ('Variable', 'Literal', 'BinaryOp', 'UnaryOp', 'Ternary',
                             'Call', 'Index', 'Member', 'ListLiteral', 'DictLiteral',
-                            'Range', 'InterpolatedString', 'SafeMember', 'Slice'):
+                            'Range', 'InterpolatedString', 'SafeMember', 'Slice',
+                            'Assign', 'Let'):
                     parts[-1] = f"__result__ = {parts[-1]}"
             return '\n'.join(parts)
 

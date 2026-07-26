@@ -869,7 +869,7 @@ class Interpreter:
                 if node.name in ('ends_with', 'endsWith'):
                     return ZenMethod(node.name, lambda suffix: obj.endswith(suffix))
                 if node.name == 'split':
-                    return ZenMethod('split', lambda sep=None: obj.split(sep) if sep else obj.split())
+                    return ZenMethod('split', lambda sep=None: list(obj) if sep == '' else obj.split(sep) if sep else obj.split())
                 if node.name == 'replace':
                     return ZenMethod('replace', lambda old, new: obj.replace(old, new))
                 if node.name in ('replace_all', 'replaceAll'):
