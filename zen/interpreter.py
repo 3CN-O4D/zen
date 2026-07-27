@@ -103,19 +103,29 @@ class _CompiledEnv:
         else:
             print(flush=True)
     def __binop__(self, op, a, b):
-        if op == 'PLUS':
-            if isinstance(a, str) or isinstance(b, str):
+        _ARITH = {'PLUS': '+', 'MINUS': '-', 'STAR': '*', 'SLASH': '/', 'MOD': '%', 'POW': '**'}
+        _CMP = {'EQ': '==', 'NEQ': '!=', 'LT': '<', 'GT': '>', 'LE': '<=', 'GE': '>=', 'IS': 'is', 'IN': 'in'}
+        if op in _ARITH:
+            if isinstance(a, bool) or isinstance(b, bool):
+                raise ZenError("Boolean arithmetic not allowed")
+            if op == 'PLUS' and (isinstance(a, str) or isinstance(b, str)):
                 return str(a) + str(b)
-            return a + b
-        if op == 'MINUS': return a - b
-        if op == 'STAR': return a * b
-        if op == 'SLASH': return a / b
-        if op == 'MOD': return a % b
-        if op == 'POW': return a ** b
+            import operator
+            return {'PLUS': operator.add, 'MINUS': operator.sub, 'STAR': operator.mul,
+                    'SLASH': operator.truediv, 'MOD': operator.mod, 'POW': operator.pow}[op](a, b)
+        if op in _CMP:
+            import operator
+            return {'EQ': operator.eq, 'NEQ': operator.ne, 'LT': operator.lt,
+                    'GT': operator.gt, 'LE': operator.le, 'GE': operator.ge,
+                    'IS': operator.is_}[op](a, b)
+        if op == 'NOT_IN':
+            return a not in b
         if op == 'AND': return a and b
         if op == 'OR': return a or b
         raise ZenError(f"Unknown binary op: {op}")
     def __unaryop__(self, op, a):
+        if isinstance(a, bool):
+            raise ZenError("Boolean arithmetic not allowed")
         if op == '-': return -a
         if op in ('not', '!'): return not _is_truthy(a)
         raise ZenError(f"Unknown unary op: {op}")
@@ -159,9 +169,11 @@ class _CompiledEnv:
             if name == 'times':
                 return lambda fn: [fn(i) for i in range(int(obj))]
             if name == 'round':
-                return lambda *a: round(obj, *a)
+                from .environment import ZenMethod
+                return ZenMethod('round', lambda *a: round(obj, *a) if a else round(obj))
             if name == 'trunc':
-                return lambda: int(obj)
+                from .environment import ZenMethod
+                return ZenMethod('trunc', lambda *a: int(obj * 10**int(a[0])) / 10**int(a[0]) if a else int(obj))
         if hasattr(obj, name):
             attr = getattr(obj, name)
             if callable(attr):
@@ -709,6 +721,8 @@ class Interpreter:
 
             left = self._eval(node.left)
             right = self._eval(node.right)
+            if isinstance(left, bool) or isinstance(right, bool):
+                raise ZenError("Boolean arithmetic not allowed", node)
             if node_op == 'PLUS':
                 if isinstance(left, str) or isinstance(right, str):
                     return str(left) + str(right)
@@ -716,6 +730,8 @@ class Interpreter:
 
         elif isinstance(node, ast.UnaryOp):
             operand = self._eval(node.operand)
+            if isinstance(operand, bool):
+                raise ZenError("Boolean arithmetic not allowed", node)
             if node.op == '-':
                 return -operand
             elif node.op == '!':
@@ -968,9 +984,9 @@ class Interpreter:
                 if node.name == 'times':
                     return ZenMethod('times', lambda fn: [fn(i) for i in range(int(obj))])
                 if node.name == 'round':
-                    return ZenMethod('round', lambda *a: round(obj, *a))
+                    return ZenMethod('round', lambda *a: round(obj, *a) if a else round(obj))
                 if node.name == 'trunc':
-                    return ZenMethod('trunc', lambda: int(obj))
+                    return ZenMethod('trunc', lambda *a: int(obj * 10**int(a[0])) / 10**int(a[0]) if a else int(obj))
                 raise ZenError(f"Number has no attribute '{node.name}'", node)
 
             # --- generic object (fallback) ---
@@ -1110,6 +1126,8 @@ class Interpreter:
             start = int(self._eval(node.start))
             end = int(self._eval(node.end))
             step = int(self._eval(node.step)) if node.step is not None else (1 if start <= end else -1)
+            if node.exclusive:
+                return list(range(start, end, step))
             end_adj = end + 1 if step > 0 else end - 1
             return list(range(start, end_adj, step))
 

@@ -186,11 +186,8 @@ class ZenCompiler:
             right = self._expr(node.right, scope)
             if left is None or right is None:
                 return None
-            op = _op_str(node.op)
-            if op:
-                if node.op in ('AND', 'OR'):
-                    return f"({left} {op} {right})"
-                return f"({left} {op} {right})"
+            if node.op in ('AND', 'OR'):
+                return f"({left} {'and' if node.op == 'AND' else 'or'} {right})"
             return f"__env__.__binop__('{node.op}', {left}, {right})"
 
         if t == 'UnaryOp':
@@ -198,8 +195,6 @@ class ZenCompiler:
             operand = self._expr(node.operand, scope)
             if operand is None:
                 return None
-            if op == '-':
-                return f"(-{operand})"
             if op in ('not', '!'):
                 return f"(not {operand})"
             return f"__env__.__unaryop__('{op}', {operand})"
@@ -210,9 +205,12 @@ class ZenCompiler:
             if start is None or end is None:
                 return None
             step = self._expr(node.step, scope) if node.step is not None else None
+            if node.exclusive:
+                if step:
+                    return f"list(range({start}, {end}, {step}))"
+                return f"list(range({start}, {end}, 1 if {start} <= {end} else -1))"
             if step:
                 return f"list(range({start}, {end} + 1, {step}))"
-            # Auto-detect direction: range(start, end+1, 1) or range(start, end-1, -1)
             return f"list(range({start}, ({end} + 1) if {start} <= {end} else ({end} - 1), 1 if {start} <= {end} else -1))"
 
         if t == 'ListLiteral':

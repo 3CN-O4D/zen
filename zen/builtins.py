@@ -829,6 +829,7 @@ def register_builtins(env, browser):
     env.define('min', lambda *args: min(args))
     env.define('max', lambda *args: max(args))
     env.define('round', lambda v, ndigits=0: round(v, int(ndigits)))
+    env.define('trunc', lambda v, ndigits=0: int(v * 10**int(ndigits)) / 10**int(ndigits) if ndigits else int(v))
     env.define('go', lambda url: browser.go(str(url)) or True)
     env.define('fill', lambda *args, **kwargs: _smart_fill(browser, *args, **kwargs))
     env.define('click', lambda *args, **kwargs: _smart_click(browser, *args, **kwargs))

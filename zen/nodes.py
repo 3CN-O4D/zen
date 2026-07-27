@@ -215,10 +215,11 @@ class With(Node):
         self.body = body
 
 class Range(Node):
-    def __init__(self, start, end, step=None):
+    def __init__(self, start, end, step=None, exclusive=False):
         self.start = start
         self.end = end
         self.step = step
+        self.exclusive = exclusive
 
 class New(Node):
     def __init__(self, class_expr, args=None):

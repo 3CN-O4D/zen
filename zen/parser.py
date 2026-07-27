@@ -538,12 +538,18 @@ class Parser:
 
     def _parse_range(self):
         left = self._parse_or()
-        if self._match('TO') or self._match('RARROW') or self._match('DOT_DOT'):
+        if self._match('TO') or self._match('RARROW'):
             right = self._parse_range()
             step = None
             if self._match('BY') or self._match('AT'):
                 step = self._parse_range()
             return self._node(ast.Range, left, right, step)
+        if self._match('DOT_DOT'):
+            right = self._parse_range()
+            step = None
+            if self._match('BY') or self._match('AT'):
+                step = self._parse_range()
+            return self._node(ast.Range, left, right, step, exclusive=True)
         return left
 
     def _parse_or(self):
