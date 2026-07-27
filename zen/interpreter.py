@@ -1175,7 +1175,7 @@ def _format_value(val):
     if isinstance(val, (int, float, bool)):
         return str(val)
     if val is None:
-        return 'null'
+        return 'None'
     if isinstance(val, (list, tuple)):
         return '[' + ', '.join(_format_value(v) for v in val) + ']'
     if isinstance(val, dict):

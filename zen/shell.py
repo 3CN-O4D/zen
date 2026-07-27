@@ -211,9 +211,9 @@ def _show_error_context_for_token(code, token, message):
 
 def _format_result(val):
     if val is None:
-        return 'null'
+        return 'None'
     if isinstance(val, bool):
-        return 'true' if val else 'false'
+        return 'True' if val else 'False'
     if isinstance(val, str):
         return val
     if isinstance(val, (int, float)):
