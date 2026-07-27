@@ -151,6 +151,8 @@ class Parser:
             return self._parse_with()
         elif self._check('INCLUDE') or self._check('IMPORT') or self._check('REQUIRE'):
             return self._parse_include()
+        elif self._check('LOAD') or self._check('USE'):
+            return self._parse_load()
         elif self._check('TRY'):
             return self._parse_try()
         elif self._check('LBRACE'):
@@ -426,6 +428,12 @@ class Parser:
         self._advance()
         path = self._parse_expression()
         return self._node(ast.Include, path)
+
+    def _parse_load(self):
+        self._advance()
+        name = self._expect('IDENT').value
+        path = self._node(ast.Literal, name)
+        return self._node(ast.Include, path, merge=True)
 
     def _parse_try(self):
         self._advance()
@@ -748,6 +756,8 @@ class Parser:
             return self._parse_anonymous_function()
         if self._check('INCLUDE') or self._check('IMPORT') or self._check('REQUIRE'):
             return self._parse_include()
+        if self._check('LOAD') or self._check('USE'):
+            return self._parse_load()
         if self._check('IDENT') or self.current.type in self.FUNC_KEYWORDS:
             tok = self._advance()
             name = tok.value if tok.type == 'IDENT' else tok.type.lower()

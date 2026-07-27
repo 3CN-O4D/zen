@@ -1051,15 +1051,19 @@ class Interpreter:
             program = parser.parse()
             old_env = self.current_env
             self.current_env = self.current_env.child()
+            module = {}
             try:
-                result = self.interpret(program)
-                module = {}
+                self.interpret(program)
                 for k, v in self.current_env.vars.items():
                     if not k.startswith('_') or k in ('_', '_version'):
                         module[k] = v
-                return module
             finally:
                 self.current_env = old_env
+            if node.merge:
+                for k, v in module.items():
+                    old_env.define(k, v)
+                return _VOID
+            return module
 
         elif isinstance(node, ast.Ternary):
             cond = self._eval(node.cond)

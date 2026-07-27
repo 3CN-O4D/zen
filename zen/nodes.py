@@ -156,8 +156,9 @@ class Slice(Node):
         self.step = step
 
 class Include(Node):
-    def __init__(self, path):
+    def __init__(self, path, merge=False):
         self.path = path
+        self.merge = merge
 
 class Literal(Node):
     def __init__(self, value):

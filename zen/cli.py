@@ -1,8 +1,21 @@
 import sys
 import os
+import locale
 import traceback
 import argparse
 from time import sleep
+
+# Force English locale for consistent error messages (browser drivers etc.)
+for var in ('LANG', 'LC_ALL', 'LC_MESSAGES'):
+    if var not in os.environ:
+        os.environ[var] = 'C'
+try:
+    locale.setlocale(locale.LC_ALL, 'C')
+except locale.Error:
+    try:
+        locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+    except locale.Error:
+        pass
 
 from .lexer import Lexer, LexerError
 from .parser import Parser, ParseError

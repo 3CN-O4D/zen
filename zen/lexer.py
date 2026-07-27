@@ -20,6 +20,7 @@ KEYWORDS = {
     'true', 'false', 'null', 'try', 'catch', 'top', 'bottom',
     'break', 'continue', 'include', 'import', 'require', 'is', 'finally',
     'class', 'extends', 'new', 'self', 'switch', 'case', 'default', 'as',
+    'load', 'use',
 }
 
 TOKEN_SPEC = [
