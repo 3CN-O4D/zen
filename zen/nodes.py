@@ -111,11 +111,12 @@ class Continue(Node):
     pass
 
 class TryCatch(Node):
-    def __init__(self, try_body, catch_body, err_var=None, finally_body=None):
+    def __init__(self, try_body, catch_body, err_var=None, finally_body=None, catch_type=None):
         self.try_body = try_body
         self.catch_body = catch_body
         self.err_var = err_var
         self.finally_body = finally_body
+        self.catch_type = catch_type
 
 class Block(Node):
     def __init__(self, statements):

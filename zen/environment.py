@@ -72,9 +72,10 @@ class ZenContinue(Exception):
     pass
 
 class ZenError(Exception):
-    def __init__(self, message, node=None):
+    def __init__(self, message, node=None, cause=None):
         self.message = message
         self.node = node
+        self.cause = cause
         super().__init__(message)
 
 class ZenBrowserError(ZenError):

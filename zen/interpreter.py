@@ -377,7 +377,7 @@ class Interpreter:
         except ZenContinue:
             raise
         except Exception as e:
-            raise ZenError(str(e), node)
+            raise ZenError(str(e), node, cause=e)
 
     def _assign_single(self, target, value):
         if isinstance(target, ast.Variable):
@@ -663,6 +663,11 @@ class Interpreter:
                 except ZenContinue:
                     raise
                 except Exception as e:
+                    if node.catch_type:
+                        type_name = node.catch_type
+                        cause = getattr(e, 'cause', None) or e
+                        if type(cause).__name__ != type_name:
+                            raise
                     err_name = node.err_var or 'error'
                     self.current_env.define(err_name, str(e))
                     result = self._eval(node.catch_body)

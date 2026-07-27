@@ -441,8 +441,14 @@ class Parser:
         self._skip_newlines()
         self._expect('CATCH')
         err_var = None
+        catch_type = None
         if self._check('IDENT'):
             err_var = self._advance().value
+            if self._match('AS'):
+                catch_type = self._expect('IDENT').value
+        elif self._check('AS'):
+            self._advance()
+            catch_type = self._expect('IDENT').value
         self._skip_newlines()
         catch_body = self._parse_block()
         self._skip_newlines()
@@ -451,7 +457,7 @@ class Parser:
             self._advance()
             self._skip_newlines()
             finally_body = self._parse_block()
-        return self._node(ast.TryCatch, try_body, catch_body, err_var, finally_body)
+        return self._node(ast.TryCatch, try_body, catch_body, err_var, finally_body, catch_type=catch_type)
 
     def _parse_block(self):
         self._skip_newlines()
