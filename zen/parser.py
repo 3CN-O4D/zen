@@ -443,12 +443,12 @@ class Parser:
         err_var = None
         catch_type = None
         if self._check('IDENT'):
-            err_var = self._advance().value
+            name = self._advance().value
             if self._match('AS'):
-                catch_type = self._expect('IDENT').value
-        elif self._check('AS'):
-            self._advance()
-            catch_type = self._expect('IDENT').value
+                err_var = self._expect('IDENT').value
+                catch_type = name
+            else:
+                err_var = name
         self._skip_newlines()
         catch_body = self._parse_block()
         self._skip_newlines()
