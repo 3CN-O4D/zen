@@ -62,7 +62,7 @@ def format_error(file_path, error, source_lines):
     return '\n'.join(parts)
 
 class ZenReturn(Exception):
-    def __init__(self, value):
+    def __init__(self, value=None):
         self.value = value
 
 class ZenBreak(Exception):
@@ -70,6 +70,10 @@ class ZenBreak(Exception):
 
 class ZenContinue(Exception):
     pass
+
+class ZenThrow(Exception):
+    def __init__(self, value=None):
+        self.value = value
 
 class ZenError(Exception):
     def __init__(self, message, node=None, cause=None):
@@ -154,13 +158,26 @@ class ZenElement:
     def __init__(self, element):
         self._locator = element
 
+    def _safe(self, fn, action='element operation'):
+        try:
+            return fn()
+        except Exception as e:
+            msg = str(e)
+            if '没有找到元素' in msg:
+                raise ZenError(f"Element not found during {action}")
+            if '该元素已失效' in msg or 'stale' in msg.lower():
+                raise ZenError(f"Element is stale (page changed) during {action}")
+            if '不在可视范围' in msg:
+                raise ZenError(f"Element not visible during {action}")
+            raise ZenError(f"Error during {action}: {msg}")
+
     @property
     def text(self):
-        return self._locator.text
+        return self._safe(lambda: self._locator.text, 'reading text')
 
     @property
     def html(self):
-        return self._locator.html
+        return self._safe(lambda: self._locator.html, 'reading html')
 
     @property
     def exists(self):
@@ -171,33 +188,33 @@ class ZenElement:
 
     @property
     def tag(self):
-        return self._locator.tag
+        return self._safe(lambda: self._locator.tag, 'reading tag')
 
     def attr(self, name):
-        return self._locator.attr(name)
+        return self._safe(lambda: self._locator.attr(name), f'reading attribute {name}')
 
     @property
     def url(self):
-        return self._locator.attr('href')
+        return self._safe(lambda: self._locator.attr('href'), 'reading href')
 
     @property
     def src(self):
-        return self._locator.attr('src')
+        return self._safe(lambda: self._locator.attr('src'), 'reading src')
 
     def click(self):
-        self._locator.click()
+        self._safe(lambda: self._locator.click(), 'clicking')
         return self
 
     def fill(self, value):
-        self._locator.input(str(value))
+        self._safe(lambda: self._locator.input(str(value)), 'filling input')
         return self
 
     def check(self):
-        self._locator.check()
+        self._safe(lambda: self._locator.check(), 'checking')
         return self
 
     def uncheck(self):
-        self._locator.check(uncheck=True)
+        self._safe(lambda: self._locator.check(uncheck=True), 'unchecking')
         return self
 
     def select(self, value):

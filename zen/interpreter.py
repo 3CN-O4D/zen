@@ -1,6 +1,6 @@
 import os, time as _time_mod
 from . import nodes as ast
-from .environment import Environment, ZenReturn, ZenBreak, ZenContinue, ZenError, ZenElement, ZenList, ZenMethod, ConfigModule, ZenClass, ZenInstance
+from .environment import Environment, ZenReturn, ZenBreak, ZenContinue, ZenThrow, ZenError, ZenElement, ZenList, ZenMethod, ConfigModule, ZenClass, ZenInstance
 from .builtins import register_builtins, _parse_duration
 from .color import color
 from .compiler import ZenCompiler, CompileError
@@ -11,6 +11,8 @@ _COMPARE_OPS = {
     'IS': lambda a, b: a is b,
     'EQ': lambda a, b: a == b, '==': lambda a, b: a == b,
     'NEQ': lambda a, b: a != b, '!=': lambda a, b: a != b,
+    'STRICT_EQ': lambda a, b: type(a) == type(b) and a == b,
+    'STRICT_NEQ': lambda a, b: type(a) != type(b) or a != b,
     'LT': lambda a, b: a < b, '<': lambda a, b: a < b,
     'GT': lambda a, b: a > b, '>': lambda a, b: a > b,
     'LE': lambda a, b: a <= b, '<=': lambda a, b: a <= b,
@@ -104,7 +106,8 @@ class _CompiledEnv:
             print(flush=True)
     def __binop__(self, op, a, b):
         _ARITH = {'PLUS': '+', 'MINUS': '-', 'STAR': '*', 'SLASH': '/', 'MOD': '%', 'POW': '**'}
-        _CMP = {'EQ': '==', 'NEQ': '!=', 'LT': '<', 'GT': '>', 'LE': '<=', 'GE': '>=', 'IS': 'is', 'IN': 'in'}
+        _CMP = {'EQ': '==', 'NEQ': '!=', 'STRICT_EQ': '===', 'STRICT_NEQ': '!==', 'LT': '<', 'GT': '>', 'LE': '<=', 'GE': '>=', 'IS': 'is', 'IN': 'in'}
+        _BIT = {'AMPERSAND': '&', 'PIPE': '|', 'CARET': '^', 'LSHIFT': '<<', 'RSHIFT': '>>'}
         if op in _ARITH:
             if isinstance(a, bool) or isinstance(b, bool):
                 raise ZenError("Boolean arithmetic not allowed")
@@ -115,19 +118,39 @@ class _CompiledEnv:
                     'SLASH': operator.truediv, 'MOD': operator.mod, 'POW': operator.pow}[op](a, b)
         if op in _CMP:
             import operator
-            return {'EQ': operator.eq, 'NEQ': operator.ne, 'LT': operator.lt,
-                    'GT': operator.gt, 'LE': operator.le, 'GE': operator.ge,
-                    'IS': operator.is_}[op](a, b)
+            if op == 'STRICT_EQ':
+                return type(a) == type(b) and a == b
+            if op == 'STRICT_NEQ':
+                return type(a) != type(b) or a != b
+            return {"EQ": operator.eq, "NEQ": operator.ne, "LT": operator.lt,
+                    "GT": operator.gt, "LE": operator.le, "GE": operator.ge,
+                    "IS": operator.is_}[op](a, b)
         if op == 'NOT_IN':
             return a not in b
         if op == 'AND': return a and b
         if op == 'OR': return a or b
+        if op == '??': return a if a is not None else b
+        if op in _BIT:
+            return {'AMPERSAND': lambda x,y: int(x)&int(y), 'PIPE': lambda x,y: int(x)|int(y),
+                    'CARET': lambda x,y: int(x)^int(y), 'LSHIFT': lambda x,y: int(x)<<int(y),
+                    'RSHIFT': lambda x,y: int(x)>>int(y)}[op](a, b)
         raise ZenError(f"Unknown binary op: {op}")
     def __unaryop__(self, op, a):
         if isinstance(a, bool):
             raise ZenError("Boolean arithmetic not allowed")
         if op == '-': return -a
         if op in ('not', '!'): return not _is_truthy(a)
+        if op == '~': return ~int(a)
+        if op == 'typeof':
+            if a is None: return 'null'
+            elif isinstance(a, bool): return 'bool'
+            elif isinstance(a, int): return 'int'
+            elif isinstance(a, float): return 'float'
+            elif isinstance(a, str): return 'string'
+            elif isinstance(a, list): return 'list'
+            elif isinstance(a, dict): return 'dict'
+            elif callable(a): return 'function'
+            else: return 'object'
         raise ZenError(f"Unknown unary op: {op}")
     def _getattr(self, obj, name):
         from .environment import ZenMethod, ZenElement, ZenList, ZenInstance
@@ -388,6 +411,8 @@ class Interpreter:
             raise
         except ZenContinue:
             raise
+        except ZenThrow:
+            raise
         except Exception as e:
             raise ZenError(str(e), node, cause=e)
 
@@ -405,6 +430,10 @@ class Interpreter:
         elif isinstance(target, ast.Member):
             obj = self._eval(target.obj)
             if isinstance(obj, (ZenElement, ConfigModule, ZenInstance)):
+                setattr(obj, target.name, value)
+            elif isinstance(obj, dict):
+                obj[target.name] = value
+            elif hasattr(type(obj), '__setattr__') and not isinstance(obj, (int, float, str, list, dict, bool)):
                 setattr(obj, target.name, value)
             else:
                 raise ZenError(f"Cannot set property on {type(obj).__name__}")
@@ -437,6 +466,12 @@ class Interpreter:
         elif isinstance(node, ast.Let):
             value = self._eval(node.value)
             self.current_env.define(node.name, value)
+            return value
+
+        elif isinstance(node, ast.Const):
+            value = self._eval(node.value)
+            self.current_env.define(node.name, value)
+            self.current_env.lock(node.name)
             return value
 
         elif isinstance(node, ast.Assign):
@@ -652,6 +687,40 @@ class Interpreter:
                 self.current_env.define(node.name, fn)
             return fn
 
+        elif isinstance(node, ast.ArrowFunction):
+            closure_env = self.current_env
+            def fn(*args, **kwargs):
+                old_env = self.current_env
+                self.current_env = closure_env.child()
+                try:
+                    for i, param in enumerate(node.params):
+                        if i < len(args):
+                            self.current_env.define(param, args[i])
+                        elif param in kwargs:
+                            self.current_env.define(param, kwargs.pop(param))
+                        else:
+                            raise ZenError(f"Missing required argument: {param}")
+                    try:
+                        result = self._eval(node.body)
+                        return result
+                    except ZenReturn as ret:
+                        return ret.value
+                finally:
+                    self.current_env = old_env
+            return fn
+
+        elif isinstance(node, ast.ListComprehension):
+            iterable = self._eval(node.iterable)
+            result = []
+            for item in iterable:
+                self.current_env.define(node.var_name, item)
+                if node.condition is not None:
+                    cond = self._eval(node.condition)
+                    if not _is_truthy(cond):
+                        continue
+                result.append(self._eval(node.expr))
+            return result
+
         elif isinstance(node, ast.Return):
             if node.value is not None:
                 raise ZenReturn(self._eval(node.value))
@@ -662,6 +731,16 @@ class Interpreter:
 
         elif isinstance(node, ast.Continue):
             raise ZenContinue()
+
+        elif isinstance(node, ast.Throw):
+            value = self._eval(node.value) if node.value else None
+            raise ZenThrow(value)
+
+        elif isinstance(node, ast.Assert):
+            cond = self._eval(node.condition)
+            if not _is_truthy(cond):
+                msg = str(self._eval(node.message)) if node.message else "Assertion failed"
+                raise ZenError(msg, node)
 
         elif isinstance(node, ast.TryCatch):
             old_env = self.current_env
@@ -674,6 +753,10 @@ class Interpreter:
                     raise
                 except ZenContinue:
                     raise
+                except ZenThrow as e:
+                    err_name = node.err_var or 'error'
+                    self.current_env.define(err_name, str(e.value) if e.value else "")
+                    result = self._eval(node.catch_body)
                 except Exception as e:
                     if node.catch_type:
                         type_name = node.catch_type
@@ -726,18 +809,53 @@ class Interpreter:
             if node_op == 'PLUS':
                 if isinstance(left, str) or isinstance(right, str):
                     return str(left) + str(right)
+            if node_op == '??':
+                return left if left is not None else right
+            if node_op == 'AMPERSAND':
+                return int(left) & int(right)
+            if node_op == 'PIPE':
+                return int(left) | int(right)
+            if node_op == 'CARET':
+                return int(left) ^ int(right)
+            if node_op == 'LSHIFT':
+                return int(left) << int(right)
+            if node_op == 'RSHIFT':
+                return int(left) >> int(right)
             return _ARITH_OPS[node_op](left, right)
 
         elif isinstance(node, ast.UnaryOp):
             operand = self._eval(node.operand)
-            if isinstance(operand, bool):
-                raise ZenError("Boolean arithmetic not allowed", node)
             if node.op == '-':
+                if isinstance(operand, bool):
+                    raise ZenError("Boolean arithmetic not allowed", node)
                 return -operand
             elif node.op == '!':
                 return not _is_truthy(operand)
             elif node.op == 'not':
                 return not _is_truthy(operand)
+            elif node.op == 'typeof':
+                if operand is None:
+                    return 'null'
+                elif isinstance(operand, bool):
+                    return 'bool'
+                elif isinstance(operand, int):
+                    return 'int'
+                elif isinstance(operand, float):
+                    return 'float'
+                elif isinstance(operand, str):
+                    return 'string'
+                elif isinstance(operand, list):
+                    return 'list'
+                elif isinstance(operand, dict):
+                    return 'dict'
+                elif callable(operand):
+                    return 'function'
+                else:
+                    return 'object'
+            elif node.op == '~':
+                if isinstance(operand, bool):
+                    raise ZenError("Boolean arithmetic not allowed", node)
+                return ~int(operand)
             raise ZenError(f"Unknown unary operator: {node.op}")
 
         elif isinstance(node, ast.Call):
@@ -852,12 +970,11 @@ class Interpreter:
                     return ZenMethod('has', lambda key: key in obj)
                 if node.name == 'put':
                     return ZenMethod('put', lambda key, val: obj.update({key: val}) or obj)
-                if hasattr(type(obj), node.name):
-                    attr = getattr(type(obj), node.name)
-                    if isinstance(attr, property):
-                        return attr.__get__(obj, type(obj))
-                    if callable(attr):
-                        return ZenMethod(node.name, attr.__get__(obj, type(obj)))
+                if not isinstance(node.obj, ast.Literal) or not isinstance(node.obj.value, str):
+                    keys = [k for k in obj if isinstance(k, str)]
+                    raise ZenError(
+                        f"Dict has no key '{node.name}'. Available keys: {', '.join(sorted(keys)[:10])}{'...' if len(keys) > 10 else ''}",
+                        node)
                 return None
 
             # --- str ---
@@ -1031,7 +1148,11 @@ class Interpreter:
 
         elif isinstance(node, ast.Include):
             val = self._eval(node.path)
-            if isinstance(val, dict) or type(val).__name__ == '_EmojiModule':
+            if isinstance(val, dict):
+                if node.merge:
+                    for k, v in val.items():
+                        self.current_env.define(k, v)
+                    return _VOID
                 name = node.path.name if hasattr(node.path, 'name') else '...'
                 raise ZenError(
                     f"Include expects a file path (string), got a module. "
@@ -1039,6 +1160,17 @@ class Interpreter:
                     f" is already available as a built-in — use it directly."
                 )
             path = str(val)
+            if node.merge and not path.endswith('.z'):
+                try:
+                    mod = self.current_env.get(path)
+                    if isinstance(mod, dict):
+                        for k, v in mod.items():
+                            self.current_env.define(k, v)
+                        return _VOID
+                    if not isinstance(mod, (str, int, float, bool, type(None), list)):
+                        return _VOID
+                except ZenError:
+                    pass
             if not path.endswith('.z'):
                 path = path + '.z'
             sep_path = path.replace('.', '/')
@@ -1094,7 +1226,19 @@ class Interpreter:
             parts = []
             for is_expr, val in node.parts:
                 if is_expr:
-                    parts.append(str(self.current_env.get(val)))
+                    try:
+                        parts.append(str(self.current_env.get(val)))
+                    except ZenError:
+                        try:
+                            from .lexer import Lexer
+                            from .parser import Parser
+                            lexer = Lexer(val)
+                            parser = Parser(lexer)
+                            program = parser.parse()
+                            result = self._eval(program)
+                            parts.append(str(result))
+                        except Exception:
+                            parts.append(val)
                 else:
                     parts.append(val)
             return ''.join(parts)

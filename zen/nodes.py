@@ -12,6 +12,11 @@ class Let(Node):
         self.name = name
         self.value = value
 
+class Const(Node):
+    def __init__(self, name, value):
+        self.name = name
+        self.value = value
+
 class Assign(Node):
     def __init__(self, target, value):
         self.target = target
@@ -103,6 +108,15 @@ class Function(Node):
 class Return(Node):
     def __init__(self, value=None):
         self.value = value
+
+class Throw(Node):
+    def __init__(self, value=None):
+        self.value = value
+
+class Assert(Node):
+    def __init__(self, condition, message=None):
+        self.condition = condition
+        self.message = message
 
 class Break(Node):
     pass
@@ -225,3 +239,15 @@ class New(Node):
     def __init__(self, class_expr, args=None):
         self.class_expr = class_expr
         self.args = args or []
+
+class ArrowFunction(Node):
+    def __init__(self, params, body):
+        self.params = params
+        self.body = body
+
+class ListComprehension(Node):
+    def __init__(self, expr, var_name, iterable, condition=None):
+        self.expr = expr
+        self.var_name = var_name
+        self.iterable = iterable
+        self.condition = condition

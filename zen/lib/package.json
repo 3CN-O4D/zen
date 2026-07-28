@@ -1,0 +1,9 @@
+{
+  "name": "zen-wa-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "baileys": "^6.7.23",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

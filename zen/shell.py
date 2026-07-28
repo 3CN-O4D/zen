@@ -248,13 +248,16 @@ def _browser_spinner(stop):
 
 class Shell:
 
-    def __init__(self, headless=True, browser_path=None, connect_port=None, mode='browser'):
+    KNOWN_DOT_COMMANDS = frozenset({'exit', 'quit', 'q', 'help', 'clear', 'url', 'title', 'vars', 'history', 'run', 'shot', 'type', 'dir'})
+
+    def __init__(self, headless=True, browser_path=None, connect_port=None, mode='browser', no_history=False):
         self.browser = Browser(headless=headless, browser_path=browser_path,
                                connect_port=connect_port, mode=mode)
         self.interpreter = None
         self.history = []
         self._pt_session = None
-        self._use_pt = HAS_PT
+        self._use_pt = HAS_PT and not no_history
+        self._no_history = no_history
         self._last_cmd_time = 0
         self._busy = False
         self._buf = []
@@ -316,8 +319,8 @@ class Shell:
             try:
                 hist_file = os.path.expanduser('~/.z_history')
                 self._pt_session = PromptSession(
-                    history=FileHistory(hist_file) if os.access(os.path.dirname(hist_file), os.W_OK) else None,
-                    auto_suggest=AutoSuggestFromHistory(),
+                    history=FileHistory(hist_file) if not self._no_history and os.access(os.path.dirname(hist_file), os.W_OK) else None,
+                    auto_suggest=AutoSuggestFromHistory() if not self._no_history else None,
                     completer=ZenCompleter(),
                     style=_SHELL_STYLE,
                 )
@@ -364,11 +367,13 @@ class Shell:
                 continue
 
             if line.startswith('.'):
-                if self._buf:
-                    self._buf = []
-                    self._prompt_prefix = ''
-                self._handle_dot_command(line)
-                continue
+                cmd = line[1:].strip().split(maxsplit=1)
+                if cmd and cmd[0] in self.KNOWN_DOT_COMMANDS:
+                    if self._buf:
+                        self._buf = []
+                        self._prompt_prefix = ''
+                    self._handle_dot_command(line)
+                    continue
 
             self._buf.append(line)
             code = '\n'.join(self._buf)
@@ -487,6 +492,10 @@ class Shell:
 
         elif cmd[0] == 'dir':
             print(os.getcwd())
+            return
+
+        else:
+            print(f"Unknown command: .{cmd[0]}. Try .help for available commands.")
             return
 
     def _show_general_help(self):
@@ -941,10 +950,12 @@ class Shell:
             return True
         except (LexerError, ParseError) as e:
             msg = str(e)
-            if 'Expected RBRACE' in msg or 'Expected RPAREN' in msg or 'Expected RBRACKET' in msg:
-                return False
-            if 'EOF' in msg and ('LBRACE' in msg or 'LPAREN' in msg or 'LBRACKET' in msg):
-                return False
+            last = stripped.rstrip()
+            if 'EOF' in msg:
+                opens = last.count('{') + last.count('(') + last.count('[')
+                closes = last.count('}') + last.count(')') + last.count(']')
+                if opens > closes:
+                    return False
             return True
         except Exception:
             return True
@@ -998,7 +1009,7 @@ class Shell:
 
     def stop(self):
         self.browser.stop()
-        if _HAS_READLINE:
+        if _HAS_READLINE and not self._use_pt and not self._no_history:
             try:
                 readline.write_history_file(_ZEN_HISTFILE)
             except (FileNotFoundError, OSError):

@@ -13,21 +13,22 @@ class Token:
         return f"Token({self.type}, {self.value!r}, L{self.line}:{self.col})"
 
 KEYWORDS = {
-    'let', 'go', 'fill', 'with', 'click', 'wait', 'for', 'in',
+    'let', 'const', 'go', 'fill', 'with', 'click', 'wait', 'for', 'in',
     'if', 'elif', 'else', 'while', 'function', 'def', 'return', 'print', 'input',
     'into', 'scroll', 'to', 'by', 'shot', 'full', 'refresh',
     'back', 'forward', 'execute', 'download', 'and', 'or', 'not',
     'true', 'false', 'null', 'try', 'catch', 'top', 'bottom',
     'break', 'continue', 'include', 'import', 'require', 'is', 'finally',
     'class', 'extends', 'new', 'self', 'switch', 'case', 'default', 'as',
-    'load', 'use',
+    'load', 'use', 'typeof', 'throw', 'raise', 'assert', 'lambda',
 }
 
 TOKEN_SPEC = [
     ('WS',       r'[ \t\r]+'),
     ('NEWLINE',  r'\n'),
     ('IDENT',    r'[a-zA-Z_][a-zA-Z0-9_]*'),
-    ('NUMBER',   r'\d+(?:\.\d+)?'),
+    ('NUMBER',   r'\d+(?:\.\d+)?|\.\d+'),
+    ('BACKTICK_STRING', r'`(?:[^`\\]|\\.)*`'),
     ('STRING',   r'"""(?:(?!""")[\s\S])*"""|\'\'\'(?:(?!\'\'\')[\s\S])*\'\'\'|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\''),
     ('COMMENT',  r'//[^\n]*'),
     ('HASH_COMMENT', r'#[^\n]*'),
@@ -35,6 +36,8 @@ TOKEN_SPEC = [
     ('ELLIPSIS', r'\.\.\.'),
     ('DOT_DOT',  r'\.\.'),
     ('SAFE_DOT', r'\?\.'),
+    ('NULLISH_COALESCE', r'\?\?'),
+    ('NULLISH_ASSIGN', r'\?\?='),
     ('INC',      r'\+\+'),
     ('DEC',      r'--'),
     ('POW',      r'\*\*'),
@@ -43,12 +46,17 @@ TOKEN_SPEC = [
     ('STAR_ASSIGN',  r'\*='),
     ('SLASH_ASSIGN', r'/='),
     ('MOD_ASSIGN',   r'%='),
+    ('LSHIFT',   r'<<'),
+    ('RSHIFT',   r'>>'),
     ('PIPE_PIPE',  r'\|\|'),
     ('AMPERSAND_AMPERSAND', r'&&'),
+    ('STRICT_EQ', r'==='),
+    ('STRICT_NEQ', r'!=='),
     ('EQ',       r'=='),
     ('NEQ',      r'!='),
     ('LE',       r'<='),
     ('GE',       r'>='),
+    ('ARROW',    r'=>'),
     ('RARROW',   r'->'),
     ('LPAREN',   r'\('),
     ('RPAREN',   r'\)'),
@@ -70,6 +78,10 @@ TOKEN_SPEC = [
     ('SLASH',    r'/'),
     ('MOD',      r'%'),
     ('BANG',     r'!'),
+    ('AMPERSAND', r'&'),
+    ('PIPE',     r'\|'),
+    ('CARET',    r'\^'),
+    ('TILDE',    r'~'),
 ]
 
 TOKEN_RE = re.compile('|'.join(f'(?P<{name}>{pattern})' for name, pattern in TOKEN_SPEC))
@@ -149,6 +161,12 @@ class Lexer:
                     inner = value[1:-1]
                 s = _process_escapes(inner)
                 self.tokens.append(Token('STRING', s, line, column))
+                continue
+
+            if kind == 'BACKTICK_STRING':
+                inner = value[1:-1]
+                s = _process_escapes(inner)
+                self.tokens.append(Token('BACKTICK_STRING', s, line, column))
                 continue
 
             if kind == 'IDENT' and value in KEYWORDS:

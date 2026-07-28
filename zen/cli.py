@@ -66,6 +66,7 @@ Examples:
 
     parser.add_argument('--version', action='store_true', help='Show version')
     parser.add_argument('--debug', action='store_true', help='Show full debug tracebacks')
+    parser.add_argument('--no-history', action='store_true', help='Disable persistent shell history')
 
     sub = parser.add_subparsers(dest='command', help='Command')
 
@@ -164,7 +165,8 @@ Examples:
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        print(color.red(f"Unexpected error: {e}"))
+        msg = str(e) or repr(e) or type(e).__name__
+        print(color.red(f"Unexpected error: {msg}"))
         if args.debug or 'ZEN_DEBUG' in os.environ:
             traceback.print_exc()
         sys.exit(1)
@@ -173,7 +175,8 @@ Examples:
 def _dispatch(args, unknown, script_extra, headless, browser_mode):
     if args.command == 'shell' or args.command is None:
         shell = Shell(headless=headless, browser_path=getattr(args, 'browser_path', None),
-                      connect_port=getattr(args, 'connect', None), mode=browser_mode)
+                      connect_port=getattr(args, 'connect', None), mode=browser_mode,
+                      no_history=getattr(args, 'no_history', False))
         try:
             shell.start()
         finally:

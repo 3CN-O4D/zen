@@ -9,6 +9,7 @@ _config = {
     'browser_path': None,
     'headless': True,
     'timeout': 30000,
+    'ele_timeout': 1,
 }
 
 def get_config():
@@ -229,6 +230,11 @@ class Browser:
                     "Cannot connect to browser.\n"
                     "  Make sure Chrome is running with --remote-debugging-port=9222\n"
                     "  Or use:  zen script.z --http  (HTTP-only mode)")
+            except Exception as exc:
+                msg = str(exc).split('\n')[0][:120]
+                self._no_browser = (
+                    f"Cannot connect to browser: {msg}\n"
+                    f"  Make sure Chrome is running with --remote-debugging-port=9222 --remote-allow-origins=*\n")
         elif self._mode == 'none':
             pass
         else:
@@ -251,6 +257,12 @@ class Browser:
                 if bp:
                     msg += f"  Path tried:  {bp}\n"
                 self._no_browser = msg
+            except Exception as exc:
+                msg = str(exc).split('\n')[0][:120]
+                self._no_browser = (
+                    f"Cannot start browser: {msg}\n"
+                    f"  Use zen --no-browser for language-only mode.\n"
+                )
         return self
 
     def stop(self):
@@ -312,14 +324,14 @@ class Browser:
         if not isinstance(loc, str):
             return loc
         try:
-            return self.page.ele(loc)
+            return self.page.ele(loc, timeout=_config['ele_timeout'])
         except Exception:
             return None
 
     def _find_eles(self, loc):
         if isinstance(loc, str):
             try:
-                return self.page.eles(loc)
+                return self.page.eles(loc, timeout=_config['ele_timeout'])
             except Exception:
                 return []
         return [loc]

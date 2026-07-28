@@ -16,6 +16,20 @@ from .environment import ZenElement, ZenSelector, ZenRegexMatch, HttpResponse, Z
 from .browser import get_config, set_config
 
 
+def _os_popen(cmd, args):
+    import subprocess
+    proc = subprocess.Popen([cmd] + list(args), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return {
+        'stdin': proc.stdin,
+        'stdout': proc.stdout,
+        'stderr': proc.stderr,
+        'pid': proc.pid,
+        'poll': lambda: proc.poll(),
+        'wait': lambda: proc.wait(),
+        'kill': lambda: proc.kill(),
+    }
+
+
 def _to_bytes(data):
     if isinstance(data, bytes):
         return data
@@ -221,7 +235,7 @@ def _raise_err(msg):
     raise ZenError(msg)
 
 def _json_loads_file(path):
-    with open(os.path.expanduser(str(path)), 'r') as f:
+    with open(os.path.expanduser(str(path)), 'r', encoding='utf-8') as f:
         return _json.load(f)
 
 def _json_save_file(path, val):
@@ -229,7 +243,7 @@ def _json_save_file(path, val):
     d = os.path.dirname(path)
     if d and not os.path.exists(d):
         os.makedirs(d, exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         _json.dump(val, f, ensure_ascii=False, indent=2)
     return True
 
@@ -807,6 +821,7 @@ def register_builtins(env, browser):
         set_config('browser_type', cfg.get('browser_type'))
         set_config('headless', cfg.get('headless'))
         set_config('timeout', cfg.get('timeout'))
+        set_config('ele_timeout', cfg.get('ele_timeout'))
 
     env.define('config', ConfigModule(cfg, _sync_config))
 
@@ -825,6 +840,11 @@ def register_builtins(env, browser):
 
     env.define('range', lambda start, end=None, step=1: list(range(start, end, step) if end is not None else range(start)))
     env.define('interval', lambda start, end, step=1: list(range(start, end, step)))
+    env.define('enumerate', lambda iterable, start=0: list(enumerate(iterable, int(start))))
+    env.define('zip', lambda *iterables: [list(group) for group in zip(*iterables)])
+    env.define('map', lambda fn, iterable: list(map(fn, iterable)))
+    env.define('filter', lambda fn, iterable: list(filter(fn, iterable)))
+    env.define('reduce', lambda fn, iterable, initial=None: __import__('functools').reduce(fn, iterable, initial) if initial is not None else __import__('functools').reduce(fn, iterable))
     env.define('abs', lambda v: abs(v))
     env.define('min', lambda *args: min(args))
     env.define('max', lambda *args: max(args))
@@ -1021,12 +1041,12 @@ def register_builtins(env, browser):
     })
 
     env.define('http', {
-        'get': lambda url, **kw: _http_request('GET', str(url), **kw),
-        'post': lambda url, data=None, json=None, **kw: _http_request('POST', str(url), data, json, **kw),
-        'put': lambda url, data=None, json=None, **kw: _http_request('PUT', str(url), data, json, **kw),
-        'del': lambda url, **kw: _http_request('DELETE', str(url), **kw),
-        'head': lambda url, **kw: _http_request('HEAD', str(url), **kw),
-        'patch': lambda url, data=None, json=None, **kw: _http_request('PATCH', str(url), data, json, **kw),
+        'get': lambda url, opts=None, **kw: _http_request('GET', str(url), **{**(opts or {}), **kw}),
+        'post': lambda url, data=None, json=None, opts=None, **kw: _http_request('POST', str(url), data, json, **{**(opts or {}), **kw}),
+        'put': lambda url, data=None, json=None, opts=None, **kw: _http_request('PUT', str(url), data, json, **{**(opts or {}), **kw}),
+        'del': lambda url, opts=None, **kw: _http_request('DELETE', str(url), **{**(opts or {}), **kw}),
+        'head': lambda url, opts=None, **kw: _http_request('HEAD', str(url), **{**(opts or {}), **kw}),
+        'patch': lambda url, data=None, json=None, opts=None, **kw: _http_request('PATCH', str(url), data, json, **{**(opts or {}), **kw}),
     })
 
     if browser is not None:
@@ -1144,6 +1164,7 @@ def register_builtins(env, browser):
         'setenv': lambda key, val: os.environ.__setitem__(str(key), str(val)),
         'unsetenv': lambda key: os.environ.pop(str(key), None),
         'system': lambda cmd: os.system(str(cmd)),
+        'popen': lambda cmd, *args: _os_popen(cmd, args),
     })
 
     _COLOR_NAMES = {
@@ -1315,11 +1336,23 @@ def register_builtins(env, browser):
     # --- emoji module ---
     env.define('emoji', _build_emoji_module())
 
+    try:
+        from .wa_module import _build_wa_module
+        env.define('wa', _build_wa_module())
+    except Exception:
+        pass
+
+    try:
+        from .cookies_module import _build_cookies_module
+        env.define('cookies', _build_cookies_module())
+    except Exception:
+        pass
+
 
 def _csv_read(path):
     import csv
     path = os.path.expanduser(str(path))
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8') as f:
         return list(csv.reader(f))
 
 def _csv_write(path, rows, headers=None):
@@ -1366,7 +1399,7 @@ def _json_encode(val):
 
 
 def _read_file(path):
-    with open(os.path.expanduser(path), 'r') as f:
+    with open(os.path.expanduser(path), 'r', encoding='utf-8') as f:
         return f.read()
 
 
@@ -1375,7 +1408,7 @@ def _write_file(path, content):
     d = os.path.dirname(path)
     if d and not os.path.exists(d):
         os.makedirs(d, exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
     return True
 
