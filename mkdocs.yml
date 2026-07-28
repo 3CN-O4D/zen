@@ -1,7 +1,7 @@
 site_name: Zen Documentation
-site_url: https://ecnord.github.io/zen
-repo_url: https://github.com/ecnord/zen
-repo_name: ecnord/zen
+site_url: https://3cn-o4d.github.io/zen
+repo_url: https://github.com/3CN-O4D/zen
+repo_name: 3CN-O4D/zen
 
 theme:
   name: material
