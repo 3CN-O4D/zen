@@ -1,0 +1,103 @@
+site_name: Zen Documentation
+site_url: https://ecnord.github.io/zen
+repo_url: https://github.com/ecnord/zen
+repo_name: ecnord/zen
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - search.suggest
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets
+  - admonitions
+  - tables
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Shell: getting-started/shell.md
+    - Scripts: getting-started/scripts.md
+  - Language:
+    - Overview: language/overview.md
+    - Types: language/types.md
+    - Variables: language/variables.md
+    - Operators: language/operators.md
+    - Control Flow: language/control-flow.md
+    - Functions: language/functions.md
+    - Classes: language/classes.md
+    - Lists & Dicts: language/collections.md
+    - Strings: language/strings.md
+    - Error Handling: language/errors.md
+  - Browser:
+    - Overview: browser/overview.md
+    - Navigation: browser/navigation.md
+    - Finding Elements: browser/finding.md
+    - Interacting: browser/interacting.md
+    - Page Info: browser/page-info.md
+    - Screenshots: browser/screenshots.md
+  - Modules:
+    - Overview: modules/overview.md
+    - fs: modules/fs.md
+    - http: modules/http.md
+    - re: modules/re.md
+    - json: modules/json.md
+    - crypto: modules/crypto.md
+    - datetime: modules/datetime.md
+    - threading: modules/threading.md
+    - WhatsApp: modules/whatsapp.md
+  - Standard Library:
+    - Overview: stdlib/overview.md
+    - list.z: stdlib/list.md
+    - str.z: stdlib/str.md
+    - dict.z: stdlib/dict.md
+    - test.z: stdlib/test.md
+    - browser.z: stdlib/browser.md
+  - Editor Setup:
+    - VSCode: editors/vscode.md
+    - Vim/Neovim: editors/vim.md
+    - Helix: editors/helix.md
+    - Sublime Text: editors/sublime.md
+  - Examples:
+    - Overview: examples/overview.md
+    - Scraping: examples/scraping.md
+    - Automation: examples/automation.md
+    - APIs: examples/apis.md
+  - CLI Reference: cli.md
+  - Grammar: grammar.md
+  - Troubleshooting: troubleshooting.md

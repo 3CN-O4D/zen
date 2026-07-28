@@ -1,0 +1,157 @@
+%YAML 1.2
+---
+name: Zen
+file_extensions:
+  - z
+scope: source.zen
+
+variables:
+  keyword: '\b(let|const|function|def|class|extends|new|lambda|if|elif|else|for|in|while|switch|case|default|break|continue|return|try|catch|finally|with|as|load|use|include|import|require|throw|raise|assert|typeof)\b'
+  browser: '\b(go|fill|click|wait|wait_for|wait_for_network|shot|scroll|execute|download|refresh|back|forward|print|input|set_user_agent|set_headers|user_agent|headers|page_html|page_text|page_links|page_images|page_forms|page_inputs|page_buttons)\b'
+  builtin: '\b(abs|min|max|len|type|str|int|float|bool|round|trunc|sleep|random|range|interval|enumerate|zip|map|filter|reduce|flatten|unique|chunk|partition|read_file|write_file|append_file|read_binary|write_binary|file_exists|list_dir|mkdir|remove_file|path_join|basename|dirname|exec|prompt|confirm|json_parse|json_encode|csv_read|csv_write|csv_parse|csv_encode|find|find_all|find_by_text|find_by_url|first|search)\b'
+  constant: '\b(true|false|null)\b'
+  special: '\b(_url|__url|___url|_time|_date|_dir|_version|_|_timeout|error|self)\b'
+  operator: '(===|!==|==|!=|<=|>=|\.\.\.|->|\.\.|=>|==|\+=|-=|\*=|/=|%=|\?\?=|\?\?|\?\.|&&|\|\||<<|>>|[&|^~])'
+  number: '\b\d+(\.\d+)?\b'
+
+contexts:
+  main:
+    - include: comments
+    - match: '{{keyword}}'
+      scope: keyword.control.zen
+    - match: '{{browser}}'
+      scope: support.function.browser.zen
+    - match: '{{builtin}}'
+      scope: support.function.builtin.zen
+    - match: '{{constant}}'
+      scope: constant.language.zen
+    - match: '{{special}}'
+      scope: variable.language.special.zen
+    - match: '{{operator}}'
+      scope: keyword.operator.zen
+    - match: '{{number}}'
+      scope: constant.numeric.zen
+    - include: strings
+    - include: template-literals
+    - include: functions
+
+  comments:
+    - match: '//'
+      scope: punctuation.definition.comment.zen
+      push: comment-line
+    - match: '#'
+      scope: punctuation.definition.comment.zen
+      push: comment-hash
+    - match: '/\*'
+      scope: punctuation.definition.comment.zen
+      push: comment-block
+
+  comment-line:
+    - meta_scope: comment.line.zen
+    - match: '$'
+      pop: true
+
+  comment-hash:
+    - meta_scope: comment.line.zen
+    - match: '$'
+      pop: true
+
+  comment-block:
+    - meta_scope: comment.block.zen
+    - match: '\*/'
+      scope: punctuation.definition.comment.zen
+      pop: true
+
+  strings:
+    - match: '"""'
+      scope: punctuation.definition.string.zen
+      push: string-triple-double
+    - match: "'''"
+      scope: punctuation.definition.string.zen
+      push: string-triple-single
+    - match: '"'
+      scope: punctuation.definition.string.zen
+      push: string-double
+    - match: "'"
+      scope: punctuation.definition.string.zen
+      push: string-single
+
+  string-triple-double:
+    - meta_scope: string.quoted.triple.double.zen
+    - match: '"""'
+      scope: punctuation.definition.string.zen
+      pop: true
+    - include: escape-sequences
+    - include: string-interpolation
+
+  string-triple-single:
+    - meta_scope: string.quoted.triple.single.zen
+    - match: "'''"
+      scope: punctuation.definition.string.zen
+      pop: true
+    - include: escape-sequences
+
+  string-double:
+    - meta_scope: string.quoted.double.zen
+    - match: '"'
+      scope: punctuation.definition.string.zen
+      pop: true
+    - include: escape-sequences
+    - include: string-interpolation
+
+  string-single:
+    - meta_scope: string.quoted.single.zen
+    - match: "'"
+      scope: punctuation.definition.string.zen
+      pop: true
+    - include: escape-sequences
+
+  escape-sequences:
+    - match: '\\[ntr0"\'\\]'
+      scope: constant.character.escape.zen
+    - match: '\\x[0-9a-fA-F]{2}'
+      scope: constant.character.escape.zen
+    - match: '\\u[0-9a-fA-F]{4}'
+      scope: constant.character.escape.zen
+    - match: '\\U[0-9a-fA-F]{8}'
+      scope: constant.character.escape.zen
+
+  string-interpolation:
+    - match: '\{'
+      scope: punctuation.definition.interpolation.zen
+      push: interpolation
+
+  interpolation:
+    - meta_scope: meta.interpolation.zen
+    - match: '\}'
+      scope: punctuation.definition.interpolation.zen
+      pop: true
+    - include: main
+
+  template-literals:
+    - match: '`'
+      scope: punctuation.definition.string.template.zen
+      push: template
+
+  template:
+    - meta_scope: string.template.zen
+    - match: '`'
+      scope: punctuation.definition.string.template.zen
+      pop: true
+    - match: '\$\{'
+      scope: punctuation.definition.interpolation.zen
+      push: template-interpolation
+    - include: escape-sequences
+
+  template-interpolation:
+    - meta_scope: meta.interpolation.template.zen
+    - match: '\}'
+      scope: punctuation.definition.interpolation.zen
+      pop: true
+    - include: main
+
+  functions:
+    - match: '(\w+)(\s*)(\()'
+      captures:
+        1: entity.name.function.zen
+        3: punctuation.definition.parameters.zen

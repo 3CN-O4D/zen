@@ -33,7 +33,9 @@ find_all(".result").each(function(el) {
 python3 zen.pyz script.z
 
 # Or from source:
-pip install -r requirements.txt && pip install -e .
+git clone https://github.com/ecnord/zen.git
+cd zen
+pip install -e .
 ```
 
 ## Usage Modes
@@ -49,7 +51,37 @@ pip install -r requirements.txt && pip install -e .
 
 ## Documentation
 
-Full language reference: [`ZEN_101.md`](ZEN_101.md)
+📖 **Full Documentation**: [https://ecnord.github.io/zen](https://ecnord.github.io/zen)
+
+### Quick Links
+
+- [Getting Started](https://ecnord.github.io/zen/getting-started/installation/)
+- [Language Reference](https://ecnord.github.io/zen/language/overview/)
+- [Browser Automation](https://ecnord.github.io/zen/browser/overview/)
+- [Modules](https://ecnord.github.io/zen/modules/overview/)
+- [CLI Reference](https://ecnord.github.io/zen/cli/)
+- [Examples](https://ecnord.github.io/zen/examples/overview/)
+
+## Editor Support
+
+Zen includes syntax highlighting for major editors:
+
+| Editor | Installation |
+|--------|--------------|
+| **VSCode** | Copy `editors/vscode` to `~/.vscode/extensions/` |
+| **Vim/Neovim** | Copy `editors/vim/syntax/zen.vim` to `~/.vim/syntax/` |
+| **Helix** | Copy `editors/helix/languages.toml` to `~/.config/helix/` |
+| **Sublime Text** | Copy `editors/sublime-text/zen.sublime-syntax` to Packages |
+
+See [Editor Setup](https://ecnord.github.io/zen/editors/vscode/) for detailed instructions.
+
+## Language Features
+
+- **Clean Syntax**: Python-like readability with JavaScript-inspired features
+- **Browser Automation**: CSS selectors, text finding, screenshots, JavaScript execution
+- **Rich Standard Library**: File system, HTTP, crypto, threading, WhatsApp
+- **Modern Features**: Arrow functions, template literals, list comprehensions, destructuring
+- **Performance**: Automatic bytecode compilation for 100-250× speedup on hot paths
 
 ## Author
 

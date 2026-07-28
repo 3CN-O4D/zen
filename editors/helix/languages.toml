@@ -1,0 +1,38 @@
+# Zen language support for Helix
+# Detection: file extension .z
+
+[[language]]
+name = "zen"
+language-servers = []
+autoclose = true
+comment-tokens = ["//", "#"]
+block-comment-tokens = { start = "/*", end = "*/" }
+grammar = "zen"
+
+[[language.auto-pairs]]
+open = "("
+close = ")"
+
+[[language.auto-pairs]]
+open = "["
+close = "]"
+
+[[language.auto-pairs]]
+open = "{"
+close = "}"
+
+[[language.auto-pairs]]
+open = "\""
+close = "\""
+
+[[language.auto-pairs]]
+open = "'"
+close = "'"
+
+[[language.auto-pairs]]
+open = "`"
+close = "`"
+
+[[grammar]]
+name = "zen"
+source = "git+https://github.com/ecnord/tree-sitter-zen"

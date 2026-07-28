@@ -1,0 +1,35 @@
+{
+  "name": "zen-language",
+  "displayName": "Zen Language",
+  "description": "Syntax highlighting for Zen browser automation language",
+  "version": "0.1.0",
+  "publisher": "ecnord",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "zen",
+        "aliases": [
+          "Zen",
+          "zen"
+        ],
+        "extensions": [
+          ".z"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zen",
+        "scopeName": "source.zen",
+        "path": "./syntaxes/zen.tmLanguage.json"
+      }
+    ]
+  }
+}
