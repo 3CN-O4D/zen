@@ -540,7 +540,8 @@ class Shell:
         print(f'  {Y("continue")} — skip to next iteration')
         print(f'  {Y("try")} {{ }} {Y("catch")} err {{ }}   (optional error var)')
         print(f'  {Y("try")} {{ }} {Y("catch")} {{ }} {Y("finally")} {{ }}')
-        print(f'  {Y("include \"file.z\"")}  — Include and run another Zen file')
+        _inc = 'include "file.z"'
+        print(f'  {Y(_inc)}  — Include and run another Zen file')
         print()
         print(C('Selectors'))
         print(f'  {Y("CSS:")}       find("div.class"), find_all("a[href]")')
@@ -781,7 +782,7 @@ class Shell:
         if expr == 'include':
             print(Y('include'))
             print()
-            print(f'  {C("include \"file.z\"")} — Include and run another Zen file')
+            print(f'  {C(_inc)} — Include and run another Zen file')
             print()
             print('  All functions, variables, and assignments in the included file')
             print('  become available in the current scope.')

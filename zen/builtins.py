@@ -957,6 +957,14 @@ def register_builtins(env, browser):
     env.define('sh', lambda cmd: _exec_cmd(str(cmd)))
     env.define('system', lambda cmd: _exec_cmd(str(cmd)))
 
+    # File object
+    from .environment import ZenFile
+    env.define('file', lambda path, mode='r': ZenFile(str(path), str(mode)))
+
+    # Bytes object
+    from .environment import ZenBytes
+    env.define('bytes', lambda data='': ZenBytes(data))
+
     env.define('python', lambda code, **kwargs: _exec_python(str(code), kwargs.get('globals')))
     env.define('lua', lambda code: _exec_lua(str(code)))
 

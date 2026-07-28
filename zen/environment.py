@@ -637,3 +637,181 @@ class ConfigModule:
 
     def __repr__(self):
         return f'<config: {dict(self._data)}>'
+
+
+class ZenBytes:
+    """Binary data type for Zen."""
+
+    def __init__(self, data):
+        if isinstance(data, bytes):
+            self._data = data
+        elif isinstance(data, str):
+            self._data = data.encode('utf-8')
+        elif isinstance(data, list):
+            self._data = bytes(data)
+        elif isinstance(data, ZenBytes):
+            self._data = data._data
+        else:
+            self._data = str(data).encode('utf-8')
+
+    def decode(self, encoding='utf-8'):
+        """Decode bytes to string."""
+        return self._data.decode(encoding)
+
+    def hex(self):
+        """Return hex representation."""
+        return self._data.hex()
+
+    @property
+    def len(self):
+        """Return length of bytes."""
+        return len(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return ZenBytes(self._data[index])
+        return self._data[index]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __add__(self, other):
+        if isinstance(other, ZenBytes):
+            return ZenBytes(self._data + other._data)
+        if isinstance(other, bytes):
+            return ZenBytes(self._data + other)
+        if isinstance(other, str):
+            return ZenBytes(self._data + other.encode('utf-8'))
+        return ZenBytes(self._data + str(other).encode('utf-8'))
+
+    def __eq__(self, other):
+        if isinstance(other, ZenBytes):
+            return self._data == other._data
+        if isinstance(other, bytes):
+            return self._data == other
+        return False
+
+    def __repr__(self):
+        if len(self._data) > 50:
+            return f"<bytes: {self._data[:20]}...{self._data[-20:]}>"
+        return f"<bytes: {self._data}>"
+
+
+class ZenFile:
+    """File object for Zen with .read(), .write(), .info() methods."""
+
+    def __init__(self, path, mode='r'):
+        self._path = path
+        self._mode = mode
+        self._file = None
+
+    def open(self, mode=None):
+        """Open the file with the given mode."""
+        if mode:
+            self._mode = mode
+        if self._file:
+            self._file.close()
+        self._file = open(self._path, self._mode)
+        return self
+
+    def close(self):
+        """Close the file."""
+        if self._file:
+            self._file.close()
+            self._file = None
+
+    def read(self, mode=None, lines=None):
+        """Read from file.
+
+        Args:
+            mode: 'r' for text (default), 'b' for binary
+            lines: Number of lines to read (text mode only). None = all.
+
+        Returns:
+            String (text mode) or ZenBytes (binary mode)
+        """
+        if mode == 'b':
+            with open(self._path, 'rb') as f:
+                if lines:
+                    data = b''
+                    for i in range(lines):
+                        line = f.readline()
+                        if not line:
+                            break
+                        data += line
+                    return ZenBytes(data)
+                return ZenBytes(f.read())
+        else:
+            with open(self._path, 'r', encoding='utf-8') as f:
+                if lines:
+                    result = []
+                    for i in range(lines):
+                        line = f.readline()
+                        if not line:
+                            break
+                        result.append(line.rstrip('\n'))
+                    return result
+                return f.read()
+
+    def write(self, data, mode='w'):
+        """Write to file.
+
+        Args:
+            data: Data to write (string, bytes, or list)
+            mode: 'w' for write, 'a' for append, 'wb' for binary write
+        """
+        if mode == 'wb':
+            if isinstance(data, ZenBytes):
+                data = data._data
+            elif isinstance(data, str):
+                data = data.encode('utf-8')
+            with open(self._path, 'wb') as f:
+                f.write(data)
+        else:
+            if isinstance(data, ZenBytes):
+                data = data.decode()
+            elif isinstance(data, list):
+                data = '\n'.join(str(x) for x in data)
+            with open(self._path, mode, encoding='utf-8') as f:
+                f.write(str(data))
+
+    def append(self, data):
+        """Append to file."""
+        self.write(data, mode='a')
+
+    def info(self):
+        """Get file information.
+
+        Returns:
+            Dict with file info: name, path, size, exists, is_file, is_dir
+        """
+        import os
+        exists = os.path.exists(self._path)
+        return {
+            'name': os.path.basename(self._path),
+            'path': os.path.abspath(self._path),
+            'dir': os.path.dirname(os.path.abspath(self._path)),
+            'size': os.path.getsize(self._path) if exists else 0,
+            'exists': exists,
+            'is_file': os.path.isfile(self._path) if exists else False,
+            'is_dir': os.path.isdir(self._path) if exists else False,
+            'ext': os.path.splitext(self._path)[1],
+        }
+
+    def exists(self):
+        """Check if file exists."""
+        import os
+        return os.path.exists(self._path)
+
+    def __enter__(self):
+        self.open()
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def __repr__(self):
+        return f"<file: {self._path}>"
