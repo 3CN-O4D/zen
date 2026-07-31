@@ -3,6 +3,13 @@ import re as _re
 import time as _time
 from .environment import ZenElement, ZenSelector, ZenList, ZenRegexMatch, ZenError, ZenBrowserError
 
+_SOUP_AVAILABLE = False
+try:
+    from .soup_page import SoupPage
+    _SOUP_AVAILABLE = True
+except ImportError:
+    pass
+
 _URL_RE = _re.compile(r'^[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
 _config = {
@@ -117,7 +124,7 @@ class Browser:
     def has_browser(self):
         if self._no_browser or self._mode == 'none':
             return False
-        if self._mode == 'http':
+        if self._mode in ('http', 'soup'):
             return True
         return self._drission is not None
 
@@ -173,9 +180,14 @@ class Browser:
 
     @property
     def user_agent(self):
+        if self._mode == 'soup':
+            return self.page._session.headers.get('User-Agent', '')
         return self.page.run_js('navigator.userAgent')
 
     def set_user_agent(self, ua):
+        if self._mode == 'soup':
+            self.page._session.headers.update({'User-Agent': str(ua)})
+            return True
         self.page.run_js(f'''
             Object.defineProperty(navigator, "userAgent", {{
                 get: () => "{ua}",
@@ -185,7 +197,7 @@ class Browser:
         return True
 
     def set_headers(self, headers):
-        if self._mode == 'http':
+        if self._mode in ('http', 'soup'):
             self.page.set.headers(headers)
         else:
             for k, v in headers.items():
@@ -214,7 +226,14 @@ class Browser:
     def start(self):
         if self._drission is not None:
             return self
-        if self._mode == 'http':
+        if self._mode == 'soup':
+            if not _SOUP_AVAILABLE:
+                self._no_browser = (
+                    "SoupPage not available. Install dependencies:\n"
+                    "  pip install requests beautifulsoup4 lxml\n")
+                return self
+            self._drission = SoupPage()
+        elif self._mode == 'http':
             from DrissionPage import SessionPage
             self._drission = SessionPage()
         elif self._mode == 'connect':
@@ -407,26 +426,42 @@ class Browser:
         _time.sleep(int(ms) / 1000.0)
 
     def wait_for(self, selector):
+        if self._mode == 'soup':
+            return  # no-op, page is already loaded
         loc = self._find_locator(selector)
         if isinstance(loc, str):
             self._safe(lambda: self.page.wait.eles_loaded(loc), f'waiting for "{selector}"')
 
     def wait_for_network(self):
+        if self._mode == 'soup':
+            return  # no-op
         self._safe(lambda: self.page.wait.doc_loaded(), 'waiting for network idle')
 
     def refresh(self):
+        if self._mode == 'soup':
+            self._safe(lambda: self.page.refresh(), 'refreshing')
+            self._record_url()
+            return
         self._safe(lambda: self.page.refresh(), 'refreshing')
         self._record_url()
 
     def back(self):
+        if self._mode == 'soup':
+            self._safe(lambda: self.page.back(), 'going back')
+            self._record_url()
+            return
         self._safe(lambda: self.page.back(), 'going back')
         self._record_url()
 
     def forward(self):
+        if self._mode == 'soup':
+            raise ZenError("Forward not supported in soup mode")
         self._safe(lambda: self.page.forward(), 'going forward')
         self._record_url()
 
     def shot(self, path, full=False):
+        if self._mode == 'soup':
+            raise ZenError("Screenshots require a browser. Use --headful or --headless.")
         dirname = os.path.dirname(str(path))
         if dirname and not os.path.exists(dirname):
             os.makedirs(dirname, exist_ok=True)
@@ -434,6 +469,8 @@ class Browser:
                    'taking screenshot')
 
     def scroll(self, direction=None, x=None, y=None):
+        if self._mode == 'soup':
+            return  # no-op
         if direction == 'top':
             self._safe(lambda: self.page.scroll.to_top(), 'scrolling')
         elif direction == 'bottom':
@@ -442,8 +479,16 @@ class Browser:
             self._safe(lambda: self.page.run_js(f'window.scrollBy({x}, {y})'), 'scrolling')
 
     def execute(self, code):
+        if self._mode == 'soup':
+            raise ZenError("execute() / js() requires a browser. Use --headful or --headless.")
         code = str(code).strip()
-        if not code.startswith('return ') and not code.startswith('return\n'):
+        if code.startswith('return ') or code.startswith('return\n'):
+            return self._safe(lambda: self.page.run_js(code), 'executing JS')
+        stmt_keywords = ('var ', 'let ', 'const ', 'if ', 'for ', 'while ', 'function ',
+                         'switch ', 'try ', 'throw ')
+        if any(code.startswith(kw) for kw in stmt_keywords):
+            code = 'return (function(){ ' + code + ' })()'
+        else:
             code = 'return ' + code
         return self._safe(lambda: self.page.run_js(code), 'executing JS')
 
@@ -451,6 +496,8 @@ class Browser:
         return self._safe(lambda: self.page.html, 'getting page HTML')
 
     def page_text_markers(self):
+        if self._mode == 'soup':
+            return self._safe(lambda: self._soup_text_markers(), 'extracting page text')
         js = """
         function extract(root) {
             let parts = [];
@@ -486,27 +533,72 @@ class Browser:
         """
         return self._safe(lambda: self.page.run_js(js), 'extracting page text')
 
+    def _soup_text_markers(self):
+        from bs4 import Comment, NavigableString
+        parts = []
+        def walk(tag, block=False):
+            for child in tag.children:
+                if isinstance(child, Comment):
+                    continue
+                if isinstance(child, NavigableString):
+                    t = str(child).strip()
+                    if t:
+                        parts.append(t)
+                elif child.name in ('br',):
+                    parts.append('\n')
+                elif child.name in ('img',):
+                    parts.append('{[image]}')
+                elif child.name in ('video',):
+                    parts.append('{[video]}')
+                elif child.name in ('audio',):
+                    parts.append('{[audio]}')
+                elif child.name in ('iframe',):
+                    parts.append('{[iframe]}')
+                elif child.name in ('script', 'style'):
+                    continue
+                elif child.name in ('p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'):
+                    walk(child, block=True)
+                else:
+                    walk(child)
+            if block and parts:
+                last = parts[-1]
+                if isinstance(last, str) and not last.endswith('\n'):
+                    parts.append('\n')
+        if self.page._soup and self.page._soup.body:
+            walk(self.page._soup.body)
+        return ' '.join(str(p) for p in parts).replace(' \n', '\n').strip()
+
     def page_links(self):
+        if self._mode == 'soup':
+            return self._safe(lambda: _soup_links(self.page), 'getting page links')
         return self._safe(
             lambda: self.page.run_js('return [...document.querySelectorAll("a[href]")].map(a => a.href)'),
             'getting page links')
 
     def page_images(self):
+        if self._mode == 'soup':
+            return self._safe(lambda: _soup_images(self.page), 'getting page images')
         return self._safe(
             lambda: self.page.run_js('return [...document.querySelectorAll("img[src]")].map(img => img.src)'),
             'getting page images')
 
     def page_forms(self):
+        if self._mode == 'soup':
+            return self._safe(lambda: _soup_forms(self.page), 'getting page forms')
         return self._safe(
             lambda: self.page.run_js('return [...document.querySelectorAll("form")].map(f => ({action: f.action || "", method: f.method || "get", id: f.id || "", inputs: [...f.querySelectorAll("input, select, textarea")].map(i => ({name: i.name || "", type: i.type || "text", id: i.id || "", placeholder: i.placeholder || ""}))}))'),
             'getting page forms')
 
     def page_inputs(self):
+        if self._mode == 'soup':
+            return self._safe(lambda: _soup_inputs(self.page), 'getting page inputs')
         return self._safe(
             lambda: self.page.run_js('return [...document.querySelectorAll("input, select, textarea")].map(i => ({name: i.name || "", type: i.type || "text", id: i.id || "", placeholder: i.placeholder || "", value: i.value || "", disabled: i.disabled, readonly: i.readOnly, required: i.required, checked: i.checked || false, tag: i.tagName.toLowerCase()}))'),
             'getting page inputs')
 
     def page_buttons(self):
+        if self._mode == 'soup':
+            return self._safe(lambda: _soup_buttons(self.page), 'getting page buttons')
         return self._safe(
             lambda: self.page.run_js('return [...document.querySelectorAll("button, input[type=submit], input[type=button], input[type=reset], a.btn, [role=button]")].map(b => ({tag: b.tagName.toLowerCase(), type: b.type || "", id: b.id || "", text: (b.textContent || b.value || "").trim(), href: b.href || "", class: b.className || ""}))'),
             'getting page buttons')
@@ -530,6 +622,16 @@ class Browser:
         return ZenElement(ele)
 
     def find_by_url(self, url, partial=True):
+        if self._mode == 'soup':
+            page = self.page
+            if not page._soup:
+                return None
+            target = str(url)
+            for a in page._soup.find_all('a', href=True):
+                href = a.get('href', '')
+                if (partial and target in href) or (not partial and href == target):
+                    return ZenElement(page.ele('a[href="' + href + '"]'))
+            return None
         js = '''
         (args) => {
             let target = args[0];
@@ -590,3 +692,73 @@ class Browser:
         if not eles:
             return ZenList([])
         return ZenList([ZenElement(el) for el in eles])
+
+
+# ── soup-mode helpers ─────────────────────────────────────────────────
+
+def _soup_links(page):
+    if not page._soup:
+        return []
+    return [a.get('href', '') for a in page._soup.find_all('a', href=True)]
+
+def _soup_images(page):
+    if not page._soup:
+        return []
+    return [img.get('src', '') for img in page._soup.find_all('img', src=True)]
+
+def _soup_forms(page):
+    if not page._soup:
+        return []
+    result = []
+    for f in page._soup.find_all('form'):
+        inputs = []
+        for i in f.find_all(['input', 'select', 'textarea']):
+            inputs.append({
+                'name': i.get('name', ''),
+                'type': i.get('type', 'text'),
+                'id': i.get('id', ''),
+                'placeholder': i.get('placeholder', ''),
+            })
+        result.append({
+            'action': f.get('action', ''),
+            'method': f.get('method', 'get'),
+            'id': f.get('id', ''),
+            'inputs': inputs,
+        })
+    return result
+
+def _soup_inputs(page):
+    if not page._soup:
+        return []
+    result = []
+    for i in page._soup.find_all(['input', 'select', 'textarea']):
+        result.append({
+            'name': i.get('name', ''),
+            'type': i.get('type', 'text'),
+            'id': i.get('id', ''),
+            'placeholder': i.get('placeholder', ''),
+            'value': i.get('value', ''),
+            'disabled': i.get('disabled') is not None,
+            'readonly': i.get('readonly') is not None,
+            'required': i.get('required') is not None,
+            'checked': i.get('checked') is not None,
+            'tag': i.name,
+        })
+    return result
+
+def _soup_buttons(page):
+    if not page._soup:
+        return []
+    result = []
+    for b in page._soup.find_all(['button', 'a']):
+        role = b.get('role', '')
+        if b.name == 'button' or b.get('type') in ('submit', 'button') or role == 'button' or b.name == 'a':
+            result.append({
+                'tag': b.name,
+                'type': b.get('type', ''),
+                'id': b.get('id', ''),
+                'text': (b.get_text(strip=True) or b.get('value', '')),
+                'href': b.get('href', ''),
+                'class': ' '.join(b.get('class', [])),
+            })
+    return result

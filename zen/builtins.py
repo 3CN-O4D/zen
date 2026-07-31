@@ -870,6 +870,7 @@ def register_builtins(env, browser):
     env.define('forward', lambda: browser.forward())
     env.define('shot', lambda path, full=False: browser.shot(str(path), bool(full)))
     env.define('execute', lambda code: browser.execute(str(code)))
+    env.define('js', lambda code: browser.execute(str(code)))
     env.define('uri', lambda: browser.url())
     env.define('title', lambda: browser.title())
     env.define('user_agent', lambda: browser.user_agent)

@@ -785,6 +785,11 @@ class Interpreter:
                 if not _is_truthy(left):
                     return left
                 return self._eval(node.right)
+            elif node_op == '??':
+                left = self._eval(node.left)
+                if left is not None:
+                    return left
+                return self._eval(node.right)
 
             if node_op in _COMPARE_OPS:
                 left = self._eval(node.left)

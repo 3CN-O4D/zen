@@ -34,7 +34,8 @@ def _add_browser_args(sp):
                     help='Path to Chromium browser executable (e.g. /usr/bin/brave)')
     sp.add_argument('--connect', nargs='?', const=9222, type=int, default=None,
                     help='Connect to running browser on port (default 9222)')
-    sp.add_argument('--http', action='store_true', help='HTTP-only mode (no browser, uses requests)')
+    sp.add_argument('--http', action='store_true', help='HTTP-only mode (no browser, uses DrissionPage SessionPage)')
+    sp.add_argument('--soup', action='store_true', help='Soup mode (no browser, uses requests + BeautifulSoup)')
     sp.add_argument('--no-browser', action='store_true', help='Language-only mode (no browser)')
 
 
@@ -125,7 +126,9 @@ Examples:
         return
 
     browser_mode = 'browser'
-    if getattr(args, 'http', False):
+    if getattr(args, 'soup', False):
+        browser_mode = 'soup'
+    elif getattr(args, 'http', False):
         browser_mode = 'http'
     elif getattr(args, 'connect', None) is not None:
         browser_mode = 'connect'

@@ -409,6 +409,10 @@ class Parser:
                 break
             if next_brace > i:
                 parts.append((False, value[i:next_brace]))
+            if next_brace == i:
+                parts.append((False, value[i]))
+                i += 1
+                continue
             i = next_brace
         if len(parts) == 1 and not parts[0][0]:
             return self._node(ast.Literal, parts[0][1])
@@ -888,6 +892,7 @@ class Parser:
         'TO', 'BY', 'FULL', 'TOP', 'BOTTOM', 'INCLUDE', 'IMPORT', 'REQUIRE',
         'CLASS', 'EXTENDS', 'NEW', 'SELF', 'SWITCH', 'CASE', 'DEFAULT', 'AS',
         'TYPEOF', 'THROW', 'RAISE', 'ASSERT', 'LAMBDA',
+        'LOAD', 'USE',
     }
 
     def _parse_one_call_arg(self, args, kwargs):
