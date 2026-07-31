@@ -16,6 +16,10 @@ authors = [
 
 dependencies = [
     "DrissionPage>=4.1.0",
+    "requests>=2.28.0",
+    "beautifulsoup4>=4.9",
+    "lxml>=4.9",
+    "psutil>=5.9",
 ]
 
 [project.urls]

@@ -48,6 +48,28 @@ brew install --cask chromium
 
 Download and install [Google Chrome](https://www.google.com/chrome/) or [Chromium](https://www.chromium.org/).
 
+### Termux (Android)
+
+Termux's pip cannot build the C-extension dependencies (`psutil`, `lxml`), so install them from the apt repos first:
+
+```bash
+pkg update
+pkg install python-psutil python-lxml
+pip install -e .
+```
+
+> `python-psutil` is needed by DrissionPage (browser mode), `python-lxml` by
+> soup mode (`--soup`). The apt packages ship their `.dist-info`, so pip treats
+> them as already installed and skips building them from source.
+
+Or use the install script, which does this automatically:
+
+```bash
+git clone https://github.com/ecnord/zen.git
+cd zen
+./install.sh
+```
+
 ### Headless Servers
 
 On headless servers (no display), Zen runs in headless mode by default. For sites that detect headless browsers:

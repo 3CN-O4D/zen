@@ -15,11 +15,29 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+Or use the install script (handles Termux system deps automatically):
+
+```bash
+./install.sh
+```
+
 ## Requirements
 
 - Python 3.8+
 - Chrome or Chromium browser (for full browser automation)
-- DrissionPage (installed automatically with pip)
+- DrissionPage, requests, beautifulsoup4, lxml, psutil (installed automatically with pip)
+
+## Termux (Android)
+
+pip cannot build the C-extension deps on Termux. Install them from apt first:
+
+```bash
+pkg update
+pkg install python-psutil python-lxml
+pip install -e .
+```
+
+or just run `./install.sh`, which does this automatically.
 
 ## Verify
 
