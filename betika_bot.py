@@ -45,6 +45,7 @@ class BetikaBot:
             'auto_stake': True,
             'stake_step': 1.0,
             'dd_stop': True,
+            'wait_low_balance': False,
         }
         self.start_bankroll = 0
         self.recovery_stake = 0.0
@@ -515,8 +516,13 @@ class BetikaBot:
             self.peak = max(self.peak, self.bankroll)
 
             if self.bankroll < self.config['stake']:
-                print(f'\n  ❌ Balance KES {self.bankroll:.2f} too low to continue. Need ≥ KES {self.config["stake"]}.')
-                break
+                print(f'\n  ❌ Balance KES {self.bankroll:.2f} too low to continue. Need ≥ KES {self.config["stake"]}.', flush=True)
+                if not self.config['wait_low_balance']:
+                    break
+                print(f'  Waiting for top-up... checking every {POLL_SECS}s (Ctrl-C to stop)', flush=True)
+                time.sleep(POLL_SECS)
+                self.round -= 1
+                continue
 
             round_stake = self.compute_stake()
             recovering = self.recovery_deficit() > 0
@@ -694,6 +700,9 @@ Strategy notes:
     safety = parser.add_argument_group('Safety')
     safety.add_argument('--no-dd-stop', dest='dd_stop', action='store_false', default=None,
                         help='disable the drawdown stop and keep grinding')
+    safety.add_argument('--wait-low-balance', dest='wait_low_balance', action='store_true',
+                        default=False,
+                        help='keep polling (instead of exiting) until balance >= stake')
 
     sess = parser.add_argument_group('Login fallback (only if no saved session)')
     sess.add_argument('--phone', default='254726498682',
@@ -715,6 +724,7 @@ Strategy notes:
         bot.config['auto_stake'] = args.auto_stake
     if args.dd_stop is not None:
         bot.config['dd_stop'] = args.dd_stop
+    bot.config['wait_low_balance'] = args.wait_low_balance
     try:
         bot.run()
     except KeyboardInterrupt:
