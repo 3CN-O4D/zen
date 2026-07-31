@@ -11,7 +11,8 @@ from datetime import datetime
 from pathlib import Path
 
 POLL_SECS = 30
-DATA_DIR = Path(os.environ.get('BETIKA_DATA_DIR', '/tmp/betika_data'))
+SCRIPT_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get('BETIKA_DATA_DIR') or (SCRIPT_DIR / 'betika_data'))
 os.makedirs(DATA_DIR, exist_ok=True)
 
 API = 'https://virtuals.betika.com/v1/matches'

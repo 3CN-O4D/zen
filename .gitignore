@@ -20,6 +20,7 @@ zen/lib/package-lock.json
 *.txt
 *.z
 wa_auth/
+betika_data/
 test_img_dir/
 test_zen_dir/
 moi_pdfs/

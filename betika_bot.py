@@ -5,7 +5,8 @@ from pathlib import Path
 
 POLL_SECS = 20
 MATCH_DURATION_SECS = 180
-DATA_DIR = Path(os.environ.get('BETIKA_DATA_DIR', '/tmp/betika_data'))
+SCRIPT_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get('BETIKA_DATA_DIR') or (SCRIPT_DIR / 'betika_data'))
 os.makedirs(DATA_DIR, exist_ok=True)
 
 API_BASE = 'https://api.betika.com/v1/'
@@ -69,7 +70,11 @@ class BetikaBot:
             if self.token:
                 self.session.headers['Authorization'] = f'Bearer {self.token}'
                 bal, _ = self.get_balance()
+                if bal is None:
+                    self.warmup()
+                    bal, _ = self.get_balance()
                 if bal is not None:
+                    self.save_session()
                     return True
         except: pass
         return False
@@ -476,13 +481,13 @@ class BetikaBot:
 
     def run(self):
         self.print_header()
+        if not self.warmup():
+            print("Failed to warmup session"); return
         if self.load_session():
             bal, bonus = self.get_balance()
             print(f'  Loaded saved session (user {self.user_id})')
         else:
             print('  No valid saved session, logging in...')
-            if not self.warmup():
-                print("Failed to warmup session"); return
             ok, err = self.login()
             if not ok:
                 print(f"Login failed: {err}"); return
@@ -624,22 +629,77 @@ class BetikaBot:
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--phone', default='254726498682')
-    parser.add_argument('--password', default='34266775')
-    parser.add_argument('--stake', type=float, default=5.0)
-    parser.add_argument('--bets', type=int, default=3)
-    parser.add_argument('--min-odds', type=float, default=1.40)
-    parser.add_argument('--min-edge', type=float, default=-0.10)
-    parser.add_argument('--max-exposure', type=float, default=0.8)
-    parser.add_argument('--recovery', dest='recovery', action='store_true', default=None)
-    parser.add_argument('--no-recovery', dest='recovery', action='store_false')
-    parser.add_argument('--recovery-multiplier', type=float, default=3.0)
-    parser.add_argument('--stake-step', type=float, default=1.0)
-    parser.add_argument('--auto-stake', dest='auto_stake', action='store_true', default=None)
-    parser.add_argument('--no-auto-stake', dest='auto_stake', action='store_false')
-    parser.add_argument('--no-dd-stop', dest='dd_stop', action='store_false', default=None)
-    parser.add_argument('--live', action='store_true')
+
+    def _epilog():
+        return f'''
+Data & session:
+  Betika session (token + cookies) lives in {DATA_DIR}.
+  Set BETIKA_DATA_DIR to override the data directory.
+
+Examples:
+  python3 betika_bot.py                            dry run (no real bets)
+  python3 betika_bot.py --live --stake 2 --bets 1 --min-odds 1.40 \\
+      --auto-stake --stake-step 1.0                live, small grind
+  python3 betika_bot.py --live --no-dd-stop        live, grind indefinitely
+  python3 betika_bot.py --help                     show this menu
+
+Strategy notes:
+  - EV filter: skips picks whose edge is below --min-edge.
+  - Recovery: after a loss, next stake = stake x multiplier.
+  - Drawdown stop: pauses at the persisted peak balance unless --no-dd-stop.
+'''
+
+    parser = argparse.ArgumentParser(
+        prog='betika_bot.py',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            'Betika Virtuals Betting Bot — adaptive staking with EV filter, '
+            'recovery, and drawdown protection. Runs with a saved session '
+            '(token) by default; login is used only as a fallback.'
+        ),
+        epilog=_epilog(),
+    )
+    mode = parser.add_argument_group('Mode')
+    mode.add_argument('--live', action='store_true',
+                      help='Place REAL bets (default is a dry run)')
+
+    strat = parser.add_argument_group('Strategy')
+    strat.add_argument('--stake', type=float, default=5.0,
+                       help='base stake per bet (default 5.0)')
+    strat.add_argument('--bets', type=int, default=3,
+                       help='bets per round (default 3)')
+    strat.add_argument('--min-odds', type=float, default=1.40,
+                       help='only bet odds >= this (default 1.40)')
+    strat.add_argument('--min-edge', type=float, default=-0.10,
+                       help='minimum EV edge to take a pick (default -0.10)')
+    strat.add_argument('--max-exposure', type=float, default=0.8,
+                       help='max fraction of balance staked per round (default 0.8)')
+
+    rec = parser.add_argument_group('Recovery')
+    rec.add_argument('--recovery', dest='recovery', action='store_true', default=None,
+                     help='enable loss recovery (default)')
+    rec.add_argument('--no-recovery', dest='recovery', action='store_false',
+                     help='disable loss recovery')
+    rec.add_argument('--recovery-multiplier', type=float, default=3.0,
+                     help='stake multiplier after a loss (default 3.0)')
+
+    stake = parser.add_argument_group('Staking')
+    stake.add_argument('--auto-stake', dest='auto_stake', action='store_true', default=None,
+                       help='auto-size stakes to balance (default)')
+    stake.add_argument('--no-auto-stake', dest='auto_stake', action='store_false',
+                       help='use a flat --stake every bet')
+    stake.add_argument('--stake-step', type=float, default=1.0,
+                       help='stake increment step for auto-stake (default 1.0)')
+
+    safety = parser.add_argument_group('Safety')
+    safety.add_argument('--no-dd-stop', dest='dd_stop', action='store_false', default=None,
+                        help='disable the drawdown stop and keep grinding')
+
+    sess = parser.add_argument_group('Login fallback (only if no saved session)')
+    sess.add_argument('--phone', default='254726498682',
+                      help='Betika phone number')
+    sess.add_argument('--password', default='34266775',
+                      help='Betika password')
     args = parser.parse_args()
     bot = BetikaBot(phone=args.phone, password=args.password, dry_run=not args.live)
     if args.stake: bot.config['stake'] = args.stake
