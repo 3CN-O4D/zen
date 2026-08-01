@@ -884,49 +884,111 @@ if __name__ == '__main__':
 
     def _epilog():
         return f'''
-Data & session:
-  Betika session (token + cookies) lives in {DATA_DIR}.
-  Set BETIKA_DATA_DIR to override the data directory.
+═══════════════════════════ QUICK START ═══════════════════════════
 
-Examples:
-  python3 betika_bot.py                            dry run (no real bets)
-  python3 betika_bot.py --live --stake 2 --bets 1 --min-odds 1.50 \\
-      --max-stake 5 --auto-stake --stake-step 1.0  live, small grind
-  python3 betika_bot.py --live --no-dd-stop        live, grind indefinitely
-  python3 betika_bot.py --live --min-odds 1.50 \\
-      --max-stake 5 --no-recovery                  conservative flat
-  python3 betika_bot.py --help                     show this menu
+Dry run first (no real money):
+  python3 betika_bot.py
 
-  python3 betika_bot.py --live --min-odds 1.50 --max-stake 5 \\
-      --stop bal50 --profit 39               stop at bal 50 or profit 39
-  python3 betika_bot.py --live --min-odds 1.50 \\
-      --stop "losses5,loss20"                stop after 5 losses or -KES20
+Live once you trust it:
+  python3 betika_bot.py --live --stake 2 --bets 1 --min-odds 1.50
+
+Recommended safe grind (small bankroll):
   python3 betika_bot.py --live --micro --no-bets-after 23:00 \\
-      --no-dd-stop --stop "profit10,loss15"  micro grind for a tiny bankroll
+      --no-dd-stop --stop "profit10,loss15"
 
-Strategy notes:
-  - EV filter: skips picks whose edge is below --min-edge.
-  - Min odds: --min-odds is a hard floor; no bet is ever placed below it.
-    The bot NEVER raises min odds to chase wins — it only adjusts stakes.
-  - Odds band: --min-odds/--max-odds set the profitable window (1.50-1.70
-    showed the best ROI; sub-1.50 loses money).
-  - Away bias: --away-only bets HOME-side-excluded picks (AWAY +20% ROI).
-  - Pick timing: matches are picked soonest-starting first (in-play before
-    pre-match), so it never waits on a match 8 min out when one starts now.
-  - Recovery: grinds the base stake on low-odds, soonest-starting matches
-    (no martingale multiplier), capped by --max-stake and --max-exposure.
-  - Auto-stake: ramps stake after profitable rounds ONLY while bankroll
-    >= 2x stake and no recovery deficit is pending; shrinks when low.
-  - Tiny bankrolls: below --low-bal-threshold the exposure cap drops to
-    --low-bal-exposure so one round can't wipe the account; stakes never
-    fall below --min-stake.
-  - Late cutoff: --no-bets-after HH:MM pauses betting for the rest of the
-    day (23:00+ was the worst window) and resumes at midnight.
-  - Stop targets: --stop accepts bal50, profit39, wins10, losses20, loss30
-    (comma-separated). --profit N is shorthand for --stop profitN.
-  - Drawdown stop: pauses at the persisted peak balance unless --no-dd-stop.
-  - Recovery baseline: defaults to the balance at launch; --starting-balance
-    overrides it so a restart mid-loss still counts as "recovering".
+═══════════════════════════ EXAMPLES ═══════════════════════════
+
+  python3 betika_bot.py --live --stake 2 --bets 1 --min-odds 1.50 \\
+      --max-stake 5 --auto-stake --stake-step 1.0   live, small grind
+  python3 betika_bot.py --live --no-dd-stop          grind indefinitely
+  python3 betika_bot.py --live --min-odds 1.50 \\
+      --max-stake 5 --no-recovery                    conservative flat
+  python3 betika_bot.py --live --min-odds 1.50 --max-stake 5 \\
+      --stop bal50 --profit 39                 stop at bal 50 or profit 39
+  python3 betika_bot.py --live --min-odds 1.50 \\
+      --stop "losses5,loss20"                  stop after 5 losses or -KES20
+  python3 betika_bot.py --live --micro --no-bets-after 23:00 \\
+      --no-dd-stop --stop "profit10,loss15"    micro grind for a tiny bankroll
+  python3 betika_bot.py --live --away-only \\
+      --min-odds 1.50 --max-odds 1.70          AWAY picks in the 1.5-1.7 band
+
+═══════════════════════════ HOW IT PICKS ═══════════════════════════
+
+The bot fetches Betika Virtuals matches and computes implied probabilities
+from the 1X2 odds (after removing the bookmaker margin). It picks the side
+with the highest confidence, then applies a stack of filters:
+
+  1. Odds band     --min-odds / --max-odds  (hard floor + optional ceiling)
+  2. Side bias     --away-only              (bet AWAY (2) only)
+  3. Confidence    --min-confidence         (55% default)
+  4. EV filter     --min-edge               (skip negative-expectation picks)
+  5. No duplicates already-placed bets are skipped
+
+Matches are taken soonest-starting first (in-play before pre-match), so the
+bot never idles on a match 8 minutes out while another starts now.
+
+Picks are scored and the highest-EV ones within the round budget are chosen.
+
+═══════════════════════════ STAKING & RISK ═══════════════════════════
+
+Per-bet stake is capped by THREE limits (the strictest wins):
+  - base stake    --stake
+  - hard cap      --max-stake
+  - bankroll      balance × --max-exposure (0.5 default: risk ≤ 50%)
+
+Tiny bankrolls: when balance drops below --low-bal-threshold (10 KES), the
+exposure cap falls to --low-bal-exposure (0.25) so a single round cannot
+wipe the account. Stakes never drop below --min-stake (1.0, Betika floor).
+
+Auto-staking (--auto-stake, default ON):
+  - raises stake by --stake-step ONLY after profitable rounds
+  - requires profit ≥ --ramp-threshold (5.0) above the start balance
+  - requires bankroll ≥ 3× stake
+  - never raises while a recovery deficit is pending
+
+═══════════════════════════ RECOVERY ═══════════════════════════
+
+Recovery (--recovery, default ON) engages whenever the current balance is
+BELOW the recovery baseline. While recovering the bot:
+  - forces 1 bet per round at the base stake (no martingale multiplier)
+  - sorts picks by soonest start then lowest odds
+  - never increases stake or odds
+
+Baseline: defaults to the balance when the bot launched. Use
+--starting-balance N to pin it to a fixed figure so a restart mid-loss
+still counts as "recovering" toward your real starting bankroll.
+
+═══ STOP TARGETS (--stop, comma-separated, checked every round) ═══
+
+  bal50      stop when balance reaches 50
+  profit39   stop when profit reaches 39
+  wins10     stop after 10 winning bets
+  losses5    stop after 5 losing bets
+  loss20     stop after losing 20 KES in total
+  --profit N is shorthand for --stop profit<N>
+
+═══ OTHER SAFETY ═══
+
+  --no-bets-after HH:MM   pause betting for the rest of the day (the 23:00+
+                          window showed the worst win rate) and resume at
+                          midnight. Handy when running overnight.
+  --no-dd-stop            keep grinding even after a >30% drawdown from peak
+                          (default stops the session to protect the account)
+  --wait-low-balance      instead of exiting when balance < stake, keep
+                          polling until a top-up lands (handy with --micro)
+
+═══════════════════════════ DATA & SESSION ═══════════════════════════
+
+  Session (token + cookies) : {DATA_DIR}/session.json
+  Live state (peak, config) : {DATA_DIR}/state.json
+  Round history             : {DATA_DIR}/bets.json
+  Append-only bet log       : {DATA_DIR}/bet_data.jsonl
+  Console log               : {DATA_DIR}/bot.log  (nohup ... &)
+
+Set BETIKA_DATA_DIR to override the data directory.
+
+The bot runs with a saved session by default; --phone/--password are only
+used as a login fallback if no valid session exists.
 '''
 
     parser = argparse.ArgumentParser(
@@ -952,6 +1014,8 @@ Strategy notes:
                        help='only bet odds >= this (default 1.40)')
     strat.add_argument('--min-edge', type=float, default=-0.10,
                        help='minimum EV edge to take a pick (default -0.10)')
+    strat.add_argument('--min-confidence', dest='min_confidence', type=float, default=55.0,
+                       help='minimum confidence (0-100) to take a pick (default 55)')
     strat.add_argument('--max-odds', type=float, default=0.0,
                        help='upper odds bound for the profitable band (0 = no bound) (default 0)')
     strat.add_argument('--away-only', dest='away_only', action='store_true', default=False,
@@ -1016,6 +1080,7 @@ Strategy notes:
     if args.bets: bot.config['bets_per_round'] = args.bets
     if args.min_odds: bot.config['min_odds'] = args.min_odds
     bot.config['min_edge'] = args.min_edge
+    bot.config['min_confidence'] = args.min_confidence
     bot.config['max_exposure'] = args.max_exposure
     bot.config['max_odds'] = args.max_odds
     bot.config['away_only'] = args.away_only
