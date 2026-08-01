@@ -1052,6 +1052,8 @@ used as a login fallback if no valid session exists.
     mode = parser.add_argument_group('Mode')
     mode.add_argument('--live', action='store_true',
                       help='Place REAL bets (default is a dry run)')
+    mode.add_argument('--balance', dest='check_balance', action='store_true',
+                      help='check balance using the saved session and exit')
 
     strat = parser.add_argument_group('Strategy')
     strat.add_argument('--stake', type=float, default=5.0,
@@ -1165,6 +1167,20 @@ used as a login fallback if no valid session exists.
         bot.config['dd_stop'] = args.dd_stop
     bot.config['wait_low_balance'] = args.wait_low_balance
     bot.set_stop(args.stop, args.profit)
+    if args.check_balance:
+        import sys as _sys
+        bot.print_header()
+        if not bot.warmup():
+            print('  Failed to warmup session'); _sys.exit(1)
+        if bot.load_session():
+            bal, bonus = bot.get_balance()
+        else:
+            print('  No valid saved session — use --phone/--password or run once to save one')
+            _sys.exit(1)
+        if bal is None:
+            print('  Could not fetch balance'); _sys.exit(1)
+        print(f'  Balance: KES {bal:.2f}  (bonus: KES {bonus:.2f})')
+        _sys.exit(0)
     try:
         bot.run()
     except KeyboardInterrupt:
