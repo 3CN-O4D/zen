@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-import requests, json, time, os, sys
-from datetime import datetime
+import requests, json, time, os, sys, shutil, re
+from datetime import datetime, timedelta
 from pathlib import Path
 
 POLL_SECS = 20
+MONITOR_POLL_SECS = 10
 MATCH_DURATION_SECS = 180
+TARGET = 50
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get('BETIKA_DATA_DIR') or (SCRIPT_DIR / 'betika_data'))
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -39,17 +41,35 @@ class BetikaBot:
             'min_odds': 1.40,
             'min_confidence': 55,
             'min_edge': -0.10,
-            'max_exposure': 0.8,
+            'max_exposure': 0.5,
             'recovery': True,
             'recovery_multiplier': 3.0,
             'auto_stake': True,
             'stake_step': 1.0,
             'dd_stop': True,
             'wait_low_balance': False,
+            'max_stake': 10.0,
+            'ramp_threshold': 5.0,
+            'max_odds': 0.0,
+            'away_only': False,
+            'no_bets_after': '',
+            'low_bal_threshold': 10.0,
+            'low_bal_exposure': 0.25,
+            'min_stake': 1.0,
+            'micro': False,
         }
         self.start_bankroll = 0
+        self.starting_balance = 0.0
         self.recovery_stake = 0.0
         self.placed_ids = set()
+        self.stop = []
+        self.cum_wins = 0
+        self.cum_losses = 0
+        self.cum_loss_amt = 0.0
+        self._fresh_matches = None
+        self._tty = sys.stdout.isatty()
+        self._ncols = 2
+        self._cell_w = 34
 
     SESSION_FILE = DATA_DIR / 'session.json'
 
@@ -124,7 +144,7 @@ class BetikaBot:
                 return None, None
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
                 if attempt < 2:
-                    print('    balance fetch failed, retrying...', flush=True)
+                    self.p('    balance fetch failed, retrying...')
                     time.sleep(2 * (attempt + 1))
         return None, None
 
@@ -230,7 +250,7 @@ class BetikaBot:
         }
         if self.dry_run:
             label = PICK_LABEL.get(prediction['pick'], prediction['pick'])
-            print(f"[DRY] Bet KES {stake} @ {prediction['odd_value']} on {label} ({prediction['confidence']}%)")
+            self.p(f"[DRY] Bet KES {stake} @ {prediction['odd_value']} on {label} ({prediction['confidence']}%)")
             return 'dry_run', ''
         r = None
         last_err = None
@@ -240,10 +260,10 @@ class BetikaBot:
                 break
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 last_err = e
-                print(f'    bet placement network error, retrying ({attempt + 1}/3)...', flush=True)
+                self.p(f'    bet placement network error, retrying ({attempt + 1}/3)...')
                 time.sleep(3 * (attempt + 1))
         else:
-            print(f'    bet placement failed after 3 attempts: {last_err}', flush=True)
+            self.p(f'    bet placement failed after 3 attempts: {last_err}')
             return 'network_error', ''
         if r.status_code in (200, 201):
             bet_id = ''
@@ -255,53 +275,103 @@ class BetikaBot:
             return 'success', bet_id
         elif r.status_code == 421:
             msg = r.json().get('message', '')
-            print(f'    [place_bet 421] {msg}', flush=True)
+            self.p(f'    [place_bet 421] {msg}')
             return ('duplicate', '') if 'similar' in msg.lower() else ('insufficient_balance', '')
         else:
             try:
                 msg = r.json().get('message', '')
             except: msg = ''
-            print(f'    [place_bet {r.status_code}] {msg}', flush=True)
+            self.p(f'    [place_bet {r.status_code}] {msg}')
             return 'error', ''
 
     @staticmethod
-    def clock_str(b):
-        st = b.get('start_time', '')
+    def match_phase(start_time):
         try:
-            t0 = datetime.strptime(st, '%Y-%m-%d %H:%M:%S')
+            t0 = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
         except Exception:
-            return ''
-        diff = int((t0 - datetime.now()).total_seconds())
-        if diff > 0:
-            return f'S {diff // 60}:{diff % 60:02d}'
-        elapsed = -diff
-        left = MATCH_DURATION_SECS - elapsed
-        if left > 0:
-            return f'E {left // 60}:{left % 60:02d}'
-        return 'E 0:00'
+            return 'PLAY'
+        diff = (datetime.now() - t0).total_seconds()
+        if diff < 0:
+            return 'PRE'
+        return 'PLAY' if diff < MATCH_DURATION_SECS else 'END'
+
+    def match_progress(self, start_time):
+        try:
+            t0 = datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
+        except Exception:
+            return '--:--', 'E 0:00', 0.0
+        est = (t0 + timedelta(seconds=MATCH_DURATION_SECS)).strftime('%H:%M')
+        diff = (datetime.now() - t0).total_seconds()
+        if diff < 0:
+            s = int(-diff)
+            return est, f'S {s // 60}:{s % 60:02d}', 0.0
+        if diff >= MATCH_DURATION_SECS:
+            return est, 'E 0:00', 1.0
+        left = int(MATCH_DURATION_SECS - diff)
+        return est, f'E {left // 60}:{left % 60:02d}', diff / MATCH_DURATION_SECS
+
+    @staticmethod
+    def progress_bar(frac, width):
+        width = max(width, 4)
+        filled = min(max(int(round(frac * width)), 0), width)
+        return '█' * filled + '░' * (width - filled)
+
+    def money_bar(self, width=46):
+        scale = max(self.peak, self.start_bankroll, TARGET, 1.0)
+        pos = lambda v: min(max(int(round(v / scale * (width - 1))), 0), width - 1)
+        chars = ['░'] * width
+        cur = pos(self.bankroll)
+        for i in range(cur + 1):
+            chars[i] = '█'
+        for ch, v in (('T', TARGET), ('S', self.start_bankroll), ('P', self.peak)):
+            chars[pos(v)] = ch
+        chars[pos(self.bankroll)] = 'C'
+        return ''.join(chars)
+
+    def _grid_layout(self):
+        width = max(shutil.get_terminal_size((80, 24)).columns, 60)
+        ncols = 3 if width >= 126 else 2
+        cell_w = (width - 16) // 3 if ncols == 3 else (width - 12) // 2
+        cell_w = min(max(cell_w, 24), 42)
+        return ncols, cell_w
+
+    def bet_cell(self, b, idx):
+        est, clock, frac = self.match_progress(b.get('start_time'))
+        label = PICK_LABEL.get(b['pick'], b['pick'])
+        result = b.get('result', 'PLACE')
+        result_str = {'PLACE': 'PLACED', 'MONITOR': '● ACTIVE', 'WON': '✓ WON', 'LOST': '✗ LOST'}.get(result, result)
+        if result == 'WON':
+            result_str += f' +{b["stake"] * b["odd_value"]:.2f}'
+        lg = b.get('league', '')[:7]
+        return [
+            f'#{idx} {lg:<7} {clock}  ~{est}',
+            f'{b["home"][:11]:11s} vs {b["away"][:11]:11s}',
+            f'{label:<4} @{b["odd_value"]:.2f} c{b.get("confidence", 0):.0f}% st{b["stake"]:.1f}',
+            f'[{self.progress_bar(frac, self._cell_w - 2)}]',
+            f'{result_str}',
+        ]
+
+    def render_grid(self, cells):
+        ncols, cell_w = self._grid_layout()
+        pad = lambda s: s[:cell_w].ljust(cell_w)
+        maxlines = max(len(c) for c in cells)
+        seg = '─' * (cell_w + 2)
+        lines = ['  ┌' + '┬'.join(seg for _ in range(ncols)) + '┐']
+        for i in range(0, len(cells), ncols):
+            row = [cells[j] for j in range(i, min(i + ncols, len(cells)))]
+            for li in range(maxlines):
+                parts = [pad(c[li] if li < len(c) else '') for c in row]
+                lines.append('  │ ' + ' │ '.join(parts) + ' │')
+        lines.append('  └' + '┴'.join(seg for _ in range(ncols)) + '┘')
+        return lines
 
     def print_bets_table(self, bets, phase):
-        cfg = self.config
         label_phase = {'PLACE': 'PLACING BETS', 'MONITOR': 'MONITORING', 'DONE': 'ROUND COMPLETE'}.get(phase, phase)
-        widths = (5, 32, 13, 8, 8, 8, 9, 7, 8, 11)
-        def box(l, m, r):
-            return '  ' + l + m.join('─' * w for w in widths) + r
-        print(box('┌', '┬', '┐'))
-        print('  │ ' + f'{"#":^3} │ {"Match":^30} │ {"League":^11} │ {"Pick":^6} │ {"Odds":^6} │ {"Conf%":^6} │ {"Stake":^7} │ {"Start":^5} │ {"Clock":^6} │ {"Result":^9} │')
-        print(box('├', '┼', '┤'))
-        for i, b in enumerate(bets, 1):
-            label = PICK_LABEL.get(b['pick'], b['pick'])
-            league = b.get('league', '')[:11]
-            result = b.get('result', phase)
-            result_str = {'PLACE': 'PLACED', 'MONITOR': '● ACTIVE', 'WON': '✓ WON', 'LOST': '✗ LOST'}.get(result, result)
-            home = b['home'][:13]
-            away = b['away'][:13]
-            conf = b.get('confidence', 0)
-            stake = b.get('stake', 0)
-            start = (b.get('start_time') or '')[11:16]
-            clock = self.clock_str(b)
-            print(f'  │ {i:^3d} │ {home:13s} vs {away:13s} │ {league:11s} │ {label:6s} │ {b["odd_value"]:6.2f} │ {conf:5.1f}% │ {stake:7.2f} │ {start:5s} │ {clock:6s} │ {result_str:9s} │')
-        print(box('└', '┴', '┘'))
+        self._ncols, self._cell_w = self._grid_layout()
+        cells = [self.bet_cell(b, i) for i, b in enumerate(bets, 1)]
+        print(f'  ═══ {label_phase} ({len(bets)} bet{"s" if len(bets) != 1 else ""}) ═══')
+        for line in self.render_grid(cells):
+            print(line)
 
     def print_summary(self, bets, bal):
         wins = sum(1 for b in bets if b.get('result') == 'WON')
@@ -311,9 +381,9 @@ class BetikaBot:
         staked = sum(b['stake'] for b in bets if b.get('result') in ('WON', 'LOST'))
         returns = sum(b['stake'] * b['odd_value'] for b in bets if b.get('result') == 'WON')
         pnl = returns - staked
-        print(f'  Bets: {len(bets)} | Won: {wins} | Lost: {losses} | Active: {active}')
-        print(f'  Staked: KES {total_stake} | Returns: KES {returns:.2f} | P&L: KES {pnl:+.2f}')
-        print(f'  Balance: KES {bal:.2f} | Bankroll: KES {self.bankroll:.2f}')
+        self.p(f'  Bets: {len(bets)} | Won: {wins} | Lost: {losses} | Active: {active}')
+        self.p(f'  Staked: KES {total_stake} | Returns: KES {returns:.2f} | P&L: KES {pnl:+.2f}')
+        self.p(f'  Balance: KES {bal:.2f} | Bankroll: KES {self.bankroll:.2f}')
 
     def get_bet_statuses(self):
         try:
@@ -352,6 +422,22 @@ class BetikaBot:
         except:
             return set()
 
+    def upcoming_matches(self, matches, n=5):
+        now = datetime.now()
+        out = []
+        for m in matches:
+            st = m.get('start_time', '')
+            try:
+                t0 = datetime.strptime(st, '%Y-%m-%d %H:%M:%S')
+            except Exception:
+                continue
+            diff = int((t0 - now).total_seconds())
+            if 0 <= diff <= 300:
+                lg = (m.get('competition_name') or '').replace('Virtual Football ', '')[:10]
+                out.append((diff, f'{lg} in {diff // 60}:{diff % 60:02d}'))
+        out.sort()
+        return [x[1] for x in out[:n]]
+
     def log_bet_data(self, b):
         try:
             rec = {
@@ -370,15 +456,47 @@ class BetikaBot:
                 f.write(json.dumps(rec) + '\n')
         except: pass
 
+    def monitor_lines(self, bets, pending):
+        settled = len(bets) - len(pending)
+        self._ncols, self._cell_w = self._grid_layout()
+        cells = [self.bet_cell(b, i) for i, b in enumerate(bets, 1)]
+        out = [
+            f'  ━━━━━ ROUND {self.round} — MONITORING ({settled}/{len(bets)} settled) ━━━━━',
+            f'  Balance: KES {self.bankroll:.2f}  Start: {self.start_bankroll:.2f}  Peak: {self.peak:.2f}  Target: {TARGET:.0f}',
+            f'  [{self.money_bar()}]',
+            '    S=start  P=peak  C=current  T=target',
+            '',
+        ]
+        out += self.render_grid(cells)
+        if pending:
+            out += ['', f'  ⏳ Waiting on {len(pending)} bet(s)... polls every {POLL_SECS}s']
+        return out
+
+    def draw_monitor(self, bets, pending, bal, force=False):
+        if self._tty:
+            print('\033[2J\033[H', end='')
+            print('\n'.join(self.monitor_lines(bets, pending)), flush=True)
+        elif force:
+            print('\n'.join(self.monitor_lines(bets, pending)), flush=True)
+        else:
+            clocks = '  '.join(f'#{i} {self.match_progress(b.get("start_time"))[1]}' for i, b in enumerate(bets, 1))
+            self.p(f'  ⏳ R{self.round} Bal KES {self.bankroll:.2f} [{self.money_bar(30)}] {clocks}')
+
     def monitor_bets(self, bets):
         pending = {b['bet_id']: b for b in bets}
         polls = 0
-        last_settled = 0
+        self.draw_monitor(bets, pending, self.bankroll, force=True)
         while pending:
-            time.sleep(POLL_SECS)
+            time.sleep(MONITOR_POLL_SECS)
             polls += 1
             bal, _ = self.get_balance()
+            if bal is not None:
+                self.bankroll = bal
+                self.peak = max(self.peak, bal)
+            if polls % 2 == 0:
+                self._fresh_matches = self.fetch_all_matches()
             statuses = self.get_bet_statuses()
+            redraw = False
             for bid, b in list(pending.items()):
                 st = statuses.get(str(bid), '')
                 if st in ('WON', 'LOST'):
@@ -388,15 +506,15 @@ class BetikaBot:
                     b['payout'] = round(b['stake'] * b['odd_value'], 2) if st == 'WON' else 0.0
                     self.log_bet_data(b)
                     del pending[bid]
-            settled = len(bets) - len(pending)
-            if settled != last_settled:
-                self.print_bets_table(bets, 'MONITOR')
-                print(f'  Settled: {settled}/{len(bets)} | Balance: KES {bal}', flush=True)
-                if settled > 0:
-                    print('  ' + '-' * 70, flush=True)
-                last_settled = settled
-            elif pending and polls % 15 == 0:
-                print(f'  ⏳ Waiting on {len(pending)} bet(s) to settle... Balance: KES {bal}', flush=True)
+                    redraw = True
+            for b in bets:
+                if b.get('result') in ('PLACE', 'MONITOR'):
+                    b['result'] = 'MONITOR'
+                    if self.match_phase(b.get('start_time')) in ('PLAY', 'END'):
+                        redraw = True
+            self.draw_monitor(bets, pending, bal, force=redraw)
+            if not pending:
+                break
 
     @staticmethod
     def ev(prediction):
@@ -408,33 +526,99 @@ class BetikaBot:
             return 0.0
         return max(0.0, self.start_bankroll - self.bankroll)
 
+    @staticmethod
+    def _start_secs(pred):
+        st = pred.get('start_time', '')
+        try:
+            return (datetime.strptime(st, '%Y-%m-%d %H:%M:%S') - datetime.now()).total_seconds()
+        except Exception:
+            return float('inf')
+
+    def set_stop(self, spec, profit=None):
+        self.stop = []
+        if profit is not None:
+            self.stop.append(('profit', float(profit)))
+        if not spec:
+            return
+        for part in str(spec).split(','):
+            part = part.strip().lower()
+            if not part:
+                continue
+            m = re.match(r'([a-z]+)(\d+(?:\.\d+)?)$', part)
+            if not m:
+                print(f'  [ignore] bad --stop spec: {part}')
+                continue
+            key, val = m.group(1), float(m.group(2))
+            if key in ('wins', 'win'):
+                self.stop.append(('wins', val))
+            elif key in ('losses', 'lost', 'loses'):
+                self.stop.append(('losses', val))
+            elif key == 'loss':
+                self.stop.append(('loss', val))
+            elif key == 'bal':
+                self.stop.append(('bal', val))
+            elif key == 'profit':
+                self.stop.append(('profit', val))
+            else:
+                print(f'  [ignore] unknown --stop key: {key}')
+
+    def check_stop(self):
+        profit = self.bankroll - self.start_bankroll
+        for kind, val in self.stop:
+            if kind == 'wins' and self.cum_wins >= val:
+                return f'won {self.cum_wins} bets (target {val:.0f})'
+            if kind == 'losses' and self.cum_losses >= val:
+                return f'lost {self.cum_losses} bets (target {val:.0f})'
+            if kind == 'loss' and self.cum_loss_amt >= val:
+                return f'lost KES {self.cum_loss_amt:.2f} (target {val:.0f})'
+            if kind == 'bal' and self.bankroll >= val:
+                return f'balance KES {self.bankroll:.2f} >= {val:.0f}'
+            if kind == 'profit' and profit >= val:
+                return f'profit KES {profit:.2f} >= {val:.0f}'
+        return None
+
+    def _exposure(self):
+        if self.bankroll > 0 and self.bankroll < self.config['low_bal_threshold']:
+            return self.config['low_bal_exposure']
+        return self.config['max_exposure']
+
     def compute_stake(self):
         base = self.config['stake']
+        max_stake = self.config['max_stake']
+        budget = self.bankroll * self._exposure() if self.bankroll > 0 else max_stake
+        cap = min(max_stake, budget)
+        min_stake = self.config['min_stake']
+        if cap < min_stake and self.bankroll >= min_stake:
+            cap = min(min_stake, self.bankroll)
         deficit = self.recovery_deficit()
-        if deficit <= 0:
-            self.recovery_stake = 0.0
-            return base
-        odd = max(self.config['min_odds'], 1.01)
-        recover_stake = base + deficit / (odd - 1)
-        cap = base * self.config['recovery_multiplier']
-        budget = self.bankroll * self.config['max_exposure']
-        stake = min(recover_stake, cap, budget)
-        self.recovery_stake = stake
-        return max(base, stake)
+        if deficit > 0:
+            self.recovery_stake = min(base, cap)
+            return self.recovery_stake
+        self.recovery_stake = 0.0
+        return min(base, cap)
 
     def select_picks(self, matches, stake=None, max_bets=None):
         cfg = self.config
         stake = stake if stake is not None else cfg['stake']
+        stake = min(stake, cfg['max_stake'])
         max_bets = max_bets if max_bets is not None else cfg['bets_per_round']
         preds = [self.predict(m) for m in matches]
         preds = [p for p in preds if p is not None]
+        max_odds = cfg['max_odds']
         candidates = [p for p in preds
                       if p['odd_value'] >= cfg['min_odds']
+                      and (max_odds <= 0 or p['odd_value'] <= max_odds)
+                      and (not cfg['away_only'] or p['pick'] == '2')
                       and p['confidence'] >= cfg['min_confidence']
                       and self.ev(p) >= cfg['min_edge']
                       and p['id'] not in self.placed_ids]
-        candidates.sort(key=lambda x: -self.ev(x))
-        budget = self.bankroll * cfg['max_exposure']
+        if self.recovery_deficit() > 0:
+            candidates.sort(key=lambda x: (self._start_secs(x), x['odd_value']))
+        else:
+            candidates.sort(key=lambda x: (self._start_secs(x), -self.ev(x)))
+        budget = self.bankroll * self._exposure()
+        if self.bankroll >= self.config['min_stake']:
+            budget = max(budget, self.config['min_stake'])
         picks = []
         for p in candidates:
             if (len(picks) + 1) * stake <= budget + 1e-9:
@@ -457,45 +641,52 @@ class BetikaBot:
         drawdown = (self.peak - bal) / self.peak if self.peak else 0
         deficit = self.recovery_deficit()
 
-        print(f'\n  ═══ ROUND {self.round} ANALYSIS ═══')
-        print(f'  Win rate: {wins}/{total} ({win_rate*100:.1f}%)')
-        print(f'  P&L: KES {pnl:+.2f} ({roi*100:+.1f}% ROI)')
-        print(f'  Bankroll: KES {bal:.2f} (peak: KES {self.peak:.2f}, DD: {drawdown*100:.1f}%)')
+        self.p(f'\n  ═══ ROUND {self.round} ANALYSIS ═══')
+        self.p(f'  Win rate: {wins}/{total} ({win_rate*100:.1f}%)')
+        self.p(f'  P&L: KES {pnl:+.2f} ({roi*100:+.1f}% ROI)')
+        self.p(f'  Bankroll: KES {bal:.2f} (peak: KES {self.peak:.2f}, DD: {drawdown*100:.1f}%)')
         if deficit > 0:
-            print(f'  Recovery: KES {deficit:.2f} deficit pending → stake KES {self.recovery_stake:.2f} next round')
+            self.p(f'  Recovery: KES {deficit:.2f} deficit pending → stake KES {self.recovery_stake:.2f} next round')
 
         if drawdown > 0.3 and self.config['dd_stop']:
             return 'stop', f'Drawdown {drawdown*100:.0f}% > 30% — stopping'
         if pnl <= -10 and not self.config['recovery']:
             return 'stop', f'Lost KES {abs(pnl):.0f} this round — too many losses'
-        if pnl > 0:
-            if self.config['auto_stake']:
+        profit = bal - self.start_bankroll
+        ramp_threshold = self.config['ramp_threshold']
+
+        if deficit > 0:
+            return 'continue', f'RECOVERING — KES {deficit:.2f} below start, holding stake KES {self.config["stake"]}, NO increases'
+
+        if profit < ramp_threshold:
+            if self.bankroll < 2 * self.config['stake'] and self.config['stake'] > 1.0:
                 old_stake = self.config['stake']
-                self.config['stake'] = min(self.config['stake'] + self.config['stake_step'], 10)
-                return 'continue', f'Profitable! Stake KES {old_stake} → KES {self.config["stake"]}'
-            return 'continue', f'Profitable! Maintaining stake KES {self.config["stake"]}'
-        if win_rate < 0.5 and total >= 3:
-            self.config['min_odds'] = min(self.config['min_odds'] + 0.10, 2.00)
-            self.config['bets_per_round'] = max(self.config['bets_per_round'] - 1, 1)
-            return 'adjust', f'WR {win_rate*100:.0f}% too low → odds≥{self.config["min_odds"]:.2f}, bets={self.config["bets_per_round"]}'
-        return 'continue', f'Break-even, maintaining strategy'
+                self.config['stake'] = max(old_stake - self.config['stake_step'], 1.0)
+                return 'adjust', f'Balance KES {self.bankroll:.2f} < 2× stake → stake {old_stake:.1f} → KES {self.config["stake"]:.1f}'
+            return 'continue', f'BREAK-EVEN (profit KES {profit:.2f} < {ramp_threshold:.0f}) — holding stake KES {self.config["stake"]}, NO increase'
+
+        if self.config['auto_stake'] and self.bankroll >= 3 * self.config['stake']:
+            old_stake = self.config['stake']
+            self.config['stake'] = min(old_stake + self.config['stake_step'], self.config['max_stake'])
+            return 'continue', f'Profit KES {profit:.2f} ≥ {ramp_threshold:.0f}! Stake KES {old_stake} → KES {self.config["stake"]}'
+        return 'continue', f'Profitable (KES {profit:.2f}) but holding stake KES {self.config["stake"]} (low bankroll)'
 
     def run(self):
         self.print_header()
         if not self.warmup():
-            print("Failed to warmup session"); return
+            self.p("Failed to warmup session"); return
         if self.load_session():
             bal, bonus = self.get_balance()
-            print(f'  Loaded saved session (user {self.user_id})')
+            self.p(f'  Loaded saved session (user {self.user_id})')
         else:
-            print('  No valid saved session, logging in...')
+            self.p('  No valid saved session, logging in...')
             ok, err = self.login()
             if not ok:
-                print(f"Login failed: {err}"); return
+                self.p(f"Login failed: {err}"); return
             bal, bonus = self.get_balance()
         self.bankroll = bal if bal else 0
-        self.start_bankroll = self.bankroll
-        self.peak = self.bankroll
+        self.start_bankroll = self.starting_balance if self.starting_balance else self.bankroll
+        self.peak = self.start_bankroll
         try:
             with open(DATA_DIR / 'state.json') as f:
                 st = json.load(f)
@@ -504,8 +695,11 @@ class BetikaBot:
                 self.peak = saved_peak
         except:
             pass
-        print(f'  Logged in as {self.user_id} | Balance: KES {bal:.2f} (bonus: KES {bonus})')
-        print(f'  Strategy: {self.config["bets_per_round"]} bets × KES {self.config["stake"]}, odds ≥ {self.config["min_odds"]}'
+        self.p(f'  Logged in as {self.user_id} | Balance: KES {bal:.2f} (bonus: KES {bonus})')
+        self.p(f'  Strategy: {self.config["bets_per_round"]} bets × KES {self.config["stake"]}, odds ≥ {self.config["min_odds"]}'
+              + (f'–{self.config["max_odds"]:g}' if self.config['max_odds'] > 0 else '')
+              + (', AWAY only' if self.config['away_only'] else '')
+              + (f', pause after {self.config["no_bets_after"]}' if self.config['no_bets_after'] else '')
               + (f', recovery x{self.config["recovery_multiplier"]:.0f}' if self.config['recovery'] else ''))
         print()
 
@@ -515,37 +709,61 @@ class BetikaBot:
             self.bankroll = bal if bal else 0
             self.peak = max(self.peak, self.bankroll)
 
+            stop_reason = self.check_stop()
+            if stop_reason:
+                self.p(f'\n  ═══ STOP TARGET HIT: {stop_reason} ═══')
+                self.p(f'  Balance: KES {self.bankroll:.2f} (start: KES {self.start_bankroll:.2f}, peak: KES {self.peak:.2f})')
+                self.save_state([])
+                break
+
             if self.bankroll < self.config['stake']:
-                print(f'\n  ❌ Balance KES {self.bankroll:.2f} too low to continue. Need ≥ KES {self.config["stake"]}.', flush=True)
+                self.p(f'\n  ❌ Balance KES {self.bankroll:.2f} too low to continue. Need ≥ KES {self.config["stake"]}.')
                 if not self.config['wait_low_balance']:
                     break
-                print(f'  Waiting for top-up... checking every {POLL_SECS}s (Ctrl-C to stop)', flush=True)
+                self.p(f'  Waiting for top-up... checking every {POLL_SECS}s (Ctrl-C to stop)')
                 time.sleep(POLL_SECS)
                 self.round -= 1
                 continue
+
+            cutoff = self.config['no_bets_after']
+            if cutoff:
+                hh, mm = map(int, cutoff.split(':'))
+                now = datetime.now()
+                if (now.hour, now.minute) >= (hh, mm):
+                    nxt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    secs = int((nxt - now).total_seconds())
+                    self.p(f'\n  🛑 Past daily cutoff {cutoff} — pausing {secs//3600}h{(secs%3600)//60}m until midnight')
+                    while datetime.now() < nxt:
+                        time.sleep(min(300, (nxt - datetime.now()).total_seconds()))
+                    self.round -= 1
+                    continue
 
             round_stake = self.compute_stake()
             recovering = self.recovery_deficit() > 0
-            max_bets = 1 if recovering else self.config['bets_per_round']
+            max_bets = 1 if (recovering or self.config['micro']) else self.config['bets_per_round']
 
-            print(f'  ━━━━━━━━━━━━━━━━━━━━━━━━━ ROUND {self.round} ━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-            print(f'  Balance: KES {self.bankroll:.2f} | Stake: KES {round_stake:.2f} | Odds ≥ {self.config["min_odds"]}'
-                  + (f' | RECOVERY: KES {self.recovery_deficit():.2f}' if recovering else ''))
+            self.p(f'  ━━━━━━━━━━━━━━━━━━━━━━━━━ ROUND {self.round} ━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+            self.p(f'  Balance: KES {self.bankroll:.2f} | Stake: KES {round_stake:.2f} | Odds ≥ {self.config["min_odds"]}'
+                   + (f' | RECOVERY: KES {self.recovery_deficit():.2f}' if recovering else ''))
             print()
 
-            matches = self.fetch_all_matches()
+            matches = self._fresh_matches if self._fresh_matches else self.fetch_all_matches()
+            self._fresh_matches = None
             self.placed_ids |= self.active_bet_match_ids()
             picks = self.select_picks(matches, stake=round_stake, max_bets=max_bets)
             if not picks:
-                print(f'  No qualifying matches (odds ≥ {self.config["min_odds"]}). Waiting...')
+                self.p(f'  No qualifying matches (odds ≥ {self.config["min_odds"]}). Waiting for next matches...')
+                nxt = self.upcoming_matches(matches)
+                if nxt:
+                    self.p('  Next starts: ' + ' | '.join(nxt))
                 time.sleep(POLL_SECS)
                 self.round -= 1
                 continue
 
-            print(f'  Top picks ({len(picks)}):')
+            self.p(f'  Top picks ({len(picks)}):')
             for p in picks:
                 label = PICK_LABEL.get(p['pick'], p['pick'])
-                print(f'    {p["home"]:18s} vs {p["away"]:18s} [{p["league"]:12s}] {label} @ {p["odd_value"]:.2f} ({p["confidence"]}%) EV {self.ev(p):+.3f}')
+                self.p(f'    {p["home"]:18s} vs {p["away"]:18s} [{p["league"]:12s}] {label} @ {p["odd_value"]:.2f} ({p["confidence"]}%) EV {self.ev(p):+.3f}')
             print()
 
             if self.dry_run:
@@ -568,19 +786,26 @@ class BetikaBot:
                         'season': p.get('season', ''), 'match_day': p.get('match_day', ''),
                         'result': 'PLACE', 'placed_at': datetime.now().isoformat(),
                     })
-                    print(f'  ✓ Bet #{bid}: {p["home"]} vs {p["away"]} @ {p["odd_value"]:.2f}')
+                    self.p(f'  ✓ Bet #{bid}: {p["home"]} vs {p["away"]} @ {p["odd_value"]:.2f}')
                 elif result == 'insufficient_balance':
-                    print(f'  ✗ Insufficient balance after {len(bets)} bets placed')
+                    self.p(f'  ✗ Insufficient balance after {len(bets)} bets placed')
                     break
                 else:
                     if result == 'duplicate':
                         self.placed_ids.add(p['id'])
-                    print(f'  ✗ Failed to place bet on {p["home"]} vs {p["away"]}: {result}')
+                    self.p(f'  ✗ Failed to place bet on {p["home"]} vs {p["away"]}: {result}')
             print()
 
             if not bets:
                 time.sleep(POLL_SECS)
                 continue
+
+            bal, _ = self.get_balance()
+            if bal is not None:
+                self.bankroll = bal
+                self.peak = max(self.peak, bal)
+            self.p(f'  💰 Balance after stake: KES {self.bankroll:.2f}')
+            print()
 
             self.print_bets_table(bets, 'PLACE')
             print()
@@ -593,30 +818,51 @@ class BetikaBot:
             self.print_bets_table(bets, 'DONE')
             self.print_summary(bets, bal)
             self.all_rounds.append({'round': self.round, 'bets': bets, 'balance': bal})
+            self.cum_wins += sum(1 for b in bets if b.get('result') == 'WON')
+            self.cum_losses += sum(1 for b in bets if b.get('result') == 'LOST')
+            self.cum_loss_amt += sum(b['stake'] for b in bets if b.get('result') == 'LOST')
 
             if bal and bal >= 50:
-                print(f'  🏆 TARGET HIT! Balance KES {bal:.2f} ≥ KES 50')
-                print(f'  >>> WITHDRAW KES 20 <<<')
-                print(f'  Withdraw via Betika website or app, then continue with remaining balance.\n')
+                self.p(f'  🏆 TARGET HIT! Balance KES {bal:.2f} ≥ KES 50')
+                self.p(f'  >>> WITHDRAW KES 20 <<<')
+                self.p(f'  Withdraw via Betika website or app, then continue with remaining balance.\n')
 
             decision, reason = self.decide_next(bets, bal)
-            print(f'  Decision: {decision.upper()} — {reason}')
+            self.p(f'  Decision: {decision.upper()} — {reason}')
             print()
 
             if decision == 'stop':
-                print(f'  ═══ SESSION OVER ═══')
+                self.p(f'  ═══ SESSION OVER ═══')
                 break
 
             if decision == 'adjust':
-                print(f'  Adjusting: {reason}')
+                self.p(f'  Adjusting: {reason}')
 
             self.save_state(bets)
+
+    @staticmethod
+    def ts():
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    def p(self, *a):
+        print(f'[{self.ts()}]', *a, flush=True)
 
     def print_header(self):
         print('┌─────────────────────────────────────────────────────────────┐')
         print('│              BETIKA VIRTUAL BETTING BOT v2                 │')
         print(f'│  Mode: {"LIVE" if not self.dry_run else "DRY RUN":31s} │')
         print('└─────────────────────────────────────────────────────────────┘')
+        self.p('CMD: python3 ' + Path(sys.argv[0]).name + ' ' + ' '.join(sys.argv[1:]))
+        cfg = self.config
+        self.p(f'config: bets={cfg["bets_per_round"]} stake={cfg["stake"]} max_stake={cfg["max_stake"]} '
+               f'min_odds={cfg["min_odds"]} max_odds={cfg["max_odds"]} min_conf={cfg["min_confidence"]} '
+               f'min_edge={cfg["min_edge"]} max_exposure={cfg["max_exposure"]} low_bal<{cfg["low_bal_threshold"]}'
+               f'@{cfg["low_bal_exposure"]} away_only={cfg["away_only"]} no_bets_after={cfg["no_bets_after"] or "off"} '
+               f'micro={cfg["micro"]} min_stake={cfg["min_stake"]} '
+               f'recovery={cfg["recovery"]} auto_stake={cfg["auto_stake"]} '
+               f'dd_stop={cfg["dd_stop"]} wait_low_balance={cfg["wait_low_balance"]}')
+        if self.stop:
+            self.p('stop targets: ' + ', '.join(f'{k}{v:g}' for k, v in self.stop))
 
     def save_state(self, bets):
         state = {
@@ -644,15 +890,43 @@ Data & session:
 
 Examples:
   python3 betika_bot.py                            dry run (no real bets)
-  python3 betika_bot.py --live --stake 2 --bets 1 --min-odds 1.40 \\
-      --auto-stake --stake-step 1.0                live, small grind
+  python3 betika_bot.py --live --stake 2 --bets 1 --min-odds 1.50 \\
+      --max-stake 5 --auto-stake --stake-step 1.0  live, small grind
   python3 betika_bot.py --live --no-dd-stop        live, grind indefinitely
+  python3 betika_bot.py --live --min-odds 1.50 \\
+      --max-stake 5 --no-recovery                  conservative flat
   python3 betika_bot.py --help                     show this menu
+
+  python3 betika_bot.py --live --min-odds 1.50 --max-stake 5 \\
+      --stop bal50 --profit 39               stop at bal 50 or profit 39
+  python3 betika_bot.py --live --min-odds 1.50 \\
+      --stop "losses5,loss20"                stop after 5 losses or -KES20
+  python3 betika_bot.py --live --micro --no-bets-after 23:00 \\
+      --no-dd-stop --stop "profit10,loss15"  micro grind for a tiny bankroll
 
 Strategy notes:
   - EV filter: skips picks whose edge is below --min-edge.
-  - Recovery: after a loss, next stake = stake x multiplier.
+  - Min odds: --min-odds is a hard floor; no bet is ever placed below it.
+    The bot NEVER raises min odds to chase wins — it only adjusts stakes.
+  - Odds band: --min-odds/--max-odds set the profitable window (1.50-1.70
+    showed the best ROI; sub-1.50 loses money).
+  - Away bias: --away-only bets HOME-side-excluded picks (AWAY +20% ROI).
+  - Pick timing: matches are picked soonest-starting first (in-play before
+    pre-match), so it never waits on a match 8 min out when one starts now.
+  - Recovery: grinds the base stake on low-odds, soonest-starting matches
+    (no martingale multiplier), capped by --max-stake and --max-exposure.
+  - Auto-stake: ramps stake after profitable rounds ONLY while bankroll
+    >= 2x stake and no recovery deficit is pending; shrinks when low.
+  - Tiny bankrolls: below --low-bal-threshold the exposure cap drops to
+    --low-bal-exposure so one round can't wipe the account; stakes never
+    fall below --min-stake.
+  - Late cutoff: --no-bets-after HH:MM pauses betting for the rest of the
+    day (23:00+ was the worst window) and resumes at midnight.
+  - Stop targets: --stop accepts bal50, profit39, wins10, losses20, loss30
+    (comma-separated). --profit N is shorthand for --stop profitN.
   - Drawdown stop: pauses at the persisted peak balance unless --no-dd-stop.
+  - Recovery baseline: defaults to the balance at launch; --starting-balance
+    overrides it so a restart mid-loss still counts as "recovering".
 '''
 
     parser = argparse.ArgumentParser(
@@ -678,8 +952,25 @@ Strategy notes:
                        help='only bet odds >= this (default 1.40)')
     strat.add_argument('--min-edge', type=float, default=-0.10,
                        help='minimum EV edge to take a pick (default -0.10)')
-    strat.add_argument('--max-exposure', type=float, default=0.8,
-                       help='max fraction of balance staked per round (default 0.8)')
+    strat.add_argument('--max-odds', type=float, default=0.0,
+                       help='upper odds bound for the profitable band (0 = no bound) (default 0)')
+    strat.add_argument('--away-only', dest='away_only', action='store_true', default=False,
+                       help='only bet AWAY picks (2) — AWAY showed +20%% ROI in testing')
+    strat.add_argument('--no-bets-after', dest='no_bets_after', default='',
+                       help='pause betting after HH:MM daily (e.g. 23:00); resumes at midnight')
+    strat.add_argument('--micro', dest='micro', action='store_true', default=False,
+                       help='micro-stake mode: stake KES 1, 1 bet/round, min-odds 1.50 (grind a tiny bankroll)')
+    strat.add_argument('--max-exposure', type=float, default=0.5,
+                       help='max fraction of balance exposed (per bet AND per round) (default 0.5)')
+    strat.add_argument('--low-bal-threshold', type=float, default=10.0,
+                       help='below this balance, cap exposure at --low-bal-exposure (default 10.0)')
+    strat.add_argument('--low-bal-exposure', type=float, default=0.25,
+                       help='exposure cap for tiny bankrolls (default 0.25)')
+    strat.add_argument('--min-stake', type=float, default=1.0,
+                       help='floor on any single bet stake (Betika minimum 1.0) (default 1.0)')
+    strat.add_argument('--starting-balance', dest='starting_balance', type=float, default=0.0,
+                       help='override the recovery baseline (start bankroll) instead of '
+                            'using the balance at launch (default 0 = use current balance)')
 
     rec = parser.add_argument_group('Recovery')
     rec.add_argument('--recovery', dest='recovery', action='store_true', default=None,
@@ -696,6 +987,11 @@ Strategy notes:
                        help='use a flat --stake every bet')
     stake.add_argument('--stake-step', type=float, default=1.0,
                        help='stake increment step for auto-stake (default 1.0)')
+    stake.add_argument('--max-stake', type=float, default=10.0,
+                       help='hard cap on any single bet stake (default 10.0)')
+    stake.add_argument('--ramp-threshold', type=float, default=5.0,
+                       help='min profit (KES) above start balance before auto-stake '
+                            'may raise stakes (default 5.0)')
 
     safety = parser.add_argument_group('Safety')
     safety.add_argument('--no-dd-stop', dest='dd_stop', action='store_false', default=None,
@@ -703,6 +999,11 @@ Strategy notes:
     safety.add_argument('--wait-low-balance', dest='wait_low_balance', action='store_true',
                         default=False,
                         help='keep polling (instead of exiting) until balance >= stake')
+    safety.add_argument('--stop', default='',
+                        help='stop when a target is hit. Forms: bal50, profit39, '
+                             'wins10, losses20, loss30 (comma-separated allowed)')
+    safety.add_argument('--profit', type=float, default=None,
+                        help='shorthand for --stop profit<N>')
 
     sess = parser.add_argument_group('Login fallback (only if no saved session)')
     sess.add_argument('--phone', default='254726498682',
@@ -716,15 +1017,31 @@ Strategy notes:
     if args.min_odds: bot.config['min_odds'] = args.min_odds
     bot.config['min_edge'] = args.min_edge
     bot.config['max_exposure'] = args.max_exposure
+    bot.config['max_odds'] = args.max_odds
+    bot.config['away_only'] = args.away_only
+    bot.config['no_bets_after'] = args.no_bets_after
+    bot.config['low_bal_threshold'] = args.low_bal_threshold
+    bot.config['low_bal_exposure'] = args.low_bal_exposure
+    bot.config['min_stake'] = args.min_stake
+    bot.config['micro'] = args.micro
+    if args.starting_balance:
+        bot.starting_balance = args.starting_balance
+    if args.micro:
+        bot.config['stake'] = 1.0
+        bot.config['max_stake'] = 1.0
+        bot.config['min_odds'] = 1.50
+        bot.config['bets_per_round'] = 1
     if args.recovery is not None:
         bot.config['recovery'] = args.recovery
     bot.config['recovery_multiplier'] = args.recovery_multiplier
     bot.config['stake_step'] = args.stake_step
+    bot.config['max_stake'] = args.max_stake
     if args.auto_stake is not None:
         bot.config['auto_stake'] = args.auto_stake
     if args.dd_stop is not None:
         bot.config['dd_stop'] = args.dd_stop
     bot.config['wait_low_balance'] = args.wait_low_balance
+    bot.set_stop(args.stop, args.profit)
     try:
         bot.run()
     except KeyboardInterrupt:
