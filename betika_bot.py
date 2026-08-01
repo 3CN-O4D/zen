@@ -175,6 +175,30 @@ class BetikaBot:
         msg = err.get('message') or data.get('message') or str(data)
         return False, msg
 
+    def deposit(self, amount):
+        """Direct M-Pesa deposit. Fires an STK push the user approves on the
+        phone. Returns (ok, message)."""
+        body = {'src': 'MOBILE_WEB', 'amount': float(amount), 'token': self.token}
+        for attempt in range(3):
+            try:
+                r = self.session.post(API_BASE + 'deposit', json=body, timeout=15)
+                break
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last_err = e
+                self.p(f'    deposit network error, retrying ({attempt + 1}/3)...')
+                time.sleep(3 * (attempt + 1))
+        else:
+            return False, f'network error: {last_err}'
+        try:
+            data = r.json()
+        except Exception:
+            return False, f'bad response ({r.status_code})'
+        if r.status_code in (200, 201) and data.get('success'):
+            return True, data.get('success', {}).get('message', 'deposit initiated')
+        err = data.get('error') or {}
+        msg = err.get('message') or data.get('message') or str(data)
+        return False, msg
+
     def fetch_all_matches(self):
         parsed = {}
         for lid in LEAGUES:
@@ -1054,6 +1078,9 @@ used as a login fallback if no valid session exists.
                       help='Place REAL bets (default is a dry run)')
     mode.add_argument('--balance', dest='check_balance', action='store_true',
                       help='check balance using the saved session and exit')
+    mode.add_argument('--deposit', dest='deposit', type=float, default=0.0,
+                      help='fire a direct M-Pesa deposit STK push for this amount '
+                           '(KES) and exit. Approve with your M-Pesa PIN on the phone.')
 
     strat = parser.add_argument_group('Strategy')
     strat.add_argument('--stake', type=float, default=5.0,
@@ -1168,19 +1195,32 @@ used as a login fallback if no valid session exists.
     bot.config['wait_low_balance'] = args.wait_low_balance
     bot.set_stop(args.stop, args.profit)
     if args.check_balance:
-        import sys as _sys
         bot.print_header()
         if not bot.warmup():
-            print('  Failed to warmup session'); _sys.exit(1)
+            print('  Failed to warmup session'); sys.exit(1)
         if bot.load_session():
             bal, bonus = bot.get_balance()
         else:
             print('  No valid saved session — use --phone/--password or run once to save one')
-            _sys.exit(1)
+            sys.exit(1)
         if bal is None:
-            print('  Could not fetch balance'); _sys.exit(1)
+            print('  Could not fetch balance'); sys.exit(1)
         print(f'  Balance: KES {bal:.2f}  (bonus: KES {bonus:.2f})')
-        _sys.exit(0)
+        sys.exit(0)
+    if args.deposit:
+        bot.print_header()
+        if not bot.warmup():
+            print('  Failed to warmup session'); sys.exit(1)
+        if not bot.load_session():
+            print('  No valid saved session — use --phone/--password or run once to save one')
+            sys.exit(1)
+        ok, msg = bot.deposit(args.deposit)
+        if ok:
+            print(f'  ✅ Deposit STK push for KES {args.deposit:g} sent — approve with your M-Pesa PIN')
+        else:
+            print(f'  ⚠️  Deposit failed: {msg}')
+            sys.exit(1)
+        sys.exit(0)
     try:
         bot.run()
     except KeyboardInterrupt:
