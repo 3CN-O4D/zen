@@ -57,6 +57,8 @@ class BetikaBot:
             'low_bal_exposure': 0.25,
             'min_stake': 1.0,
             'micro': False,
+            'withdraw_amount': 0.0,
+            'withdraw_at': 0.0,
         }
         self.start_bankroll = 0
         self.starting_balance = 0.0
@@ -66,6 +68,7 @@ class BetikaBot:
         self.cum_wins = 0
         self.cum_losses = 0
         self.cum_loss_amt = 0.0
+        self.withdrawn_total = 0.0
         self._fresh_matches = None
         self._tty = sys.stdout.isatty()
         self._ncols = 2
@@ -147,6 +150,30 @@ class BetikaBot:
                     self.p('    balance fetch failed, retrying...')
                     time.sleep(2 * (attempt + 1))
         return None, None
+
+    def withdraw(self, amount):
+        """Direct M-Pesa withdrawal (no Cashia). Fires an STK push the user
+        approves on the phone. Returns (ok, message)."""
+        body = {'amount': float(amount), 'token': self.token, 'app_name': 'MOBILE_WEB'}
+        for attempt in range(3):
+            try:
+                r = self.session.post(API_BASE + 'withdraw', json=body, timeout=15)
+                break
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last_err = e
+                self.p(f'    withdraw network error, retrying ({attempt + 1}/3)...')
+                time.sleep(3 * (attempt + 1))
+        else:
+            return False, f'network error: {last_err}'
+        try:
+            data = r.json()
+        except Exception:
+            return False, f'bad response ({r.status_code})'
+        if r.status_code in (200, 201) and data.get('success'):
+            return True, data.get('success', {}).get('message', 'withdrawal initiated')
+        err = data.get('error') or {}
+        msg = err.get('message') or data.get('message') or str(data)
+        return False, msg
 
     def fetch_all_matches(self):
         parsed = {}
@@ -822,10 +849,18 @@ class BetikaBot:
             self.cum_losses += sum(1 for b in bets if b.get('result') == 'LOST')
             self.cum_loss_amt += sum(b['stake'] for b in bets if b.get('result') == 'LOST')
 
-            if bal and bal >= 50:
-                self.p(f'  🏆 TARGET HIT! Balance KES {bal:.2f} ≥ KES 50')
-                self.p(f'  >>> WITHDRAW KES 20 <<<')
-                self.p(f'  Withdraw via Betika website or app, then continue with remaining balance.\n')
+            wd = self.config['withdraw_amount']
+            if wd > 0 and bal and bal >= self.config['withdraw_at']:
+                ok, msg = self.withdraw(wd)
+                if ok:
+                    self.p(f'  💸 WITHDREW KES {wd:g} to M-Pesa — approve the STK push on your phone!')
+                    self.p(f'     {msg}')
+                    self.start_bankroll = max(bal - wd, 0)
+                    self.peak = max(self.peak, self.start_bankroll)
+                    self.withdrawn_total += wd
+                    self.p(f'  New recovery baseline: KES {self.start_bankroll:.2f} (total withdrawn: KES {self.withdrawn_total:.2f})')
+                else:
+                    self.p(f'  ⚠️  Withdraw KES {wd:g} FAILED: {msg}')
 
             decision, reason = self.decide_next(bets, bal)
             self.p(f'  Decision: {decision.upper()} — {reason}')
@@ -859,6 +894,7 @@ class BetikaBot:
                f'min_edge={cfg["min_edge"]} max_exposure={cfg["max_exposure"]} low_bal<{cfg["low_bal_threshold"]}'
                f'@{cfg["low_bal_exposure"]} away_only={cfg["away_only"]} no_bets_after={cfg["no_bets_after"] or "off"} '
                f'micro={cfg["micro"]} min_stake={cfg["min_stake"]} '
+               f'withdraw={cfg["withdraw_amount"]:g}@{cfg["withdraw_at"]:g} '
                f'recovery={cfg["recovery"]} auto_stake={cfg["auto_stake"]} '
                f'dd_stop={cfg["dd_stop"]} wait_low_balance={cfg["wait_low_balance"]}')
         if self.stop:
@@ -911,6 +947,10 @@ Recommended safe grind (small bankroll):
       --no-dd-stop --stop "profit10,loss15"    micro grind for a tiny bankroll
   python3 betika_bot.py --live --away-only \\
       --min-odds 1.50 --max-odds 1.70          AWAY picks in the 1.5-1.7 band
+  python3 betika_bot.py --live --stake 5 --bets 2 --min-odds 1.50 \\
+      --withdraw 50 --withdraw-at 75           auto-withdraw 50 at balance 75
+      (Betika minimum withdrawal is KES 50; fires an M-Pesa STK push you
+       approve on your phone)
 
 ═══════════════════════════ HOW IT PICKS ═══════════════════════════
 
@@ -969,6 +1009,14 @@ still counts as "recovering" toward your real starting bankroll.
 
 ═══ OTHER SAFETY ═══
 
+  --withdraw N            auto-withdraw N KES to M-Pesa whenever balance
+                          reaches --withdraw-at (default trigger: N + 25).
+                          Uses Betika's direct M-Pesa withdrawal (NOT
+                          Cashia) — an STK push fires that you approve on
+                          your phone with your M-Pesa PIN. After a
+                          withdrawal the recovery baseline resets to the
+                          remaining balance so the bot keeps grinding.
+                          Betika minimum withdrawal is KES 50.
   --no-bets-after HH:MM   pause betting for the rest of the day (the 23:00+
                           window showed the worst win rate) and resume at
                           midnight. Handy when running overnight.
@@ -1016,6 +1064,8 @@ used as a login fallback if no valid session exists.
                        help='minimum EV edge to take a pick (default -0.10)')
     strat.add_argument('--min-confidence', dest='min_confidence', type=float, default=55.0,
                        help='minimum confidence (0-100) to take a pick (default 55)')
+    strat.add_argument('--confidence', dest='confidence', type=float, default=0.0,
+                       help='alias for --min-confidence: only bet picks above this confidence %%')
     strat.add_argument('--max-odds', type=float, default=0.0,
                        help='upper odds bound for the profitable band (0 = no bound) (default 0)')
     strat.add_argument('--away-only', dest='away_only', action='store_true', default=False,
@@ -1068,6 +1118,12 @@ used as a login fallback if no valid session exists.
                              'wins10, losses20, loss30 (comma-separated allowed)')
     safety.add_argument('--profit', type=float, default=None,
                         help='shorthand for --stop profit<N>')
+    safety.add_argument('--withdraw', dest='withdraw', type=float, default=0.0,
+                        help='auto-withdraw this amount to M-Pesa (STK push) each time '
+                             'balance >= --withdraw-at (default 0 = off)')
+    safety.add_argument('--withdraw-at', dest='withdraw_at', type=float, default=0.0,
+                        help='balance that triggers --withdraw (default: withdraw amount '
+                             '+ 25, e.g. --withdraw 50 fires at 75)')
 
     sess = parser.add_argument_group('Login fallback (only if no saved session)')
     sess.add_argument('--phone', default='254726498682',
@@ -1080,7 +1136,7 @@ used as a login fallback if no valid session exists.
     if args.bets: bot.config['bets_per_round'] = args.bets
     if args.min_odds: bot.config['min_odds'] = args.min_odds
     bot.config['min_edge'] = args.min_edge
-    bot.config['min_confidence'] = args.min_confidence
+    bot.config['min_confidence'] = args.confidence or args.min_confidence
     bot.config['max_exposure'] = args.max_exposure
     bot.config['max_odds'] = args.max_odds
     bot.config['away_only'] = args.away_only
@@ -1089,6 +1145,8 @@ used as a login fallback if no valid session exists.
     bot.config['low_bal_exposure'] = args.low_bal_exposure
     bot.config['min_stake'] = args.min_stake
     bot.config['micro'] = args.micro
+    bot.config['withdraw_amount'] = args.withdraw
+    bot.config['withdraw_at'] = args.withdraw_at or (args.withdraw + 25 if args.withdraw else 0)
     if args.starting_balance:
         bot.starting_balance = args.starting_balance
     if args.micro:
