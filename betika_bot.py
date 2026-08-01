@@ -716,6 +716,8 @@ class BetikaBot:
         ramp_threshold = self.config['ramp_threshold']
 
         if deficit > 0:
+            if self.recovery_level <= 0:
+                self.recovery_level = 0.5
             recent = self.recent_results[-5:]
             if recent:
                 wr = recent.count('WON') / len(recent)
