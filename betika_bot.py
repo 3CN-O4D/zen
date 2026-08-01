@@ -66,6 +66,7 @@ class BetikaBot:
         self.recovery_level = 0.0
         self.recent_results = []
         self.recovery_stake = 0.0
+        self._in_recovery = False
         self.placed_ids = set()
         self.stop = []
         self.cum_wins = 0
@@ -646,7 +647,8 @@ class BetikaBot:
             cap = min(min_stake, self.bankroll)
         deficit = self.recovery_deficit()
         if deficit > 0:
-            if self.recovery_level <= 0:
+            if not self._in_recovery:
+                self._in_recovery = True
                 self.recovery_level = 0.5
             base = self.base_stake * self.recovery_level
             self.recovery_stake = min(base, cap)
@@ -716,7 +718,8 @@ class BetikaBot:
         ramp_threshold = self.config['ramp_threshold']
 
         if deficit > 0:
-            if self.recovery_level <= 0:
+            if not self._in_recovery:
+                self._in_recovery = True
                 self.recovery_level = 0.5
             recent = self.recent_results[-5:]
             if recent:
@@ -730,6 +733,11 @@ class BetikaBot:
                 self.recovery_level = max(self.recovery_level - 0.1, 0.3)
                 return 'adjust', f'RECOVERING — KES {deficit:.2f} below start, last-5 {wr:.0%} → cutting stake x{self.recovery_level:.2f} (KES {self.base_stake * self.recovery_level:.1f})'
             return 'continue', f'RECOVERING — KES {deficit:.2f} below start, last-5 {wr:.0%} → holding stake x{self.recovery_level:.2f} (KES {self.base_stake * self.recovery_level:.1f})'
+
+        if self._in_recovery:
+            self._in_recovery = False
+            self.recovery_level = 1.0
+            self.p('  ✓ Recovered above start — back to full stake x1.0')
 
         if profit < ramp_threshold:
             if self.bankroll < 2 * self.config['stake'] and self.config['stake'] > 1.0:
@@ -789,8 +797,9 @@ class BetikaBot:
                 self.save_state([])
                 break
 
-            if self.bankroll < self.config['stake']:
-                self.p(f'\n  ❌ Balance KES {self.bankroll:.2f} too low to continue. Need ≥ KES {self.config["stake"]}.')
+            min_floor = self.config['min_stake']
+            if self.bankroll < min_floor:
+                self.p(f'\n  ❌ Balance KES {self.bankroll:.2f} too low to continue. Need ≥ KES {min_floor:g}.')
                 if not self.config['wait_low_balance']:
                     break
                 self.p(f'  Waiting for top-up... checking every {POLL_SECS}s (Ctrl-C to stop)')
@@ -903,8 +912,12 @@ class BetikaBot:
                 if ok:
                     self.p(f'  💸 WITHDREW KES {wd:g} to M-Pesa — approve the STK push on your phone!')
                     self.p(f'     {msg}')
+                    bal, _ = self.get_balance()
+                    self.bankroll = bal if bal else 0
+                    self.peak = max(self.peak, self.bankroll)
                     self.start_bankroll = max(bal - wd, 0)
-                    self.peak = max(self.peak, self.start_bankroll)
+                    self._in_recovery = False
+                    self.recovery_level = 0.0
                     self.withdrawn_total += wd
                     self.p(f'  New recovery baseline: KES {self.start_bankroll:.2f} (total withdrawn: KES {self.withdrawn_total:.2f})')
                 else:
