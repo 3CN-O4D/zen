@@ -62,6 +62,7 @@ class BetikaBot:
         }
         self.start_bankroll = 0
         self.starting_balance = 0.0
+        self.base_stake = 5.0
         self.recovery_stake = 0.0
         self.placed_ids = set()
         self.stop = []
@@ -707,6 +708,10 @@ class BetikaBot:
         ramp_threshold = self.config['ramp_threshold']
 
         if deficit > 0:
+            if self.config['stake'] > self.base_stake:
+                old_stake = self.config['stake']
+                self.config['stake'] = max(old_stake - self.config['stake_step'], self.base_stake)
+                return 'adjust', f'RECOVERING — KES {deficit:.2f} below start → stake {old_stake:.1f} → KES {self.config["stake"]:.1f}'
             return 'continue', f'RECOVERING — KES {deficit:.2f} below start, holding stake KES {self.config["stake"]}, NO increases'
 
         if profit < ramp_threshold:
@@ -1162,6 +1167,7 @@ used as a login fallback if no valid session exists.
     args = parser.parse_args()
     bot = BetikaBot(phone=args.phone, password=args.password, dry_run=not args.live)
     if args.stake: bot.config['stake'] = args.stake
+    bot.base_stake = bot.config['stake']
     if args.bets: bot.config['bets_per_round'] = args.bets
     if args.min_odds: bot.config['min_odds'] = args.min_odds
     bot.config['min_edge'] = args.min_edge
