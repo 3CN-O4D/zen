@@ -644,6 +644,7 @@ class BetikaBot:
             cap = min(min_stake, self.bankroll)
         deficit = self.recovery_deficit()
         if deficit > 0:
+            base = self.base_stake
             self.recovery_stake = min(base, cap)
             return self.recovery_stake
         self.recovery_stake = 0.0
@@ -657,11 +658,14 @@ class BetikaBot:
         preds = [self.predict(m) for m in matches]
         preds = [p for p in preds if p is not None]
         max_odds = cfg['max_odds']
+        min_conf = cfg['min_confidence']
+        if self.recovery_deficit() > 0:
+            min_conf = min(min_conf + 8, 90)
         candidates = [p for p in preds
                       if p['odd_value'] >= cfg['min_odds']
                       and (max_odds <= 0 or p['odd_value'] <= max_odds)
                       and (not cfg['away_only'] or p['pick'] == '2')
-                      and p['confidence'] >= cfg['min_confidence']
+                      and p['confidence'] >= min_conf
                       and self.ev(p) >= cfg['min_edge']
                       and p['id'] not in self.placed_ids]
         if self.recovery_deficit() > 0:
