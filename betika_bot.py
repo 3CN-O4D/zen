@@ -63,6 +63,8 @@ class BetikaBot:
         self.start_bankroll = 0
         self.starting_balance = 0.0
         self.base_stake = 5.0
+        self.recovery_level = 0.0
+        self.recent_results = []
         self.recovery_stake = 0.0
         self.placed_ids = set()
         self.stop = []
@@ -644,7 +646,9 @@ class BetikaBot:
             cap = min(min_stake, self.bankroll)
         deficit = self.recovery_deficit()
         if deficit > 0:
-            base = self.base_stake
+            if self.recovery_level <= 0:
+                self.recovery_level = 0.5
+            base = self.base_stake * self.recovery_level
             self.recovery_stake = min(base, cap)
             return self.recovery_stake
         self.recovery_stake = 0.0
@@ -712,11 +716,18 @@ class BetikaBot:
         ramp_threshold = self.config['ramp_threshold']
 
         if deficit > 0:
-            if self.config['stake'] > self.base_stake:
-                old_stake = self.config['stake']
-                self.config['stake'] = max(old_stake - self.config['stake_step'], self.base_stake)
-                return 'adjust', f'RECOVERING — KES {deficit:.2f} below start → stake {old_stake:.1f} → KES {self.config["stake"]:.1f}'
-            return 'continue', f'RECOVERING — KES {deficit:.2f} below start, holding stake KES {self.config["stake"]}, NO increases'
+            recent = self.recent_results[-5:]
+            if recent:
+                wr = recent.count('WON') / len(recent)
+            else:
+                wr = 0.5
+            if wr >= 0.6 and self.recovery_level < 1.0:
+                self.recovery_level = min(self.recovery_level + 0.1, 1.0)
+                return 'adjust', f'RECOVERING — KES {deficit:.2f} below start, last-5 {wr:.0%} → stake x{self.recovery_level:.2f} (KES {self.base_stake * self.recovery_level:.1f})'
+            if wr <= 0.4 and self.recovery_level > 0.3:
+                self.recovery_level = max(self.recovery_level - 0.1, 0.3)
+                return 'adjust', f'RECOVERING — KES {deficit:.2f} below start, last-5 {wr:.0%} → cutting stake x{self.recovery_level:.2f} (KES {self.base_stake * self.recovery_level:.1f})'
+            return 'continue', f'RECOVERING — KES {deficit:.2f} below start, last-5 {wr:.0%} → holding stake x{self.recovery_level:.2f} (KES {self.base_stake * self.recovery_level:.1f})'
 
         if profit < ramp_threshold:
             if self.bankroll < 2 * self.config['stake'] and self.config['stake'] > 1.0:
@@ -880,6 +891,8 @@ class BetikaBot:
             self.all_rounds.append({'round': self.round, 'bets': bets, 'balance': bal})
             self.cum_wins += sum(1 for b in bets if b.get('result') == 'WON')
             self.cum_losses += sum(1 for b in bets if b.get('result') == 'LOST')
+            self.recent_results += [b.get('result') for b in bets if b.get('result') in ('WON', 'LOST')]
+            self.recent_results = self.recent_results[-5:]
             self.cum_loss_amt += sum(b['stake'] for b in bets if b.get('result') == 'LOST')
 
             wd = self.config['withdraw_amount']
