@@ -153,7 +153,7 @@ Generates standard universally unique identifiers (UUIDs).
 ```zen
 print uuid.uuid4()  // e.g. "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
 let ns_url = uuid.NAMESPACE_URL
-print uuid.uuid5(ns_url, "https://github.com/ecnord/zen")
+print uuid.uuid5(ns_url, "https://github.com/3CN-O4D/zen")
 ```
 
 ---

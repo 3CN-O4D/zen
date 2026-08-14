@@ -11,13 +11,13 @@ Pre-compiled native binaries are available with zero external dependencies.
 Run the automated script to detect your platform, download the correct binary, and install it to `/usr/local/bin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ecnord/zen/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/3CN-O4D/zen/main/install.sh | bash
 ```
 
 For **Termux** (Android), this script will automatically place the executable under `$PREFIX/bin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ecnord/zen/main/install.sh | termux=true bash
+curl -fsSL https://raw.githubusercontent.com/3CN-O4D/zen/main/install.sh | termux=true bash
 ```
 
 ---
@@ -51,7 +51,7 @@ If you have Rust installed (1.75+), you can build the executable directly:
 
 ```bash
 # Clone the repository
-git clone https://github.com/ecnord/zen
+git clone https://github.com/3CN-O4D/zen
 cd zen/zen-rust
 
 # Build an optimized release executable

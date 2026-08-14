@@ -33,7 +33,7 @@ find_all(".result").each(function(el) {
 python3 zen.pyz script.z
 
 # Or from source:
-git clone https://github.com/ecnord/zen.git
+git clone https://github.com/3CN-O4D/zen.git
 cd zen
 pip install -e .
 ```
@@ -51,16 +51,16 @@ pip install -e .
 
 ## Documentation
 
-📖 **Full Documentation**: [https://ecnord.github.io/zen](https://ecnord.github.io/zen)
+📖 **Full Documentation**: [https://3CN-O4D.github.io/zen](https://3CN-O4D.github.io/zen)
 
 ### Quick Links
 
-- [Getting Started](https://ecnord.github.io/zen/getting-started/installation/)
-- [Language Reference](https://ecnord.github.io/zen/language/overview/)
-- [Browser Automation](https://ecnord.github.io/zen/browser/overview/)
-- [Modules](https://ecnord.github.io/zen/modules/overview/)
-- [CLI Reference](https://ecnord.github.io/zen/cli/)
-- [Examples](https://ecnord.github.io/zen/examples/overview/)
+- [Getting Started](https://3CN-O4D.github.io/zen/getting-started/installation/)
+- [Language Reference](https://3CN-O4D.github.io/zen/language/overview/)
+- [Browser Automation](https://3CN-O4D.github.io/zen/browser/overview/)
+- [Modules](https://3CN-O4D.github.io/zen/modules/overview/)
+- [CLI Reference](https://3CN-O4D.github.io/zen/cli/)
+- [Examples](https://3CN-O4D.github.io/zen/examples/overview/)
 
 ## Editor Support
 
@@ -73,7 +73,7 @@ Zen includes syntax highlighting for major editors:
 | **Helix** | Copy `editors/helix/languages.toml` to `~/.config/helix/` |
 | **Sublime Text** | Copy `editors/sublime-text/zen.sublime-syntax` to Packages |
 
-See [Editor Setup](https://ecnord.github.io/zen/editors/vscode/) for detailed instructions.
+See [Editor Setup](https://3CN-O4D.github.io/zen/editors/vscode/) for detailed instructions.
 
 ## Language Features
 
@@ -85,4 +85,4 @@ See [Editor Setup](https://ecnord.github.io/zen/editors/vscode/) for detailed in
 
 ## Author
 
-ecnord
+3CN-O4D

@@ -7,7 +7,7 @@ Welcome to the native Zen language documentation. This project is a complete, gr
 1. Install the native Zen binary:
    ```bash
    # Quick auto-installer (recommended)
-   curl -fsSL https://raw.githubusercontent.com/ecnord/zen/main/install.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/3CN-O4D/zen/main/install.sh | bash
    
    # Or manually download from the Releases page
    ```
