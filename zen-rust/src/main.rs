@@ -138,7 +138,7 @@ fn repl() {
         match line {
             ":q" | ":quit" | ":exit" => break,
             ":h" | ":help" => {
-                println!("Commands: :q quit, :h help");
+            println!("Zen native runtime help:\nCommands:\n  zen run <file>      execute a script\n  zen <file>          execute a script\n  zen -e <source>     evaluate source code\n  zen check <file>    parse and validate without running\n  zen lint <file>     report suspicious patterns\n  zen repl            start interactive session\n  zen pm              package manager operations\n  zen --version       print version info\n  zen -h / zen --help show this help message");
                 continue;
             }
             _ => {}
