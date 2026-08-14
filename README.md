@@ -1,88 +1,43 @@
-# Zen
+# Zen - Native Rust Runtime
 
-A lightweight browser automation language with clean, expressive syntax.
-Built on DrissionPage for fast Chromium-based automation.
+A ground-up Rust rewrite of the Zen scripting language, providing a native runtime with **zero Python dependency**.
 
+## Quick Start
+
+Install the native Zen binary:
+
+# Quick auto-installer (recommended)
+curl -fsSL https://raw.githubusercontent.com/3CN-O4D/zen/main/install.sh | bash
+
+# Or manually download from the Releases page
+
+Verify the installation:
 ```
-zen shell              Interactive shell with REPL
-zen script.z           Run a Zen script (auto-detect)
-zen open <url>         Open URL, show title
-zen shot <url>         Screenshot a page
-zen scrape <url> -s <css>  Scrape text from elements
-zen script.z --http    HTTP-only mode (no browser)
-zen script.z --connect Attach to your running browser
-```
-
-## Quick Example
-
-```zen
-go "https://example.com"
-fill("#search", "zen language")
-click(".search-btn")
-wait_for(".results")
-print page.title
-find_all(".result").each(function(el) {
-    print el.text
-})
+zen --version
 ```
 
-## Install
+Run your first script:
+```
+zen -e 'print "Hello, Zen World!"'
+```
+
+## Documentation Structure
+
+- [Language Reference](zen/docs/language/reference.md) - Syntax, variables, types, control flow, functions, classes
+- [CLI Reference](zen/docs/cli.md) - Commands (`run`, `check`, `lint`, `repl`, `pm`, `-h`/`--help`)
+- [Modules](zen/docs/) - File system (`fs`), Data (JSON, CSV, regex, random, math), System (OS, time, datetime, crypto, HTTP, browser)
+- [Installation Guide](zen/docs/install.md) - Quick installer, pre-compiled binaries, from source
+
+## Build From Source
 
 ```bash
-# Standalone — just download zen.pyz (6.8MB)
-python3 zen.pyz script.z
+# Clone the repository
+git clone https://github.com/3CN-O4D/zen
+cd zen/zen
 
-# Or from source:
-git clone https://github.com/3CN-O4D/zen.git
-cd zen
-pip install -e .
+# Build an optimized release executable
+cargo build --release
+
+# Run verification
+./target/release/zen --help
 ```
-
-## Usage Modes
-
-| Flag | What it does |
-|------|-------------|
-| *(none)* | Fresh headless Chromium |
-| `--headful` | Show browser window |
-| `--browser-path /usr/bin/brave` | Use specific browser |
-| `--connect` | Attach to your running browser (port 9222) |
-| `--connect=9999` | Attach on custom port |
-| `--http` | HTTP-only (SessionPage), no browser |
-
-## Documentation
-
-📖 **Full Documentation**: [https://3CN-O4D.github.io/zen](https://3CN-O4D.github.io/zen)
-
-### Quick Links
-
-- [Getting Started](https://3CN-O4D.github.io/zen/getting-started/installation/)
-- [Language Reference](https://3CN-O4D.github.io/zen/language/overview/)
-- [Browser Automation](https://3CN-O4D.github.io/zen/browser/overview/)
-- [Modules](https://3CN-O4D.github.io/zen/modules/overview/)
-- [CLI Reference](https://3CN-O4D.github.io/zen/cli/)
-- [Examples](https://3CN-O4D.github.io/zen/examples/overview/)
-
-## Editor Support
-
-Zen includes syntax highlighting for major editors:
-
-| Editor | Installation |
-|--------|--------------|
-| **VSCode** | Copy `editors/vscode` to `~/.vscode/extensions/` |
-| **Vim/Neovim** | Copy `editors/vim/syntax/zen.vim` to `~/.vim/syntax/` |
-| **Helix** | Copy `editors/helix/languages.toml` to `~/.config/helix/` |
-| **Sublime Text** | Copy `editors/sublime-text/zen.sublime-syntax` to Packages |
-
-See [Editor Setup](https://3CN-O4D.github.io/zen/editors/vscode/) for detailed instructions.
-
-## Language Features
-
-- **Clean Syntax**: Python-like readability with JavaScript-inspired features
-- **Browser Automation**: CSS selectors, text finding, screenshots, JavaScript execution
-- **Rich Standard Library**: File system, HTTP, crypto, threading, WhatsApp
-- **Modern Features**: Arrow functions, template literals, list comprehensions, destructuring
-- **Performance**: Automatic bytecode compilation for 100-250× speedup on hot paths
-
-## Author
-
-3CN-O4D
