@@ -92,16 +92,18 @@ fn main() {
         }
         return;
     }
-    let source = match args.as_slice() {
-        [flag, code] if flag == "-e" || flag == "--eval" => Ok(code.clone()),
-        [command, file, ..] if command == "run" => fs::read_to_string(file),
-        [file, ..] => fs::read_to_string(file),
+    let (source, filename) = match args.as_slice() {
+        [flag, code] if flag == "-e" || flag == "--eval" => (Ok(code.clone()), "<string>".to_string()),
+        [command, file, ..] if command == "run" => (fs::read_to_string(file), file.clone()),
+        [file, ..] => (fs::read_to_string(file), file.clone()),
         _ => {
             usage();
             process::exit(2);
         }
     };
-    match source.and_then(|source| runtime::run(&source).map_err(std::io::Error::other)) {
+    match source
+        .and_then(|source| runtime::run_named(&source, &filename).map_err(std::io::Error::other))
+    {
         Ok(()) => {}
         Err(error) => {
             eprintln!("zen: {error}");

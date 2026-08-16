@@ -274,16 +274,45 @@ try {
 }
 ```
 
+`catch` and `except` are synonyms. A catch may name a type, bind the error
+with `as` or `(var)`, both, or neither; typed catches also match subclasses:
+
+```zen
+try {
+    risky_call()
+} except ZeroDivisionError as e {
+    print "division: " + e
+} catch ArithmeticError as e {
+    print "arithmetic: " + e
+} catch as e {
+    print "anything else: " + e
+}
+```
+
+The built-in error types live in the `errors` module (`errors.Error`,
+`errors.ValueError`, `errors.TypeError`, `errors.MathError`,
+`errors.KeyboardInterrupt`, ...). Every error type is a class, so you can
+construct it with `new` and build your own by subclassing:
+
+```zen
+class MoneyError extends errors.Error { }
+throw new MoneyError("overdraft")
+throw new errors.ValueError("bad input")
+```
+
 `throw` raises an error:
 
 ```zen
 function check(n) {
     if n < 0 {
-        throw "must be non-negative"
+        throw new errors.ValueError("must be non-negative")
     }
     return n
 }
 ```
+
+Uncaught errors print a Python-style traceback with the file, line, column,
+and the error's type and message.
 
 ## Functions
 

@@ -34,7 +34,7 @@ fn function_registry() -> &'static std::sync::Mutex<std::collections::HashMap<St
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct Instance {
+pub(crate) struct Instance {
     class_name: String,
     fields: BTreeMap<String, Value>,
 }
@@ -125,6 +125,7 @@ enum Kind {
     Ident(String),
     Number(f64),
     String(String),
+    Interp(Vec<InterpPart>),
     True,
     False,
     Null,
@@ -224,6 +225,12 @@ struct Token {
     col: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum InterpPart {
+    Text(String),
+    Expr(String),
+}
+
 fn lex(source: &str) -> Result<Vec<Token>, String> {
     let bytes = source.as_bytes();
     let (mut i, mut line, mut col) = (0, 1, 1);
@@ -291,10 +298,12 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
         }
         if c == '"' || c == '\'' {
             let quote = c;
+            let is_interpolated = c == '"';
             i += 1;
             col += 1;
             let mut text = String::new();
             let mut closed = false;
+            let mut parts: Vec<InterpPart> = Vec::new();
             while i < bytes.len() {
                 let ch = bytes[i] as char;
                 if ch == quote {
@@ -317,9 +326,48 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         '\\' => '\\',
                         '\'' => '\'',
                         '"' => '"',
+                        '$' => '$',
                         x => x,
                     });
                     i += 1;
+                    col += 1;
+                } else if is_interpolated && ch == '$' && bytes.get(i + 1) == Some(&b'{') {
+                    // Flush accumulated literal text, then capture the expression.
+                    if !text.is_empty() {
+                        parts.push(InterpPart::Text(std::mem::take(&mut text)));
+                    }
+                    i += 2;
+                    col += 2;
+                    let expr_start = i;
+                    let mut depth = 1usize;
+                    let mut expr_line = line;
+                    let mut expr_col = col;
+                    while i < bytes.len() {
+                        let e = bytes[i] as char;
+                        if e == '{' {
+                            depth += 1;
+                        } else if e == '}' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        } else if e == '\n' {
+                            expr_line += 1;
+                            expr_col = 1;
+                            i += 1;
+                            continue;
+                        }
+                        i += 1;
+                        expr_col += 1;
+                    }
+                    if depth != 0 {
+                        return Err(format!(
+                            "{expr_line}:{expr_col}: unterminated interpolation expression"
+                        ));
+                    }
+                    let expr_source = source[expr_start..i].to_string();
+                    parts.push(InterpPart::Expr(expr_source));
+                    i += 1; // consume closing }
                     col += 1;
                 } else {
                     text.push(ch);
@@ -335,11 +383,22 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             if !closed {
                 return Err(format!("{}:{}: unterminated string", start.0, start.1));
             }
-            out.push(Token {
-                kind: Kind::String(text),
-                line: start.0,
-                col: start.1,
-            });
+            if !parts.is_empty() {
+                if !text.is_empty() {
+                    parts.push(InterpPart::Text(text));
+                }
+                out.push(Token {
+                    kind: Kind::Interp(parts),
+                    line: start.0,
+                    col: start.1,
+                });
+            } else {
+                out.push(Token {
+                    kind: Kind::String(text),
+                    line: start.0,
+                    col: start.1,
+                });
+            }
             continue;
         }
         if c.is_ascii_digit()
@@ -409,7 +468,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 "as" => Kind::As,
                 "native" => Kind::Native,
                 "try" => Kind::Try,
-                "catch" => Kind::Catch,
+                "catch" | "except" => Kind::Catch,
                 "finally" => Kind::Finally,
                 "throw" => Kind::Throw,
                 "typeof" => Kind::Typeof,
@@ -684,7 +743,14 @@ enum LetTarget {
 }
 
 #[derive(Clone, Debug)]
-enum Stmt {
+struct Stmt {
+    kind: StmtKind,
+    line: usize,
+    col: usize,
+}
+
+#[derive(Clone, Debug)]
+enum StmtKind {
     Let(LetTarget, Expr, bool),
     Assign(String, Kind, Expr),
     Print(Vec<Expr>),
@@ -695,7 +761,7 @@ enum Stmt {
     Continue,
     Function(String, Vec<String>, Vec<Stmt>),
     Native(String, Vec<String>),
-    Try(Vec<Stmt>, Option<String>, Vec<Stmt>, Option<Vec<Stmt>>),
+    Try(Vec<Stmt>, Vec<CatchClause>, Option<Vec<Stmt>>),
     Throw(Expr),
     Return(Option<Expr>),
     Class(String, Option<String>, Vec<Stmt>),
@@ -706,6 +772,13 @@ enum Stmt {
     SetMember(Expr, String, Expr),
     Switch(Expr, Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>),
     Expr(Expr),
+}
+
+#[derive(Clone, Debug)]
+struct CatchClause {
+    kind: Option<String>,
+    var: Option<String>,
+    body: Vec<Stmt>,
 }
 struct Parser {
     tokens: Vec<Token>,
@@ -759,6 +832,7 @@ impl Parser {
             Kind::Ident(_)
                 | Kind::Number(_)
                 | Kind::String(_)
+                | Kind::Interp(_)
                 | Kind::True
                 | Kind::False
                 | Kind::Null
@@ -788,6 +862,12 @@ impl Parser {
         Ok(body)
     }
     fn stmt(&mut self) -> Result<Stmt, String> {
+        let (sl, sc) = (self.current().line, self.current().col);
+        let mk = |kind: StmtKind| Stmt {
+            kind,
+            line: sl,
+            col: sc,
+        };
         match self.current().kind.clone() {
             Kind::Let | Kind::Const => {
                 let is_const = matches!(self.current().kind, Kind::Const);
@@ -851,16 +931,16 @@ impl Parser {
                         while self.take(Kind::Comma) {
                             values.push(self.expr()?);
                         }
-                        return Ok(Stmt::Let(
+                        return Ok(mk(StmtKind::Let(
                             LetTarget::List(names),
                             Expr::List(values),
                             is_const,
-                        ));
+                        )));
                     }
                     LetTarget::Var(first)
                 };
                 self.expect(Kind::Assign)?;
-                Ok(Stmt::Let(target, self.expr()?, is_const))
+                Ok(mk(StmtKind::Let(target, self.expr()?, is_const)))
             }
             Kind::Print => {
                 self.advance();
@@ -868,7 +948,7 @@ impl Parser {
                 while self.take(Kind::Comma) {
                     values.push(self.expr()?);
                 }
-                Ok(Stmt::Print(values))
+                Ok(mk(StmtKind::Print(values)))
             }
             Kind::If => {
                 self.advance();
@@ -885,12 +965,12 @@ impl Parser {
                 } else {
                     vec![]
                 };
-                Ok(Stmt::If(cond, yes, no))
+                Ok(mk(StmtKind::If(cond, yes, no)))
             }
             Kind::While => {
                 self.advance();
                 let cond = self.expr()?;
-                Ok(Stmt::While(cond, self.block()?))
+                Ok(mk(StmtKind::While(cond, self.block()?)))
             }
             Kind::For => {
                 self.advance();
@@ -900,15 +980,15 @@ impl Parser {
                 };
                 self.expect(Kind::In)?;
                 let items = self.expr()?;
-                Ok(Stmt::For(name, items, self.block()?))
+                Ok(mk(StmtKind::For(name, items, self.block()?)))
             }
             Kind::Break => {
                 self.advance();
-                Ok(Stmt::Break)
+                Ok(mk(StmtKind::Break))
             }
             Kind::Continue => {
                 self.advance();
-                Ok(Stmt::Continue)
+                Ok(mk(StmtKind::Continue))
             }
             Kind::Function | Kind::Def => {
                 self.advance();
@@ -930,7 +1010,7 @@ impl Parser {
                     }
                     self.expect(Kind::RParen)?;
                 }
-                Ok(Stmt::Function(name, params, self.block()?))
+                Ok(mk(StmtKind::Function(name, params, self.block()?)))
             }
             Kind::Native => {
                 self.advance();
@@ -953,7 +1033,7 @@ impl Parser {
                     }
                     self.expect(Kind::RParen)?;
                 }
-                Ok(Stmt::Native(name, params))
+                Ok(mk(StmtKind::Native(name, params)))
             }
             Kind::Return => {
                 self.advance();
@@ -965,7 +1045,7 @@ impl Parser {
                 } else {
                     Some(self.expr()?)
                 };
-                Ok(Stmt::Return(value))
+                Ok(mk(StmtKind::Return(value)))
             }
             Kind::Import => {
                 self.advance();
@@ -988,7 +1068,7 @@ impl Parser {
                         break;
                     }
                 }
-                Ok(Stmt::Import(imports))
+                Ok(mk(StmtKind::Import(imports)))
             }
             Kind::From => {
                 self.advance();
@@ -1016,7 +1096,7 @@ impl Parser {
                         break;
                     }
                 }
-                Ok(Stmt::FromImport(module, items))
+                Ok(mk(StmtKind::FromImport(module, items)))
             }
             Kind::Include | Kind::Load => {
                 let kind = self.advance();
@@ -1026,9 +1106,9 @@ impl Parser {
                     _ => return Err("expected file path string or module name".into()),
                 };
                 if matches!(kind, Kind::Include) {
-                    Ok(Stmt::Include(path))
+                    Ok(mk(StmtKind::Include(path)))
                 } else {
-                    Ok(Stmt::Load(path))
+                    Ok(mk(StmtKind::Load(path)))
                 }
             }
             Kind::Class => {
@@ -1038,14 +1118,22 @@ impl Parser {
                     _ => return Err("expected class name".into()),
                 };
                 let parent = if self.take(Kind::Extends) {
-                    match self.advance() {
-                        Kind::Ident(name) => Some(name),
+                    let mut name = match self.advance() {
+                        Kind::Ident(name) => name,
                         _ => return Err("expected parent class name".into()),
+                    };
+                    while self.take(Kind::Dot) {
+                        let part = match self.advance() {
+                            Kind::Ident(name) => name,
+                            _ => return Err("expected parent class member after '.'".into()),
+                        };
+                        name = format!("{name}.{part}");
                     }
+                    Some(name)
                 } else {
                     None
                 };
-                Ok(Stmt::Class(name, parent, self.block()?))
+                Ok(mk(StmtKind::Class(name, parent, self.block()?)))
             }
             Kind::Switch => {
                 self.advance();
@@ -1114,7 +1202,7 @@ impl Parser {
                     self.separators();
                 }
                 self.expect(Kind::RBrace)?;
-                Ok(Stmt::Switch(value, cases, default_body))
+                Ok(mk(StmtKind::Switch(value, cases, default_body)))
             }
             Kind::Ident(_) => {
                 let expression = self.expr()?;
@@ -1136,9 +1224,9 @@ impl Parser {
                     let op = self.advance();
                     let value = self.expr()?;
                     match expression {
-                        Expr::Var(name) => Ok(Stmt::Assign(name, op, value)),
+                        Expr::Var(name) => Ok(mk(StmtKind::Assign(name, op, value))),
                         Expr::Member(object, member) if matches!(op, Kind::Assign) => {
-                            Ok(Stmt::SetMember(*object, member, value))
+                            Ok(mk(StmtKind::SetMember(*object, member, value)))
                         }
                         _ => Err("invalid assignment target".into()),
                     }
@@ -1146,39 +1234,74 @@ impl Parser {
                     // Command-style call: `go "url"`, `wait 6`, `sleep 2`, `exit 1`
                     if self.starts_expression() {
                         let arg = self.expr()?;
-                        Ok(Stmt::Expr(Expr::Call(
+                        Ok(mk(StmtKind::Expr(Expr::Call(
                             Box::new(Expr::Var(name)),
                             vec![arg],
-                        )))
+                        ))))
                     } else {
-                        Ok(Stmt::Expr(Expr::Var(name)))
+                        Ok(mk(StmtKind::Expr(Expr::Var(name))))
                     }
                 } else {
-                    Ok(Stmt::Expr(expression))
+                    Ok(mk(StmtKind::Expr(expression)))
                 }
             }
             Kind::Try => {
                 self.advance();
                 let body = self.block()?;
                 self.separators();
-                let mut catch_var = None;
-                let mut catch_body = vec![];
-                if self.take(Kind::Catch) {
-                    if !matches!(self.current().kind, Kind::LBrace) {
+                let mut catches: Vec<CatchClause> = vec![];
+                while self.take(Kind::Catch) {
+                    let mut kind = None;
+                    let mut var = None;
+                    // Optional error type: `catch TypeError as e`, `except errors.ValueError`
+                    if !matches!(self.current().kind, Kind::LBrace | Kind::As) {
+                        let mut name = match self.advance() {
+                            Kind::Ident(name) => name,
+                            _ => return Err("expected catch error type".into()),
+                        };
+                        while self.take(Kind::Dot) {
+                            let part = match self.advance() {
+                                Kind::Ident(name) => name,
+                                _ => {
+                                    return Err(
+                                        "expected error type member after '.'".into()
+                                    )
+                                }
+                            };
+                            name = format!("{name}.{part}");
+                        }
+                        kind = Some(name);
+                    }
+                    // Optional binding: `catch as e`, `catch e`, `catch (e)`
+                    if self.take(Kind::As) {
                         match self.advance() {
-                            Kind::Ident(name) => catch_var = Some(name),
+                            Kind::Ident(name) => var = Some(name),
+                            _ => return Err("expected catch variable name after 'as'".into()),
+                        }
+                    } else if let Kind::Ident(name) = self.current().kind.clone() {
+                        self.advance();
+                        var = Some(name);
+                    } else if self.take(Kind::LParen) {
+                        match self.advance() {
+                            Kind::Ident(name) => var = Some(name),
                             _ => return Err("expected catch variable name".into()),
                         }
+                        self.expect(Kind::RParen)?;
                     }
-                    catch_body = self.block()?;
+                    let catch_body = self.block()?;
+                    catches.push(CatchClause {
+                        kind,
+                        var,
+                        body: catch_body,
+                    });
+                    self.separators();
                 }
-                self.separators();
                 let finally_body = if self.take(Kind::Finally) {
                     Some(self.block()?)
                 } else {
                     None
                 };
-                Ok(Stmt::Try(body, catch_var, catch_body, finally_body))
+                Ok(mk(StmtKind::Try(body, catches, finally_body)))
             }
             Kind::Throw => {
                 self.advance();
@@ -1190,12 +1313,13 @@ impl Parser {
                 } else {
                     self.expr()?
                 };
-                Ok(Stmt::Throw(value))
+                Ok(mk(StmtKind::Throw(value)))
             }
-            _ => Ok(Stmt::Expr(self.expr()?)),
+            _ => Ok(mk(StmtKind::Expr(self.expr()?))),
         }
     }
     fn if_tail(&mut self) -> Result<Stmt, String> {
+        let (sl, sc) = (self.current().line, self.current().col);
         let condition = self.expr()?;
         let yes = self.block()?;
         self.separators();
@@ -1204,7 +1328,11 @@ impl Parser {
         } else {
             vec![]
         };
-        Ok(Stmt::If(condition, yes, no))
+        Ok(Stmt {
+            kind: StmtKind::If(condition, yes, no),
+            line: sl,
+            col: sc,
+        })
     }
     fn expr(&mut self) -> Result<Expr, String> {
         let mut left = self.nullish()?;
@@ -1404,6 +1532,26 @@ impl Parser {
         match self.advance() {
             Kind::Number(n) => Ok(Expr::Value(Value::Number(n))),
             Kind::String(s) => Ok(Expr::Value(Value::String(s))),
+            Kind::Interp(parts) => {
+                let mut pieces: Vec<Expr> = Vec::new();
+                for part in parts {
+                    let expr = match part {
+                        InterpPart::Text(t) => Expr::Value(Value::String(t)),
+                        InterpPart::Expr(src) => {
+                            let tokens = lex(&src).map_err(|e| {
+                                format!("{}:{}: in interpolation: {e}", self.current().line, self.current().col)
+                            })?;
+                            Parser::new(tokens).expr()?
+                        }
+                    };
+                    pieces.push(expr);
+                }
+                let mut acc = pieces.remove(0);
+                for piece in pieces {
+                    acc = Expr::Binary(Box::new(acc), Kind::Plus, Box::new(piece));
+                }
+                Ok(acc)
+            }
             Kind::True => Ok(Expr::Value(Value::Bool(true))),
             Kind::False => Ok(Expr::Value(Value::Bool(false))),
             Kind::Null => Ok(Expr::Value(Value::Null)),
@@ -1442,7 +1590,14 @@ impl Parser {
                 } else {
                     self.expect(Kind::Colon)?;
                     let body = self.expr()?;
-                    Ok(Expr::Lambda(params, vec![Stmt::Return(Some(body))]))
+                    Ok(Expr::Lambda(
+                        params,
+                        vec![Stmt {
+                            kind: StmtKind::Return(Some(body)),
+                            line: self.current().line,
+                            col: self.current().col,
+                        }],
+                    ))
                 }
             }
             Kind::New => {
@@ -1562,6 +1717,9 @@ struct Vm {
     imported_modules: HashMap<String, HashMap<String, Value>>,
     lambda_counter: u64,
     locked: std::collections::HashSet<String>,
+    file: String,
+    lines: Vec<String>,
+    stack: Vec<String>,
 }
 enum Flow {
     Normal,
@@ -1580,9 +1738,99 @@ impl Vm {
             imported_modules: HashMap::new(),
             lambda_counter: 0,
             locked: std::collections::HashSet::new(),
+            file: "<string>".into(),
+            lines: Vec::new(),
+            stack: vec!["<module>".into()],
         };
         vm.register_builtins();
+        vm.register_error_classes();
         vm
+    }
+
+    /// Register the Python-style error hierarchy as classes. Each error class
+    /// understands `new SomeError("message")` and supports custom subclasses:
+    /// `class MyError extends errors.Error { }`.
+    fn register_error_classes(&mut self) {
+        let init = Function {
+            params: vec!["message".into()],
+            body: vec![Stmt {
+                kind: StmtKind::SetMember(
+                    Expr::Var("self".into()),
+                    "message".into(),
+                    Expr::Var("message".into()),
+                ),
+                line: 0,
+                col: 0,
+            }],
+        };
+        let mut register = |leaf: &str, parent: Option<&str>| {
+            let parent_q = parent.map(|p| format!("errors.{p}"));
+            let qualified = format!("errors.{leaf}");
+            let mut methods = HashMap::new();
+            methods.insert("init".into(), init.clone());
+            let class = |methods: HashMap<String, Function>| ZenClass {
+                parent: parent_q.clone(),
+                methods,
+            };
+            self.classes
+                .insert(leaf.into(), class(methods.clone()));
+            self.classes.insert(qualified, class(methods));
+        };
+        register("Error", None);
+        register("TypeError", Some("Error"));
+        register("ValueError", Some("Error"));
+        register("RangeError", Some("ValueError"));
+        register("NameError", Some("Error"));
+        register("LookupError", Some("Error"));
+        register("KeyError", Some("LookupError"));
+        register("IndexError", Some("LookupError"));
+        register("ArithmeticError", Some("Error"));
+        register("MathError", Some("ArithmeticError"));
+        register("NumberError", Some("ArithmeticError"));
+        register("ZeroDivisionError", Some("ArithmeticError"));
+        register("OverflowError", Some("ArithmeticError"));
+        register("IOError", Some("Error"));
+        register("FileNotFoundError", Some("IOError"));
+        register("ImportError", Some("Error"));
+        register("KeyboardInterrupt", Some("Error"));
+        register("RuntimeError", Some("Error"));
+        register("NotImplementedError", Some("RuntimeError"));
+        register("StopIteration", Some("Error"));
+        register("RecursionError", Some("Error"));
+        register("AssertionError", Some("Error"));
+        register("SystemExit", Some("Error"));
+
+        // The `errors` module: a dict exposing every error type so that
+        // `import errors`, `print errors.ValueError`, etc. work.
+        let mut errors_map = BTreeMap::new();
+        for leaf in [
+            "Error",
+            "TypeError",
+            "ValueError",
+            "RangeError",
+            "NameError",
+            "LookupError",
+            "KeyError",
+            "IndexError",
+            "ArithmeticError",
+            "MathError",
+            "NumberError",
+            "ZeroDivisionError",
+            "OverflowError",
+            "IOError",
+            "FileNotFoundError",
+            "ImportError",
+            "KeyboardInterrupt",
+            "RuntimeError",
+            "NotImplementedError",
+            "StopIteration",
+            "RecursionError",
+            "AssertionError",
+            "SystemExit",
+        ] {
+            errors_map.insert(leaf.into(), Value::String(leaf.into()));
+        }
+        self.vars.insert("errors".into(), Value::Dict(errors_map));
     }
 
     fn register_builtins(&mut self) {
@@ -2538,7 +2786,12 @@ impl Vm {
                     fields: BTreeMap::new(),
                 }));
                 if self.find_method(class_name, "init").is_some() {
-                    match self.call_method(instance.clone(), "init", values)? {
+                    let init_values = if values.is_empty() && self.is_error_class(class_name) {
+                        vec![Value::String(String::new())]
+                    } else {
+                        values
+                    };
+                    match self.call_method(instance.clone(), "init", init_values)? {
                         Flow::Return(_) => {}
                         Flow::Throw(v) => return Err(format!("unhandled exception in init: {v}")),
                         _ => unreachable!(),
@@ -2936,13 +3189,44 @@ impl Vm {
                 }
                 (x, y) => Ok(Value::String(format!("{x}{y}"))),
             },
-            Kind::Minus | Kind::Star | Kind::Slash | Kind::Percent | Kind::Pow => {
+            Kind::Star => match (a, b) {
+                (Value::String(s), Value::Number(n)) => {
+                    let count = n.round() as i64;
+                    if count < 0 {
+                        return Err("string repetition requires a non-negative count".into());
+                    }
+                    if (n - n.round()).abs() > f64::EPSILON {
+                        return Err("string repetition requires an integer count".into());
+                    }
+                    let mut out = String::new();
+                    for _ in 0..count {
+                        out.push_str(&s);
+                    }
+                    Ok(Value::String(out))
+                }
+                (Value::Number(n), Value::String(s)) => {
+                    let count = n.round() as i64;
+                    if count < 0 {
+                        return Err("string repetition requires a non-negative count".into());
+                    }
+                    if (n - n.round()).abs() > f64::EPSILON {
+                        return Err("string repetition requires an integer count".into());
+                    }
+                    let mut out = String::new();
+                    for _ in 0..count {
+                        out.push_str(&s);
+                    }
+                    Ok(Value::String(out))
+                }
+                (Value::Number(x), Value::Number(y)) => Ok(Value::Number(x * y)),
+                _ => Err("string repetition requires a string and a number".into()),
+            },
+            Kind::Minus | Kind::Slash | Kind::Percent | Kind::Pow => {
                 let (Value::Number(x), Value::Number(y)) = (a, b) else {
                     return Err("arithmetic requires numbers".into());
                 };
                 match op {
                     Kind::Minus => Ok(Value::Number(x - y)),
-                    Kind::Star => Ok(Value::Number(x * y)),
                     Kind::Slash => Ok(Value::Number(x / y)),
                     Kind::Percent => Ok(Value::Number(x % y)),
                     Kind::Pow => Ok(Value::Number(x.powf(y))),
@@ -2969,6 +3253,10 @@ impl Vm {
         let mut module_vm = Vm::new();
         module_vm.functions = self.functions.clone();
         module_vm.classes = self.classes.clone();
+        module_vm.file = path.into();
+        if let Ok(source) = fs::read_to_string(path) {
+            module_vm.lines = source.lines().map(|l| l.to_string()).collect();
+        }
         module_vm.exec(&stmts)?;
         // Register the module's functions under a namespaced key in the caller so
         // `module.func(...)` calls resolve through self.functions.
@@ -3046,7 +3334,10 @@ impl Vm {
         for (parameter, value) in function.params.iter().zip(values) {
             self.vars.insert(parameter.clone(), value);
         }
-        let flow = self.exec(&function.body)?;
+        self.stack.push(name.to_string());
+        let flow = self.exec(&function.body);
+        self.stack.pop();
+        let flow = flow?;
         self.vars = caller_vars;
         Ok(match flow {
             Flow::Return(value) => Flow::Return(value),
@@ -3104,7 +3395,10 @@ impl Vm {
         for (parameter, value) in function.params.iter().zip(values) {
             self.vars.insert(parameter.clone(), value);
         }
-        let flow = self.exec(&function.body)?;
+        self.stack.push(format!("{class_name}.{method}"));
+        let flow = self.exec(&function.body);
+        self.stack.pop();
+        let flow = flow?;
         self.vars = caller_vars;
         Ok(match flow {
             Flow::Return(value) => Flow::Return(value),
@@ -3125,8 +3419,20 @@ impl Vm {
     }
     fn exec(&mut self, stmts: &[Stmt]) -> Result<Flow, String> {
         for stmt in stmts {
-            match stmt {
-                Stmt::Let(target, e, is_const) => {
+            let result = self.exec_one(stmt);
+            match result {
+                Ok(Flow::Normal | Flow::Continue) => {}
+                Ok(Flow::Break) => return Ok(Flow::Break),
+                Ok(Flow::Return(value)) => return Ok(Flow::Return(value)),
+                Ok(Flow::Throw(value)) => return Ok(Flow::Throw(value)),
+                Err(e) => return Err(self.locate(stmt.line, stmt.col, e)),
+            }
+        }
+        Ok(Flow::Normal)
+    }
+    fn exec_one(&mut self, stmt: &Stmt) -> Result<Flow, String> {
+        match &stmt.kind {
+                StmtKind::Let(target, e, is_const) => {
                     let v = self.eval(e)?;
                     let mut names: Vec<String> = Vec::new();
                     match target {
@@ -3173,8 +3479,9 @@ impl Vm {
                             self.locked.remove(&name);
                         }
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::Assign(n, op, e) => {
+                StmtKind::Assign(n, op, e) => {
                     if self.locked.contains(n) {
                         return Err(format!("cannot assign to constant: {n}"));
                     }
@@ -3216,19 +3523,22 @@ impl Vm {
                         )?
                     };
                     self.vars.insert(n.clone(), v);
+                    Ok(Flow::Normal)
                 }
-                Stmt::Print(values) => {
+                StmtKind::Print(values) => {
                     let text = values
                         .iter()
                         .map(|e| self.eval(e).map(|v| v.to_string()))
                         .collect::<Result<Vec<_>, _>>()?
                         .join(" ");
                     println!("{text}");
+                    Ok(Flow::Normal)
                 }
-                Stmt::Expr(e) => {
+                StmtKind::Expr(e) => {
                     self.eval(e)?;
+                    Ok(Flow::Normal)
                 }
-                Stmt::If(c, yes, no) => {
+                StmtKind::If(c, yes, no) => {
                     let flow = if self.eval(c)?.truthy() {
                         self.exec(yes)?
                     } else {
@@ -3237,8 +3547,9 @@ impl Vm {
                     if !matches!(flow, Flow::Normal) {
                         return Ok(flow);
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::While(c, body) => {
+                StmtKind::While(c, body) => {
                     while self.eval(c)?.truthy() {
                         match self.exec(body)? {
                             Flow::Normal | Flow::Continue => {}
@@ -3247,8 +3558,9 @@ impl Vm {
                             Flow::Throw(value) => return Ok(Flow::Throw(value)),
                         }
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::For(n, e, body) => {
+                StmtKind::For(n, e, body) => {
                     let Value::List(items) = self.eval(e)? else {
                         return Err("for requires a list".into());
                     };
@@ -3261,10 +3573,11 @@ impl Vm {
                             Flow::Throw(value) => return Ok(Flow::Throw(value)),
                         }
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::Break => return Ok(Flow::Break),
-                Stmt::Continue => return Ok(Flow::Continue),
-                Stmt::Function(name, params, body) => {
+                StmtKind::Break => return Ok(Flow::Break),
+                StmtKind::Continue => return Ok(Flow::Continue),
+                StmtKind::Function(name, params, body) => {
                     let function = Function {
                         params: params.clone(),
                         body: body.clone(),
@@ -3273,45 +3586,59 @@ impl Vm {
                         registry.insert(name.clone(), function.clone());
                     }
                     self.functions.insert(name.clone(), function);
+                    Ok(Flow::Normal)
                 }
-                Stmt::Native(name, _params) => {
+                StmtKind::Native(name, _params) => {
                     let func = native_for(name);
                     self.native_functions.insert(name.clone(), func);
                     self.vars.insert(name.clone(), Value::NativeFunction(name.clone()));
+                    Ok(Flow::Normal)
                 }
-                Stmt::Try(body, catch_var, catch_body, finally_body) => {
-                    let flow = self.exec(body);
-                    let flow = match flow {
+                StmtKind::Try(body, catches, finally_body) => {
+                    enum Outcome {
+                        Flow(Flow),
+                        Error(String),
+                    }
+                    let outcome = match self.exec(body) {
                         Ok(Flow::Throw(value)) => {
-                            if let Some(var) = catch_var {
-                                self.vars.insert(var.clone(), Value::String(value.to_string()));
-                                self.exec(catch_body)?
-                            } else {
-                                return Ok(Flow::Throw(value));
+                            match self.handle_catches(catches, value.clone()) {
+                                Ok(Some(flow)) => Outcome::Flow(flow),
+                                Ok(None) => Outcome::Flow(Flow::Throw(value)),
+                                Err(e) => Outcome::Error(e),
                             }
                         }
                         Err(e) => {
-                            if let Some(var) = catch_var {
-                                self.vars.insert(var.clone(), Value::String(e));
-                                self.exec(catch_body)?
-                            } else {
-                                return Err(e);
+                            let err_value = self.runtime_error(&e);
+                            match self.handle_catches(catches, err_value) {
+                                Ok(Some(flow)) => Outcome::Flow(flow),
+                                Ok(None) => Outcome::Error(e),
+                                Err(e2) => Outcome::Error(e2),
                             }
                         }
-                        Ok(f) => f,
+                        Ok(f) => Outcome::Flow(f),
                     };
                     if let Some(finally) = finally_body {
-                        self.exec(&finally)?;
+                        match self.exec(&finally) {
+                            Ok(Flow::Normal | Flow::Continue) => {}
+                            Ok(flow) => return Ok(flow),
+                            Err(e) => return Err(e),
+                        }
                     }
-                    if !matches!(flow, Flow::Normal) {
-                        return Ok(flow);
+                    match outcome {
+                        Outcome::Flow(flow) => {
+                            if !matches!(flow, Flow::Normal) {
+                                return Ok(flow);
+                            }
+                            Ok(Flow::Normal)
+                        }
+                        Outcome::Error(e) => Err(e),
                     }
                 }
-                Stmt::Throw(e) => {
+                StmtKind::Throw(e) => {
                     let val = self.eval(e)?;
-                    return Ok(Flow::Throw(val));
+                    return Ok(Flow::Throw(self.to_error(val, stmt.line, stmt.col)));
                 }
-                Stmt::Import(imports) => {
+                StmtKind::Import(imports) => {
                     for (module, alias) in imports {
                         let name = alias.clone().unwrap_or(module.clone());
                         if let Some(Value::Dict(existing)) = self.vars.get(module).cloned() {
@@ -3326,8 +3653,9 @@ impl Vm {
                         let vars = self.run_module(&path, &name)?;
                         self.imported_modules.insert(name, vars);
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::FromImport(module, items) => {
+                StmtKind::FromImport(module, items) => {
                     let vars = if let Some(Value::Dict(existing)) = self.vars.get(module).cloned()
                     {
                         existing.into_iter().collect()
@@ -3340,8 +3668,9 @@ impl Vm {
                         let name = alias.clone().unwrap_or(item.clone());
                         self.vars.insert(name, value);
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::Load(path) => {
+                StmtKind::Load(path) => {
                     let resolved = if path.ends_with(".z") || path.contains('/') {
                         path.clone()
                     } else {
@@ -3355,21 +3684,23 @@ impl Vm {
                     for (name, value) in exports {
                         self.vars.insert(name, value);
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::Include(path) => {
+                StmtKind::Include(path) => {
                     let stmts = parse_file(path)?;
                     let flow = self.exec(&stmts)?;
                     if !matches!(flow, Flow::Normal) {
                         return Ok(flow);
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::Return(value) => {
+                StmtKind::Return(value) => {
                     return Ok(Flow::Return(match value {
                         Some(value) => self.eval(value)?,
                         None => Value::Null,
                     }));
                 }
-                Stmt::Class(name, parent, body) => {
+                StmtKind::Class(name, parent, body) => {
                     if let Some(parent) = parent {
                         if !self.classes.contains_key(parent) {
                             return Err(format!("unknown parent class: {parent}"));
@@ -3377,7 +3708,7 @@ impl Vm {
                     }
                     let mut methods = HashMap::new();
                     for statement in body {
-                        if let Stmt::Function(method, params, body) = statement {
+                        if let StmtKind::Function(method, params, body) = &statement.kind {
                             methods.insert(
                                 method.clone(),
                                 Function {
@@ -3398,8 +3729,9 @@ impl Vm {
                             methods,
                         },
                     );
+                    Ok(Flow::Normal)
                 }
-                Stmt::SetMember(object, member, value) => {
+                StmtKind::SetMember(object, member, value) => {
                     match self.eval(object)? {
                         Value::Instance(instance) => {
                             instance
@@ -3418,8 +3750,9 @@ impl Vm {
                         }
                         _ => return Err("member assignment requires an object".into()),
                     }
+                    Ok(Flow::Normal)
                 }
-                Stmt::Switch(value, cases, default_body) => {
+                StmtKind::Switch(value, cases, default_body) => {
                     let target = self.eval(value)?;
                     let mut matched = false;
                     let mut flow = Flow::Normal;
@@ -3438,10 +3771,194 @@ impl Vm {
                     if !matches!(flow, Flow::Normal) {
                         return Ok(flow);
                     }
+                    Ok(Flow::Normal)
                 }
             }
         }
-        Ok(Flow::Normal)
+    fn locate(&self, line: usize, col: usize, message: String) -> String {
+        if line == 0 {
+            return message;
+        }
+        if message.starts_with("Traceback (most recent call last):") {
+            return message;
+        }
+        let mut out = String::from("Traceback (most recent call last):\n");
+        out.push_str(&format!(
+            "  File \"{}\", line {}, in {}\n",
+            self.file,
+            line,
+            self.stack.last().map(|s| s.as_str()).unwrap_or("<module>")
+        ));
+        if let Some(src_line) = self.lines.get(line.wrapping_sub(1)) {
+            let trimmed = src_line.trim();
+            if !trimmed.is_empty() {
+                out.push_str(&format!("    {trimmed}\n"));
+                let pad = " ".repeat(4 + col.saturating_sub(1).min(trimmed.chars().count()));
+                out.push_str(&format!("{pad}^\n"));
+            }
+        }
+        out.push_str(&format!("Error: {message}\n"));
+        out
+    }
+    fn runtime_error(&self, message: &str) -> Value {
+        let msg = message
+            .rsplit_once("\nError: ")
+            .map(|(_, m)| m.to_string())
+            .unwrap_or_else(|| message.to_string());
+        let mut map = BTreeMap::new();
+        map.insert("type".into(), Value::String("Error".into()));
+        map.insert("message".into(), Value::String(msg));
+        map.insert("file".into(), Value::String(self.file.clone()));
+        map.insert("line".into(), Value::Number(0.0));
+        map.insert("col".into(), Value::Number(0.0));
+        Value::Dict(map)
+    }
+    fn to_error(&self, value: Value, line: usize, col: usize) -> Value {
+        match value {
+            Value::Dict(mut map) => {
+                map.entry("type".into())
+                    .or_insert_with(|| Value::String("Error".into()));
+                map.entry("message".into())
+                    .or_insert_with(|| Value::String(String::new()));
+                map.entry("file".into())
+                    .or_insert_with(|| Value::String(self.file.clone()));
+                map.entry("line".into())
+                    .or_insert_with(|| Value::Number(line as f64));
+                map.entry("col".into())
+                    .or_insert_with(|| Value::Number(col as f64));
+                Value::Dict(map)
+            }
+            Value::Instance(instance) => {
+                // `throw new MyError("msg")` — carry the class name and message.
+                let instance = instance.lock().unwrap();
+                let class_name = instance.class_name.clone();
+                let message = instance
+                    .fields
+                    .get("message")
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| class_name.clone());
+                let mut map = BTreeMap::new();
+                map.insert(
+                    "type".into(),
+                    Value::String(class_name.rsplit('.').next().unwrap_or(&class_name).into()),
+                );
+                map.insert("message".into(), Value::String(message));
+                map.insert("file".into(), Value::String(self.file.clone()));
+                map.insert("line".into(), Value::Number(line as f64));
+                map.insert("col".into(), Value::Number(col as f64));
+                Value::Dict(map)
+            }
+            other => {
+                let mut map = BTreeMap::new();
+                map.insert("type".into(), Value::String("Error".into()));
+                map.insert("message".into(), Value::String(other.to_string()));
+                map.insert("file".into(), Value::String(self.file.clone()));
+                map.insert("line".into(), Value::Number(line as f64));
+                map.insert("col".into(), Value::Number(col as f64));
+                Value::Dict(map)
+            }
+        }
+    }
+    fn is_error_class(&self, class_name: &str) -> bool {
+        let mut current = Some(class_name.to_string());
+        while let Some(name) = current {
+            if name == "errors.Error" || name == "Error" {
+                return true;
+            }
+            current = self.classes.get(&name).and_then(|c| c.parent.clone());
+        }
+        false
+    }
+    fn error_is_a(&self, err_type: &str, wanted: &str) -> bool {
+        // `Error` / `errors.Error` is the universal base: it matches everything.
+        if wanted == "Error" || wanted == "errors.Error" {
+            return true;
+        }
+        if err_type == wanted {
+            return true;
+        }
+        // Allow `catch ValueError` to match `errors.ValueError` and vice versa.
+        let leaf = err_type.rsplit('.').next().unwrap_or(err_type);
+        if leaf == wanted || (wanted.contains('.') && wanted.rsplit('.').next() == Some(leaf)) {
+            return true;
+        }
+        // Walk the inheritance chain (custom subclasses of errors.Error included).
+        let mut current = Some(err_type.to_string());
+        while let Some(name) = current {
+            if name == wanted {
+                return true;
+            }
+            current = self.classes.get(&name).and_then(|c| c.parent.clone());
+        }
+        false
+    }
+    fn handle_catches(
+        &mut self,
+        catches: &[CatchClause],
+        value: Value,
+    ) -> Result<Option<Flow>, String> {
+        let err_type = match &value {
+            Value::Dict(map) => map
+                .get("type")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "Error".into()),
+            Value::Instance(instance) => instance
+                .lock()
+                .unwrap()
+                .class_name
+                .rsplit('.')
+                .next()
+                .unwrap_or("Error")
+                .to_string(),
+            _ => "Error".into(),
+        };
+        for clause in catches {
+            let matches = match &clause.kind {
+                None => true,
+                Some(kind) => self.error_is_a(&err_type, kind),
+            };
+            if matches {
+                if let Some(var) = &clause.var {
+                    let bind = match &value {
+                        Value::Dict(map) => map
+                            .get("message")
+                            .cloned()
+                            .unwrap_or(Value::String(err_type)),
+                        other => other.clone(),
+                    };
+                    self.vars.insert(var.clone(), bind);
+                }
+                return self.exec(&clause.body).map(Some);
+            }
+        }
+        Ok(None)
+    }
+    fn error_info(&self, value: &Value) -> (String, String) {
+        match value {
+            Value::Dict(map) => (
+                map.get("type").map(|v| v.to_string()).unwrap_or_else(|| "Error".into()),
+                map.get("message")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
+            Value::Instance(instance) => {
+                let instance = instance.lock().unwrap();
+                (
+                    instance
+                        .class_name
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("Error")
+                        .to_string(),
+                    instance
+                        .fields
+                        .get("message")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                )
+            }
+            other => ("Error".into(), other.to_string()),
+        }
     }
 }
 
@@ -4699,7 +5216,7 @@ fn native_for(name: &str) -> NativeFunc {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
             Ok(Value::Number(now.as_secs_f64()))
         },
-        "time_utc" | "time_now" => |_| {
+        "time_utc" => |_| {
             let now = SystemTime::now();
             let datetime: chrono::DateTime<chrono::Utc> = now.into();
             Ok(Value::String(datetime.to_rfc3339().replace("+00:00", "Z")))
@@ -5289,10 +5806,18 @@ fn native_for(name: &str) -> NativeFunc {
     }
 }
 
+#[allow(dead_code)]
 pub fn run(source: &str) -> Result<(), String> {
+    run_named(source, "<string>")
+}
+
+/// Run a script, reporting errors against a named source file.
+pub fn run_named(source: &str, file: &str) -> Result<(), String> {
     let tokens = lex(source)?;
     let program = Parser::new(tokens).program()?;
     let mut vm = Vm::new();
+    vm.file = file.into();
+    vm.lines = source.lines().map(|l| l.to_string()).collect();
     if let Some(prelude) = find_std_file("browser.z") {
         let stmts = parse_file(&prelude)?;
         vm.exec(&stmts)?;
@@ -5303,8 +5828,57 @@ pub fn run(source: &str) -> Result<(), String> {
         Flow::Return(_) => Err("return used outside a function".into()),
         Flow::Break => Err("break used outside a loop".into()),
         Flow::Continue => Err("continue used outside a loop".into()),
-        Flow::Throw(e) => Err(format!("unhandled exception: {e}")),
+        Flow::Throw(value) => {
+            let (ty, msg) = vm.error_info(&value);
+            let (file, line, col) = error_location(&value);
+            Err(format_unhandled(source, &file, line, col, &ty, &msg))
+        }
     }
+}
+
+fn error_location(value: &Value) -> (String, usize, usize) {
+    match value {
+        Value::Dict(map) => (
+            map.get("file").map(|v| v.to_string()).unwrap_or_default(),
+            map.get("line")
+                .and_then(|v| match v {
+                    Value::Number(n) => Some(*n as usize),
+                    _ => None,
+                })
+                .unwrap_or(0),
+            map.get("col")
+                .and_then(|v| match v {
+                    Value::Number(n) => Some(*n as usize),
+                    _ => None,
+                })
+                .unwrap_or(0),
+        ),
+        _ => (String::new(), 0, 0),
+    }
+}
+
+fn format_unhandled(
+    source: &str,
+    file: &str,
+    line: usize,
+    col: usize,
+    ty: &str,
+    msg: &str,
+) -> String {
+    let mut out = String::from("Traceback (most recent call last):\n");
+    out.push_str(&format!("  File \"{file}\", line {line}, in <module>\n"));
+    if line > 0 {
+        if let Some(src_line) = source.lines().nth(line.wrapping_sub(1)) {
+            let trimmed = src_line.trim();
+            if !trimmed.is_empty() {
+                out.push_str(&format!("    {trimmed}\n"));
+                let pad = " ".repeat(4 + col.saturating_sub(1).min(trimmed.chars().count()));
+                out.push_str(&format!("{pad}^\n"));
+            }
+        }
+    }
+    out.push_str(&format!("{ty}: {msg}\n"));
+    out
 }
 
 /// Interactive session state that persists across evaluated lines.
@@ -5328,6 +5902,8 @@ impl Repl {
         if !self.initialized {
             return Err("repl is not initialized".into());
         }
+        self.vm.file = "<repl>".into();
+        self.vm.lines = line.lines().map(|l| l.to_string()).collect();
         // Try as a statement first; fall back to expression-print if it's
         // just an expression (e.g. `5 + 5`).
         match lex(line) {
@@ -5348,7 +5924,7 @@ impl Repl {
                 };
                 // A single expression statement evaluates to a value we should print.
                 if program.len() == 1 {
-                    if let Stmt::Expr(e) = &program[0] {
+                    if let StmtKind::Expr(e) = &program[0].kind {
                         match self.vm.eval(e) {
                             Ok(value) => {
                                 println!("{}", value.to_string());
@@ -5363,7 +5939,17 @@ impl Repl {
                     Ok(Flow::Return(_)) => Err("return used outside a function".into()),
                     Ok(Flow::Break) => Err("break used outside a loop".into()),
                     Ok(Flow::Continue) => Err("continue used outside a loop".into()),
-                    Ok(Flow::Throw(e)) => Err(format!("unhandled exception: {e}")),
+                    Ok(Flow::Throw(value)) => {
+                        let (ty, msg) = self.vm.error_info(&value);
+                        let (file, line, col) = error_location(&value);
+                        let source = self
+                            .vm
+                            .lines
+                            .get(line.saturating_sub(1))
+                            .map(|s| s.as_str())
+                            .unwrap_or("");
+                        Err(format_unhandled(source, &file, line, col, &ty, &msg))
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -5418,15 +6004,15 @@ fn lint_block(
     let mut unreachable = false;
     for stmt in body {
         if unreachable {
-            match stmt {
-                Stmt::Function(..) | Stmt::Class(..) => {}
+            match &stmt.kind {
+                StmtKind::Function(..) | StmtKind::Class(..) => {}
                 _ => warnings.push(format!(
                     "{depth}: unreachable statement after return/break/continue"
                 )),
             }
         }
-        match stmt {
-            Stmt::Let(target, _, is_const) => {
+        match &stmt.kind {
+            StmtKind::Let(target, _, is_const) => {
                 let names = match target {
                     LetTarget::Var(n) => vec![n.clone()],
                     LetTarget::List(names) | LetTarget::Dict(names) => names.clone(),
@@ -5438,19 +6024,19 @@ fn lint_block(
                     globals.insert(name);
                 }
             }
-            Stmt::Assign(n, _, _) => {
+            StmtKind::Assign(n, _, _) => {
                 if consts.contains(n) {
                     warnings.push(format!("assignment to constant '{n}'"));
                 }
             }
-            Stmt::Return(_) | Stmt::Break | Stmt::Continue => unreachable = true,
-            Stmt::If(_, yes, no) => {
+            StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue => unreachable = true,
+            StmtKind::If(_, yes, no) => {
                 lint_block(yes, depth + 1, globals, consts, warnings);
                 lint_block(no, depth + 1, globals, consts, warnings);
             }
-            Stmt::While(_, body) => lint_block(body, depth + 1, globals, consts, warnings),
-            Stmt::For(_, _, body) => lint_block(body, depth + 1, globals, consts, warnings),
-            Stmt::Function(name, params, body) => {
+            StmtKind::While(_, body) => lint_block(body, depth + 1, globals, consts, warnings),
+            StmtKind::For(_, _, body) => lint_block(body, depth + 1, globals, consts, warnings),
+            StmtKind::Function(name, params, body) => {
                 let saved = globals.clone();
                 for param in params {
                     globals.insert(param.clone());
@@ -5459,14 +6045,16 @@ fn lint_block(
                 *globals = saved;
                 let _ = name;
             }
-            Stmt::Try(body, _, catch, finally) => {
+            StmtKind::Try(body, catches, finally) => {
                 lint_block(body, depth + 1, globals, consts, warnings);
-                lint_block(catch, depth + 1, globals, consts, warnings);
+                for clause in catches {
+                    lint_block(&clause.body, depth + 1, globals, consts, warnings);
+                }
                 if let Some(finally) = finally.as_ref() {
                     lint_block(finally, depth + 1, globals, consts, warnings);
                 }
             }
-            Stmt::Switch(_, cases, default) => {
+            StmtKind::Switch(_, cases, default) => {
                 for (_, body) in cases {
                     lint_block(body, depth + 1, globals, consts, warnings);
                 }
@@ -5474,7 +6062,7 @@ fn lint_block(
                     lint_block(default, depth + 1, globals, consts, warnings);
                 }
             }
-            Stmt::Expr(Expr::Call(callee, _)) => {
+            StmtKind::Expr(Expr::Call(callee, _)) => {
                 if let Expr::Var(name) = callee.as_ref() {
                     if !globals.contains(name) {
                         warnings.push(format!("call to possibly undefined function '{name}'"));
@@ -5850,11 +6438,7 @@ mod tests {
     fn honors_precedence() {
         let tokens = lex("let n = 2 + 3 * 4").unwrap();
         let program = Parser::new(tokens).program().unwrap();
-        let mut vm = Vm {
-            vars: HashMap::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
-        };
+        let mut vm = Vm::new();
         vm.exec(&program).unwrap();
         assert_eq!(vm.vars.get("n"), Some(&Value::Number(14.0)));
     }
@@ -5862,11 +6446,7 @@ mod tests {
     fn builds_inclusive_ranges_in_both_directions() {
         let tokens = lex("let up = 1 -> 3\nlet down = 2 -> 0").unwrap();
         let program = Parser::new(tokens).program().unwrap();
-        let mut vm = Vm {
-            vars: HashMap::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
-        };
+        let mut vm = Vm::new();
         vm.exec(&program).unwrap();
         assert_eq!(
             vm.vars.get("up"),
@@ -5892,11 +6472,7 @@ mod tests {
         )
         .unwrap();
         let program = Parser::new(tokens).program().unwrap();
-        let mut vm = Vm {
-            vars: HashMap::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
-        };
+        let mut vm = Vm::new();
         vm.exec(&program).unwrap();
         assert_eq!(vm.vars.get("port"), Some(&Value::Number(443.0)));
     }
@@ -5905,11 +6481,7 @@ mod tests {
         let source = "function factorial(n) { if n <= 1 { return 1 } return n * factorial(n - 1) }\nlet answer = factorial(5)";
         let tokens = lex(source).unwrap();
         let program = Parser::new(tokens).program().unwrap();
-        let mut vm = Vm {
-            vars: HashMap::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
-        };
+        let mut vm = Vm::new();
         vm.exec(&program).unwrap();
         assert_eq!(vm.vars.get("answer"), Some(&Value::Number(120.0)));
     }
@@ -5918,11 +6490,7 @@ mod tests {
         let source = "class Greeter { function greet(name) { return \"Hello, \" + name } }\nlet person = new Greeter()\nlet message = person.greet(\"Zen\")";
         let tokens = lex(source).unwrap();
         let program = Parser::new(tokens).program().unwrap();
-        let mut vm = Vm {
-            vars: HashMap::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
-        };
+        let mut vm = Vm::new();
         vm.exec(&program).unwrap();
         assert_eq!(
             vm.vars.get("message"),
@@ -5934,11 +6502,7 @@ mod tests {
         let source = "class Person { function init(name) { self.name = name } function greet() { return \"Hi, \" + self.name } }\nclass Friendly extends Person { function salute() { return self.greet() + \"!\" } }\nlet user = new Friendly(\"Zen\")\nlet message = user.salute()";
         let tokens = lex(source).unwrap();
         let program = Parser::new(tokens).program().unwrap();
-        let mut vm = Vm {
-            vars: HashMap::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
-        };
+        let mut vm = Vm::new();
         vm.exec(&program).unwrap();
         assert_eq!(
             vm.vars.get("message"),
@@ -5950,11 +6514,7 @@ mod tests {
         let source = "let fallback = null ?? \"value\"\nlet type = typeof [1, 2]\nlet contains = 2 in [1, 2, 3]\nlet strict = 2 === 2\nlet not_strict = 2 !== \"2\"";
         let tokens = lex(source).unwrap();
         let program = Parser::new(tokens).program().unwrap();
-        let mut vm = Vm {
-            vars: HashMap::new(),
-            functions: HashMap::new(),
-            classes: HashMap::new(),
-        };
+        let mut vm = Vm::new();
         vm.exec(&program).unwrap();
         assert_eq!(
             vm.vars.get("fallback"),

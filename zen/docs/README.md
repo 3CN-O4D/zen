@@ -28,7 +28,8 @@ All documentation lives under the `docs/` directory. The root `README.md` serves
 
 ### Language Reference
 
-- `docs/language/reference.md` — Complete syntax reference covering variables, operators, control flow, functions, classes, modules, destructuring, and built-in globals.
+- `docs/language/tutorial.md` — A friendly, example-packed, from-zero introduction to Zen: variables, values, operators, control flow, functions, containers, classes, modules, and a complete runnable sample program. Start here if you are new to Zen.
+- `docs/language/reference.md` — The complete, compact syntax reference covering variables, operators, control flow, functions, classes, modules, destructuring, and built-in globals. Use it as a checklist after the tutorial.
 
 ### Command-Line Interface
 

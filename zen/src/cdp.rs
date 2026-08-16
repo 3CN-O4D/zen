@@ -87,6 +87,7 @@ impl CdpBrowser {
         CdpSession::connect(url.to_string())
     }
 
+    #[allow(dead_code)]
     pub fn get_version(&self) -> Result<serde_json::Value, String> {
         let response = reqwest::blocking::get(format!("http://127.0.0.1:{}/json/version", self.port))
             .map_err(|e| e.to_string())?;
@@ -99,6 +100,7 @@ impl CdpBrowser {
         response.json().map_err(|e| e.to_string())
     }
 
+    #[allow(dead_code)]
     pub fn create_target(&self, url: &str) -> Result<String, String> {
         let client = reqwest::blocking::Client::new();
         let response = client

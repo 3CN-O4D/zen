@@ -23,6 +23,7 @@ zen -e 'print "Hello, Zen World!"'
 
 ## Documentation Structure
 
+- [Tutorial - Learn Zen from Zero](zen/docs/language/tutorial.md) - Wordy, example-packed guide to how Zen works
 - [Language Reference](zen/docs/language/reference.md) - Syntax, variables, types, control flow, functions, classes
 - [CLI Reference](zen/docs/cli.md) - Commands (`run`, `check`, `lint`, `repl`, `pm`, `-h`/`--help`)
 - [Modules](zen/docs/) - File system (`fs`), Data (JSON, CSV, regex, random, math), System (OS, time, datetime, crypto, HTTP, browser)
