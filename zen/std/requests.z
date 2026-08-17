@@ -1,0 +1,148 @@
+# requests.z — Python-like requests module for Zen
+# Wraps Rust-native http functions
+
+func request(method, url, params=null, headers=null, timeout=null) {
+    let method_lower = method.lower()
+    let result = if method_lower == "get" {
+        http_get(url, params, headers, timeout)
+    } elif method_lower == "post" {
+        http_post(url, params, headers, timeout)
+    } elif method_lower == "put" {
+        http_put(url, params, headers, timeout)
+    } elif method_lower == "delete" {
+        http_del(url, params, headers, timeout)
+    } elif method_lower == "head" {
+        http_head(url, params, headers, timeout)
+    } elif method_lower == "patch" {
+        http_patch(url, params, headers, timeout)
+    } else {
+        return {"error": "unsupported method: " + method}
+    }
+    return result
+}
+
+func get(url, params=null, headers=null, timeout=null) {
+    return request("GET", url, params, headers, timeout)
+}
+
+func post(url, data=null, json=null, headers=null, timeout=null) {
+    let body = if data != null {
+        data
+    } elif json != null {
+        json
+    } else {
+        null
+    }
+    return request("POST", url, body, headers, timeout)
+}
+
+func put(url, data=null, json=null, headers=null, timeout=null) {
+    let body = if data != null {
+        data
+    } elif json != null {
+        json
+    } else {
+        null
+    }
+    return request("PUT", url, body, headers, timeout)
+}
+
+func delete(url, params=null, headers=null, timeout=null) {
+    return request("DELETE", url, params, headers, timeout)
+}
+
+func head(url, params=null, headers=null, timeout=null) {
+    return request("HEAD", url, params, headers, timeout)
+}
+
+func patch(url, data=null, json=null, headers=null, timeout=null) {
+    let body = if data != null {
+        data
+    } elif json != null {
+        json
+    } else {
+        null
+    }
+    return request("PATCH", url, body, headers, timeout)
+}
+
+func Session() {
+    var _cookies = {}
+    var _headers = {}
+
+    func get(url, params=null, headers=null, timeout=null) {
+        let merged_headers = if headers != null {
+            headers
+        } else {
+            _headers.clone()
+        }
+        return http_get(url, params, merged_headers, timeout)
+    }
+
+    func post(url, data=null, json=null, headers=null, timeout=null) {
+        let body = if data != null {
+            data
+        } elif json != null {
+            json
+        } else {
+            null
+        }
+        return http_post(url, body, _headers.clone(), timeout)
+    }
+
+    func request(method, url, params=null, headers=null, timeout=null) {
+        return http_request(method, url, params, headers, timeout)
+    }
+
+    func close() {
+        _cookies = {}
+        _headers = {}
+    }
+
+    return {
+        get: get,
+        post: post,
+        request: request,
+        close: close,
+        type: "Session",
+    }
+}
+
+func Response(json_data) {
+    var _status_code = 200
+    var _text = ""
+    var _headers = {}
+    var _json = json_data
+
+    func json() {
+        return _json
+    }
+
+    func text() {
+        return _text
+    }
+
+    func status_code() {
+        return _status_code
+    }
+
+    func headers() {
+        return _headers
+    }
+
+    func raise_for_status() {
+        if _status_code >= 400 {
+            return {"error": "HTTP error " + string(_status_code), "status_code": _status_code}
+        }
+        return null
+    }
+
+    return {
+        json: json,
+        text: text,
+        status_code: status_code,
+        headers: headers,
+        raise_for_status: raise_for_status,
+        type: "Response",
+    }
+}

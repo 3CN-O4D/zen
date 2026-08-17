@@ -19,7 +19,6 @@ zen/lib/package-lock.json
 *.bin
 *.txt
 zen/target/
-*.z
 wa_auth/
 betika_data/
 test_img_dir/

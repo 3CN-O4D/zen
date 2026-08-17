@@ -1,0 +1,8 @@
+go "https://example.com"
+let title = text("h1")
+print title
+let paragraphs = texts("p")
+for p in paragraphs {
+    print p
+}
+shot "example.png"

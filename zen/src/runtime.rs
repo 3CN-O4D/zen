@@ -3993,7 +3993,7 @@ self.vars.insert("re".into(), re);
         }
     }
     fn run_module(&mut self, path: &str, namespace: &str) -> Result<HashMap<String, Value>, String> {
-        let stmts = parse_file(path)?;
+        let stmts = parse_file(path).map_err(|e| format!("\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n \x1b[1;34m-->\x1b[0m {}:1\n  \x1b[1;34m|\x1b[0m\n  \x1b[1;31m= {}\x1b[0m", e, path, e))?;
         let mut module_vm = Vm::new();
         module_vm.functions = self.functions.clone();
         module_vm.native_functions = self.native_functions.clone();

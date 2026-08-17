@@ -1,0 +1,21 @@
+// Modern SPA handling demo
+// Demonstrates JS-rendered content interaction
+
+go "https://example.com"
+print "Page loaded with JS: " + execute("typeof window !== 'undefined'")
+
+// Wait for dynamic content
+wait for "body"
+
+// Scroll and interact
+scroll to bottom
+wait 500
+let height = execute("document.body.scrollHeight")
+print "Page height: " + height + "px"
+scroll to top
+
+// Get computed styles
+let color = execute("getComputedStyle(document.querySelector('h1')).color")
+print "Title color: " + color
+
+shot "spa_demo.png"

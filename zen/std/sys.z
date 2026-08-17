@@ -1,0 +1,79 @@
+# sys.z — Python-like sys module for Zen
+# Wraps Rust-native functions
+
+let argv = cli_args()
+let version = "Zen 0.1.0 (Rust)"
+let version_info = [0, 1, 0, "final"]
+let platform = os_platform()
+let byteorder = "little"
+let maxsize = 9223372036854775807
+let hexversion = 16777216
+
+let _path = ["."]
+
+func path() {
+    return _path
+}
+
+func sys_exit(code) {
+    exit(code)
+}
+
+func getsizeof(obj) {
+    let t = typeof(obj)
+    if t == "string" {
+        return len(obj) + 49
+    }
+    if t == "list" {
+        return len(obj) * 8 + 56
+    }
+    if t == "dict" {
+        return len(obj) * 120 + 240
+    }
+    if t == "int" {
+        return 28
+    }
+    if t == "float" {
+        return 24
+    }
+    if t == "bool" {
+        return 24
+    }
+    return 0
+}
+
+func getrecursionlimit() {
+    return 10000
+}
+
+func getdefaultencoding() {
+    return "utf-8"
+}
+
+func getfilesystemencoding() {
+    return "utf-8"
+}
+
+func intern(s) {
+    return s
+}
+
+func call_tracing(target, args) {
+    return target(args)
+}
+
+func settrace(tracefunc) {
+}
+
+func gettrace() {
+    return null
+}
+
+func modules() {
+    return {}
+}
+
+let executable = "zen"
+let stdin = "<stdin>"
+let stdout = "<stdout>"
+let stderr = "<stderr>"

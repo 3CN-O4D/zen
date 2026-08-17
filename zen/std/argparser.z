@@ -1,0 +1,107 @@
+# argparser.z — Python-like argparse module for Zen
+# Provides command-line argument parsing
+
+class ArgumentParser {
+    var _description
+    var _positional = []
+    var _optional = []
+
+    func init(description) {
+        _description = description
+        return self
+    }
+
+    func add_argument(name, null, null, null, action, type, default, help) {
+        let arg = {
+            name: name,
+            action: action,
+            type: type,
+            default: default,
+            help: help,
+        }
+        if action == "store_true" || action == "store_false" {
+            _optional.push(arg)
+        } else {
+            _positional.push(arg)
+        }
+        return self
+    }
+
+    func parse_args() {
+        let args = {}
+        let args_list = cli_args()
+
+        for arg in _positional {
+            let name = arg.name
+            let found = false
+            for a in args_list {
+                if a == name {
+                    let idx = find_index(args_list, name)
+                    if idx != null && idx + 1 < len(args_list) {
+                        args[name] = args_list[idx + 1]
+                        found = true
+                        break
+                    }
+                }
+            }
+            if !found {
+                if arg.default != null {
+                    args[name] = arg.default
+                }
+            }
+        }
+
+        for arg in _optional {
+            let name = arg.name
+            let long_name = "--" + name
+            let short_name = "-" + name[0, 1]
+
+            let found = false
+            for a in args_list {
+                if a == long_name || a == short_name {
+                    found = true
+                    let idx = find_index(args_list, a)
+                    if idx != null && idx + 1 < len(args_list) {
+                        let val = args_list[idx + 1]
+                        if arg.type == "int" {
+                            args[name] = int(val)
+                        } elif arg.type == "float" {
+                            args[name] = float(val)
+                        } else {
+                            args[name] = val
+                        }
+                        break
+                    }
+                }
+            }
+            if !found && arg.action == "store_true" {
+                args[name] = true
+            } elif !found && arg.action == "store_false" {
+                args[name] = false
+            } elif !found {
+                if arg.default != null {
+                    args[name] = arg.default
+                }
+            }
+        }
+
+        return args
+    }
+
+    func find_index(lst, val) {
+        var i = 0
+        while i < len(lst) {
+            if lst[i] == val {
+                return i
+            }
+            i += 1
+        }
+        return null
+    }
+}
+
+func ArgumentParser(description) {
+    var parser = ArgumentParser()
+    parser.init(description)
+    return parser
+}

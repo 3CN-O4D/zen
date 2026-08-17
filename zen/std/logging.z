@@ -1,0 +1,167 @@
+# logging.z — Python-like logging module for Zen
+
+let _level = 30
+let _handlers = []
+let _loggers = {}
+let _disabled = false
+
+let DEBUG = 10
+let INFO = 20
+let WARNING = 30
+let ERROR = 40
+let CRITICAL = 50
+let NOTSET = 0
+
+func _format_msg(level, name, msg) {
+    let level_name = if level == DEBUG { "DEBUG"
+      } elif level == INFO { "INFO"
+      } elif level == WARNING { "WARNING"
+      } elif level == ERROR { "ERROR"
+      } elif level == CRITICAL { "CRITICAL"
+      } else { "UNKNOWN" }
+    let ts = datetime.now()
+    let time_str = datetime.format(ts, "%Y-%m-%d %H:%M:%S")
+    if name == "" {
+        return time_str + " - " + level_name + " - " + msg
+    }
+    return time_str + " - " + name + " - " + level_name + " - " + msg
+}
+
+func _emit(level, name, msg) {
+    if _disabled {
+        return
+    }
+    if level < _level {
+        return
+    }
+    let formatted = _format_msg(level, name, msg)
+    if len(_handlers) > 0 {
+        for handler in _handlers {
+            handler.write(formatted)
+        }
+    } else {
+        if level >= WARNING {
+            print(formatted)
+        } else {
+            print(formatted)
+        }
+    }
+}
+
+func debug(msg) {
+    _emit(DEBUG, "root", msg)
+}
+
+func info(msg) {
+    _emit(INFO, "root", msg)
+}
+
+func warning(msg) {
+    _emit(WARNING, "root", msg)
+}
+
+func error(msg) {
+    _emit(ERROR, "root", msg)
+}
+
+func critical(msg) {
+    _emit(CRITICAL, "root", msg)
+}
+
+func log(level, msg) {
+    _emit(level, "root", msg)
+}
+
+func setLevel(level) {
+    _level = level
+}
+
+func getLevel() {
+    return _level
+}
+
+func disable() {
+    _disabled = true
+}
+
+func enable() {
+    _disabled = false
+}
+
+func basicConfig(config) {
+    if config.has_key("level") {
+        _level = config.level
+    }
+    if config.has_key("filename") {
+        addHandler(FileHandler(config.filename))
+    }
+    if config.has_key("stream") and config.stream == "stderr" {
+        addHandler(StreamHandler())
+    }
+}
+
+func FileHandler(filename) {
+    let _filename = filename
+    func write(msg) {
+        fs.append(_filename, msg + "\n")
+    }
+    func close() {
+    }
+    return {write: write, close: close, type: "FileHandler"}
+}
+
+func StreamHandler() {
+    func write(msg) {
+        print(msg)
+    }
+    func close() {
+    }
+    return {write: write, close: close, type: "StreamHandler"}
+}
+
+func addHandler(handler) {
+    _handlers.push(handler)
+}
+
+func removeHandler(handler) {
+    var i = 0
+    while i < len(_handlers) {
+        if _handlers[i] == handler {
+            _handlers.splice(i, 1)
+            return
+        }
+        i += 1
+    }
+}
+
+func getLogger(name) {
+    if _loggers.has_key(name) {
+        return _loggers[name]
+    }
+    let _name = name
+    let obj = {
+        debug: func(msg) { _emit(DEBUG, _name, msg) },
+        info: func(msg) { _emit(INFO, _name, msg) },
+        warning: func(msg) { _emit(WARNING, _name, msg) },
+        error: func(msg) { _emit(ERROR, _name, msg) },
+        critical: func(msg) { _emit(CRITICAL, _name, msg) },
+        log: func(level, msg) { _emit(level, _name, msg) },
+        setLevel: func(level) { _level = level },
+        getEffectiveLevel: func() { return _level },
+        name: _name,
+    }
+    _loggers[name] = obj
+    return obj
+}
+
+func captureWarnings(capture) {
+}
+
+func Formatter(fmt) {
+    return {
+        format: func(level, name, msg) {
+            return _format_msg(level, name, msg)
+        },
+        type: "Formatter",
+    }
+}
