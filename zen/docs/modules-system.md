@@ -11,10 +11,12 @@ Provides access to the underlying operating system's services.
 ### Environment
 ```zen
 print os.platform()       // e.g. "linux", "darwin", "windows"
+print os.name             // same as platform()
+print os.arch()           // CPU architecture
 print os.hostname()       // system hostname
 print os.pid()            // current process ID
+print os.pids()           // list of all process IDs
 print os.cpu_count()      // number of CPU cores
-print os.system()         // OS name string
 
 let env_val = os.getenv("PATH")
 print env_val
@@ -27,14 +29,32 @@ os.unsetenv("MY_VAR")
 ```zen
 print os.cwd()          // current working directory
 os.chdir("/tmp")        // change directory
-print os.name           // "/" on Unix, "\" on Windows
-print os.sep            // platform separator
 let home = os.home()    // user home directory
 ```
 
 ### Process Control
 ```zen
 os.exit(0)              // terminate process with exit code 0
+```
+
+### Running Commands
+```zen
+// os.execute() — run a command, return structured result
+let result = os.execute("echo hello")
+print result.ok        // true
+print result.code      // 0
+print result.stdout    // "hello\n"
+print result.stderr    // ""
+
+// os.run() — run a command, return stdout or throw on failure
+let output = os.run("echo hello")
+print output.strip()   // "hello"
+
+// os.system() — run a command, return exit code
+let code = os.system("echo hello")
+
+// os.popen() — alias for os.execute()
+let r = os.popen("ls")
 ```
 
 ---

@@ -10,7 +10,9 @@ The `json` module provides standard JSON parsing and encoding.
 
 ### Methods
 * `json.parse(str)` (or `json.decode`): Decodes a JSON string into a Zen List or Dictionary.
-* `json.encode(val)` (or `json.save`): Serializes a Zen value (string, number, list, dict, null) into a JSON string.
+* `json.encode(val)` (or `json.stringify`): Serializes a Zen value (string, number, list, dict, null) into a JSON string.
+* `json.load(path)`: Reads a JSON file from disk and parses it.
+* `json.save(path, val)`: Encodes a value and writes it to a JSON file.
 
 ### Examples
 ```zen
@@ -22,6 +24,14 @@ print obj.languages[0]       // "Cobol"
 
 let back_to_text = json.encode(obj)
 print back_to_text
+
+// stringify is an alias for encode
+let s = json.stringify({x: 42, y: "hello"})
+print s                      // {"x":42,"y":"hello"}
+
+// load and save files
+let data = json.load("config.json")
+json.save("output.json", data)
 ```
 
 ---
@@ -138,10 +148,10 @@ print decoded  // "hello world"
 Generates standard universally unique identifiers (UUIDs).
 
 ### Methods
-* `uuid.uuid4()`: Generates a random version 4 UUID string.
-* `uuid.uuid1()`: Generates a time-based version 1 UUID string.
-* `uuid.uuid3(namespace, name)`: MD5 hash-based version 3 UUID string.
-* `uuid.uuid5(namespace, name)`: SHA-1 hash-based version 5 UUID string.
+* `uuid.uuid4()` (or `uuid.v4()`): Generates a random version 4 UUID string.
+* `uuid.uuid1()` (or `uuid.v1()`): Generates a time-based version 1 UUID string.
+* `uuid.uuid3(namespace, name)` (or `uuid.v3()`): MD5 hash-based version 3 UUID string.
+* `uuid.uuid5(namespace, name)` (or `uuid.v5()`): SHA-1 hash-based version 5 UUID string.
 
 ### Constants
 * `uuid.NAMESPACE_DNS`
@@ -152,6 +162,7 @@ Generates standard universally unique identifiers (UUIDs).
 ### Examples
 ```zen
 print uuid.uuid4()  // e.g. "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+print uuid.v4()     // same, short alias
 let ns_url = uuid.NAMESPACE_URL
 print uuid.uuid5(ns_url, "https://github.com/3CN-O4D/zen")
 ```

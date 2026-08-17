@@ -11,6 +11,56 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+// ─── Error display helpers ───────────────────────────────────────────────────
+
+fn suggest_name(target: &str, candidates: &[&str], max_dist: usize) -> Option<String> {
+    let mut best: Option<(String, usize)> = None;
+    for c in candidates {
+        let d = levenshtein(target, c);
+        if d <= max_dist {
+            if let Some((_, bd)) = &best {
+                if d < *bd {
+                    best = Some((c.to_string(), d));
+                }
+            } else {
+                best = Some((c.to_string(), d));
+            }
+        }
+    }
+    best.map(|(name, _)| name)
+}
+
+fn op_symbol(op: &Kind) -> &'static str {
+    match op {
+        Kind::Plus => "+",
+        Kind::Minus => "-",
+        Kind::Star => "*",
+        Kind::Slash => "/",
+        Kind::Percent => "%",
+        Kind::Pow => "**",
+        Kind::Lt => "<",
+        Kind::Gt => ">",
+        Kind::Le => "<=",
+        Kind::Ge => ">=",
+        Kind::Eq => "==",
+        Kind::Ne => "!=",
+        _ => "operator",
+    }
+}
+
+fn annotate_line(src_line: &str, col: usize, line_num: usize) -> String {
+    let mut out = String::new();
+    let width = format!("{}", line_num).len();
+    let prefix = format!("{} |", " ".repeat(width));
+    let line_str = format!("{} |", line_num);
+    out.push_str(&format!("{} {}\n", line_str, src_line));
+    let trimmed_len = src_line.chars().count();
+    let arrow_col = col.saturating_sub(1).min(trimmed_len);
+    out.push_str(&format!("{} {}\n", prefix, " ".repeat(arrow_col)));
+    out.push_str(&format!("{} {}\n", prefix, "\x1b[1;31m^\x1b[0m"));
+    out
+}
+
 type InstanceRef = Arc<Mutex<Instance>>;
 
 use hmac::Mac as HmacMac;
@@ -80,6 +130,19 @@ impl PartialEq for Value {
 }
 
 impl Value {
+    fn type_name(&self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Bool(_) => "bool",
+            Self::Number(_) => "int",
+            Self::String(_) => "string",
+            Self::List(_) => "list",
+            Self::Dict(_) => "dict",
+            Self::Instance(_) => "object",
+            Self::Socket(_) => "socket",
+            Self::NativeFunction(_) | Self::Function(_) => "function",
+        }
+    }
     fn truthy(&self) -> bool {
         match self {
             Self::Null => false,
@@ -165,6 +228,7 @@ enum Kind {
     Catch,
     Finally,
     Throw,
+    Warn,
     Super,
     Typeof,
     And,
@@ -3134,7 +3198,14 @@ impl Vm {
                         }
                     })
                 })
-                .ok_or_else(|| format!("undefined variable: {n}")),
+                .ok_or_else(|| {
+                    let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
+                    candidates.extend(self.functions.keys().map(|s| s.as_str()));
+                    let hint = suggest_name(n, &candidates, 3)
+                        .map(|s| format!("\nnote: did you mean `{}`?", s))
+                        .unwrap_or_default();
+                    format!("undefined variable: `{}`{}", n, hint)
+                }),
             Expr::List(items) => {
                 let mut list = Vec::new();
                 for x in items {
@@ -3245,7 +3316,14 @@ impl Vm {
                     .vars
                     .get(name)
                     .cloned()
-                    .ok_or_else(|| format!("undefined variable: {name}"))?
+                    .ok_or_else(|| {
+                        let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
+                        candidates.extend(self.functions.keys().map(|s| s.as_str()));
+                        let hint = suggest_name(name, &candidates, 3)
+                            .map(|s| format!("\nnote: did you mean `{}`?", s))
+                            .unwrap_or_default();
+                        format!("undefined variable: `{}`{}", name, hint)
+                    })?
                 else {
                     return Err("increment/decrement requires a number".into());
                 };
@@ -3426,7 +3504,10 @@ impl Vm {
                 match op {
                     Kind::Minus => match v {
                         Value::Number(n) => Ok(Value::Number(-n)),
-                        _ => Err("cannot negate non-number".into()),
+                        _ => Err(format!(
+                            "cannot negate `{}`\nnote: negation (-) only works on numbers\n      to make a number negative, use: int(\"{}\") or float(\"{}\")",
+                            v.type_name(), v, v
+                        )),
                     },
                     Kind::Bang | Kind::Not => Ok(Value::Bool(!v.truthy())),
                     Kind::Typeof => Ok(Value::String(
@@ -3484,7 +3565,19 @@ impl Vm {
                         None
                     }
                 })
-                .ok_or_else(|| format!("dictionary has no member: {name}")),
+                .ok_or_else(|| {
+                    let mut keys: Vec<&str> = values.keys().map(|s| s.as_str()).collect();
+                    let hint = suggest_name(name, &keys, 4)
+                        .map(|s| format!("\nnote: did you mean `{}`? available: {}", s, keys.iter().take(8).map(|s| *s).collect::<Vec<_>>().join(", ")))
+                        .unwrap_or_else(|| {
+                            if !keys.is_empty() {
+                                format!("\nnote: available members: {}", keys.iter().take(8).map(|s| *s).collect::<Vec<_>>().join(", "))
+                            } else {
+                                String::new()
+                            }
+                        });
+                    format!("dictionary has no member: `{}`{}", name, hint)
+                }),
             Value::List(values) if name == "len" || name == "count" || name == "length" => {
                 Ok(Value::Number(values.len() as f64))
             }
@@ -3497,7 +3590,10 @@ impl Vm {
                 .fields
                 .get(name)
                 .cloned()
-                .ok_or_else(|| format!("object has no field: {name}")),
+                .ok_or_else(|| {
+                    let hint = format!("\nnote: use `self.{}` in __init__ to define fields", name);
+                    format!("object has no field: `{}`{}", name, hint)
+                }),
             value => Err(format!("{} has no member: {name}", value)),
         }
     }
@@ -3842,20 +3938,48 @@ impl Vm {
                 _ => Err("string repetition requires a string and a number".into()),
             },
             Kind::Minus | Kind::Slash | Kind::Percent | Kind::Pow => {
-                let (Value::Number(x), Value::Number(y)) = (a, b) else {
-                    return Err("arithmetic requires numbers".into());
+                let (Value::Number(x), Value::Number(y)) = (a.clone(), b.clone()) else {
+                    let at = a.type_name();
+                    let bt = b.type_name();
+                    let hint = if (at == "string" || bt == "string") && matches!(op, Kind::Minus | Kind::Slash | Kind::Percent) {
+                        "\nnote: to concatenate strings, use `+` instead"
+                    } else if matches!(op, Kind::Slash) && matches!(b, Value::Number(n) if n == 0.0) {
+                        "\nnote: cannot divide by zero"
+                    } else {
+                        ""
+                    };
+                    return Err(format!("unsupported operand type(s) for {}: `{}` and `{}`{}", op_symbol(op), at, bt, hint));
                 };
                 match op {
                     Kind::Minus => Ok(Value::Number(x - y)),
-                    Kind::Slash => Ok(Value::Number(x / y)),
-                    Kind::Percent => Ok(Value::Number(x % y)),
+                    Kind::Slash => {
+                        if y == 0.0 {
+                            return Err("division by zero\nnote: check if the divisor is zero before dividing".into());
+                        }
+                        Ok(Value::Number(x / y))
+                    },
+                    Kind::Percent => {
+                        if y == 0.0 {
+                            return Err("modulo by zero\nnote: check if the divisor is zero before modulo".into());
+                        }
+                        Ok(Value::Number(x % y))
+                    },
                     Kind::Pow => Ok(Value::Number(x.powf(y))),
                     _ => unreachable!(),
                 }
             }
             Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge => {
-                let (Value::Number(x), Value::Number(y)) = (a, b) else {
-                    return Err("comparison requires numbers".into());
+                let (Value::Number(x), Value::Number(y)) = (a.clone(), b.clone()) else {
+                    let at = a.type_name();
+                    let bt = b.type_name();
+                    let hint = if at == "string" && bt == "string" {
+                        ""
+                    } else if at != "int" && at != "float" && bt != "int" && bt != "float" {
+                        "\nnote: '<', '>', '<=', '>=' only work on numbers\n      for string comparison, use == or !="
+                    } else {
+                        ""
+                    };
+                    return Err(format!("unsupported operand type(s) for {}: `{}` and `{}`{}", op_symbol(op), at, bt, hint));
                 };
                 Ok(Value::Bool(match op {
                     Kind::Lt => x < y,
@@ -4612,25 +4736,93 @@ impl Vm {
         if line == 0 {
             return message;
         }
-        if message.starts_with("Traceback (most recent call last):") {
-            return message;
+        // Don't double-wrap already formatted errors — just add a stack frame
+        if message.contains("\x1b[1;34m-->\x1b[0m") {
+            // Already has our format. Prepend a new frame.
+            let inner = &message;
+            // Extract just the innermost error type + message for the header
+            let inner_summary = inner.lines()
+                .find(|l| l.starts_with("  \x1b[1;31m= "))
+                .map(|l| l.trim_start().trim_start_matches("\x1b[1;31m= ").trim_end_matches("\x1b[0m"))
+                .unwrap_or("error");
+            let mut out = format!(
+                "\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n",
+                inner_summary.split('\n').next().unwrap_or(inner_summary)
+            );
+            out.push_str(&format!(
+                " \x1b[1;34m-->\x1b[0m {}:{}:{}\n",
+                self.file, line, col
+            ));
+            out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+            if let Some(src_line) = self.lines.get(line.wrapping_sub(1)) {
+                let trimmed = src_line.trim_end();
+                if !trimmed.is_empty() {
+                    let width = format!("{}", line).len();
+                    out.push_str(&format!(
+                        " \x1b[1;34m{} |\x1b[0m {}\n",
+                        line, trimmed
+                    ));
+                    let arrow_col = col.saturating_sub(1).min(trimmed.chars().count());
+                    out.push_str(&format!(
+                        " \x1b[1;34m{} |\x1b[0m {}\x1b[1;31m{}\x1b[0m\n",
+                        " ".repeat(width),
+                        " ".repeat(arrow_col),
+                        "^"
+                    ));
+                }
+            }
+            out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+            // Append inner traceback indented
+            for line in inner.lines() {
+                out.push_str(&format!("  {}\n", line));
+            }
+            return out;
         }
-        let mut out = String::from("Traceback (most recent call last):\n");
+        let mut out = format!(
+            "\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n",
+            message.split('\n').next().unwrap_or(&message)
+        );
         out.push_str(&format!(
-            "  File \"{}\", line {}, in {}\n",
-            self.file,
-            line,
-            self.stack.last().map(|s| s.as_str()).unwrap_or("<module>")
+            " \x1b[1;34m-->\x1b[0m {}:{}:{}\n",
+            self.file, line, col
         ));
+        out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
         if let Some(src_line) = self.lines.get(line.wrapping_sub(1)) {
-            let trimmed = src_line.trim();
+            let trimmed = src_line.trim_end();
             if !trimmed.is_empty() {
-                out.push_str(&format!("    {trimmed}\n"));
-                let pad = " ".repeat(4 + col.saturating_sub(1).min(trimmed.chars().count()));
-                out.push_str(&format!("{pad}^\n"));
+                let width = format!("{}", line).len();
+                out.push_str(&format!(
+                    " \x1b[1;34m{} |\x1b[0m {}\n",
+                    line, trimmed
+                ));
+                let arrow_col = col.saturating_sub(1).min(trimmed.chars().count());
+                out.push_str(&format!(
+                    " \x1b[1;34m{} |\x1b[0m {}\x1b[1;31m{}\x1b[0m\n",
+                    " ".repeat(width),
+                    " ".repeat(arrow_col),
+                    "^"
+                ));
             }
         }
-        out.push_str(&format!("Error: {message}\n"));
+        out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+        // Split message into main + notes
+        let parts: Vec<&str> = message.splitn(2, "\nnote: ").collect();
+        let main_msg = parts[0];
+        out.push_str(&format!(
+            "  \x1b[1;31m= {}\x1b[0m {}\n",
+            if main_msg.contains(':') {
+                ""
+            } else {
+                "error: "
+            },
+            main_msg
+        ));
+        if let Some(note) = parts.get(1) {
+            out.push_str(&format!(
+                "  \x1b[1;33m= note:\x1b[0m {}\n",
+                note
+            ));
+        }
         out
     }
     fn runtime_error(&self, message: &str) -> Value {
@@ -9748,19 +9940,39 @@ fn format_unhandled(
     ty: &str,
     msg: &str,
 ) -> String {
-    let mut out = String::from("Traceback (most recent call last):\n");
-    out.push_str(&format!("  File \"{file}\", line {line}, in <module>\n"));
+    let mut out = format!(
+        "\x1b[1;31merror\x1b[0m\x1b[1m[{}: {}]\x1b[0m\n",
+        ty, msg
+    );
+    out.push_str(&format!(
+        " \x1b[1;34m-->\x1b[0m {}:{}:{}\n",
+        file, line, col
+    ));
+    out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
     if line > 0 {
         if let Some(src_line) = source.lines().nth(line.wrapping_sub(1)) {
-            let trimmed = src_line.trim();
+            let trimmed = src_line.trim_end();
             if !trimmed.is_empty() {
-                out.push_str(&format!("    {trimmed}\n"));
-                let pad = " ".repeat(4 + col.saturating_sub(1).min(trimmed.chars().count()));
-                out.push_str(&format!("{pad}^\n"));
+                let width = format!("{}", line).len();
+                out.push_str(&format!(
+                    " \x1b[1;34m{} |\x1b[0m {}\n",
+                    line, trimmed
+                ));
+                let arrow_col = col.saturating_sub(1).min(trimmed.chars().count());
+                out.push_str(&format!(
+                    " \x1b[1;34m{} |\x1b[0m {}\x1b[1;31m{}\x1b[0m\n",
+                    " ".repeat(width),
+                    " ".repeat(arrow_col),
+                    "^"
+                ));
             }
         }
     }
-    out.push_str(&format!("{ty}: {msg}\n"));
+    out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+    out.push_str(&format!(
+        "  \x1b[1;31m= {}: {}\x1b[0m\n",
+        ty, msg
+    ));
     out
 }
 

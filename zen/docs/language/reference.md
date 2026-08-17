@@ -152,6 +152,7 @@ s.len()                   // 11  (also s.length())
 s.upper()                 // "HELLO WORLD"
 s.lower()                 // "hello world"
 s.trim()                  // "hello world"
+s.strip()                 // same as trim()
 s.trimStart()             // "hello world "
 s.trimEnd()               // " hello world"
 s.split(" ")              // ["hello", "world"]
@@ -300,6 +301,19 @@ throw new MoneyError("overdraft")
 throw new errors.ValueError("bad input")
 ```
 
+#### errors.define()
+
+Define custom error classes without writing a class:
+
+```zen
+errors.define("MoneyError", "Error", "not enough money")
+errors.define("InsufficientFundsError", "MoneyError", "insufficient funds")
+
+throw new InsufficientFundsError("balance too low")
+```
+
+Arguments: `(name, parent?, message)`. Parent defaults to `"Error"`.
+
 `throw` raises an error:
 
 ```zen
@@ -427,13 +441,52 @@ print http.get("https://api.example.com/data").json()
 `load` are synonyms for `import`. `as` creates an alias.
 
 ```zen
-import "greetings.z"
-from "greetings" import greet
-import "greetings" as g
+import "greetings.z"          // run everything in greetings.z
+from "greetings" import greet // bring in just `greet`
+import "greetings" as g       // now call g.greet()
+import greetings              // bare name: finds greetings.z
 ```
 
-The resolver checks, in order: an installed package, `./<name>`, `std/<name>`
-(repo-relative), `<exe_dir>/std/<name>`, and `<exe_dir>/../std/<name>`.
+#### Dotted (package) imports
+
+Dotted names like `import pkg.sub.mod` are supported. The loader resolves each
+segment, looking for the file in `~/.zen/modules/` (installed packages) and
+then in the current directory:
+
+```zen
+import mylib                        // loads mylib.z or mylib/main.z
+import mylib.utils                  // loads mylib/utils.z
+from mylib.utils import add         // bring in just `add`
+from mylib.utils import add as a    // aliased import
+```
+
+#### Absolute path imports
+
+Absolute paths are supported for loading files outside the current directory:
+
+```zen
+import /usr/local/lib/helpers.z
+```
+
+#### Resolver order
+
+The loader checks in order:
+
+1. `~/.zen/modules/<path>.z` — installed packages
+2. `./<path>.z` — current directory
+3. `./<path>/main.z` — package main entry
+
+#### zen package manager (PM)
+
+```bash
+zen pm init mymodule               # create zen.json + main.z
+zen pm install user/repo           # from GitHub
+zen pm install https://...         # from URL
+zen pm install ./local-module      # from local directory
+zen pm install helpers.z           # from single file
+zen pm list                        # list installed modules
+zen pm remove helpers              # remove a module
+```
 
 ### native declarations
 

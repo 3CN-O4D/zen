@@ -69,9 +69,18 @@ Within the REPL:
 
 Manage and compile third-party packages.
 
+### Initializing a New Module
+
+Create a new module with a `zen.json` manifest and `main.z`:
+
+```bash
+zen pm init mymodule         # creates zen.json + main.z
+zen pm init                  # uses parent directory name
+```
+
 ### Installing Packages
 
-Install a package from a GitHub repository, URL, or local tarball:
+Install a package from a GitHub repository, URL, local file, or directory:
 
 ```bash
 # Install from a GitHub repository (optionally specify tag/version)
@@ -81,6 +90,12 @@ zen pm install owner/repo@v1.2.0
 # Install from a direct HTTP URL or local tarball file
 zen pm install https://example.com/packages/foo.tar.gz
 zen pm install ./packages/foo.tar.gz
+
+# Install a single .z file
+zen pm install helpers.z
+
+# Install a local directory
+zen pm install ./my-local-module
 
 # Force re-installation
 zen pm install --force owner/repo

@@ -515,8 +515,41 @@ throw new KeyboardInterrupt()   // message is optional
 
 ### Custom errors (subclassing the `errors` module)
 
-Define your own error by making it a child of `errors.Error` (or any other
-error class) with `extends` — this is Zen's version of Python's
+There are two ways to create custom error types.
+
+#### Method 1: `errors.define()`
+
+The quickest way — define a new error class with a single call:
+
+```zen
+errors.define("MoneyError", "Error", "not enough money")
+errors.define("InsufficientFundsError", "MoneyError", "insufficient funds")
+
+function withdraw(balance, amount) {
+    if amount > balance {
+        throw new InsufficientFundsError("balance too low")
+    }
+    return balance - amount
+}
+
+try {
+    withdraw(10, 50)
+} catch InsufficientFundsError as e {
+    print "caught exact type: " + e
+} catch MoneyError as e {
+    print "caught a parent: " + e
+} catch as e {
+    print "caught anything: " + e
+}
+```
+
+The arguments are `(name, parent?, message)`. If you omit the parent, it
+defaults to `"Error"`.
+
+#### Method 2: class inheritance
+
+Define your own by making it a child of `errors.Error` (or any other error
+class) with `extends` — this is Zen's version of Python's
 `class MyError(Exception): pass`:
 
 ```zen
@@ -689,6 +722,7 @@ s.len()                   // 19     also s.length()
 s.upper()                 // "  HELLO, WORLD!  "
 s.lower()                 // "  hello, world!  "
 s.trim()                  // "Hello, World!"   chops outer whitespace
+s.strip()                 // same as trim()
 s.trimStart()             // "Hello, World!  "
 s.trimEnd()               // "  Hello, World!"
 s.split(", ")             // ["  Hello", "World!  "]
@@ -875,8 +909,59 @@ from "greetings" import greet // bring in just `greet`
 import "greetings" as g       // now call g.greet()
 ```
 
-The loader looks for the file in this order: an installed package, `./<name>`,
-`std/<name>`, the executable's bundled `std/`, and its sibling `std/`.
+You can also import by bare name — the loader searches for `name.z` in the
+current directory:
+
+```zen
+import greetings              // finds greetings.z
+```
+
+#### Package imports
+
+Dotted names like `import pkg.sub.mod` are supported. The loader resolves each
+path segment, looking for the file in:
+
+1. `~/.zen/modules/<path>.z` (installed packages)
+2. `./<path>.z` or `./<path>/main.z` (local files)
+
+```zen
+import mylib                        // loads mylib.z or mylib/main.z
+import mylib.utils                  // loads mylib/utils.z
+from mylib.utils import add         // bring in just `add`
+from mylib.utils import add as a    // aliased import
+import mylib.utils as u             // alias the whole module
+```
+
+#### Absolute path imports
+
+Absolute paths are supported for loading files outside the current directory:
+
+```zen
+import /usr/local/lib/helpers.z
+import /home/user/projects/shared/utils.z
+```
+
+#### zen package manager (PM)
+
+Initialize a new module with `zen pm init`, install modules from repos, URLs,
+local files, or directories:
+
+```bash
+zen pm init mymodule               # creates zen.json + main.z
+zen pm install user/repo           # from GitHub
+zen pm install https://...         # from URL
+zen pm install ./local-module      # from local directory
+zen pm install helpers.z           # from single file
+zen pm list                        # list installed modules
+zen pm remove helpers              # remove a module
+```
+
+Installed modules go to `~/.zen/modules/` and can be imported by name:
+
+```zen
+import mypackage                   # loads from ~/.zen/modules/mypackage
+import mypackage.sub               # loads from ~/.zen/modules/mypackage/sub.z
+```
 
 ### native declarations
 
