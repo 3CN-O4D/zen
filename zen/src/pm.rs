@@ -64,7 +64,20 @@ fn fetch_archive(source: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Install a module. `force` reinstalls over an existing copy.
+/// Accepts: tarball, github repo, URL, single .z file, or local directory.
 pub fn install(spec: &str, force: bool) -> Result<String, String> {
+    let path = Path::new(spec);
+
+    // Single .z file: install as a single-file module
+    if spec.ends_with(".z") && path.is_file() {
+        return install_single_file(spec, force);
+    }
+
+    // Local directory: install by copying the whole directory
+    if path.is_dir() {
+        return install_local_dir(spec, force);
+    }
+
     let (source, label) = resolve_source(spec);
     eprintln!("Fetching {label} ...");
     let bytes = fetch_archive(&source)?;
@@ -145,6 +158,174 @@ pub fn install(spec: &str, force: bool) -> Result<String, String> {
 
     eprintln!("Installed {name} -> {}", target.display());
     Ok(name)
+}
+
+/// Install a single .z file as a module.
+fn install_single_file(path: &str, force: bool) -> Result<String, String> {
+    let file_path = Path::new(path);
+    let stem = file_path.file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("invalid file path: {path}"))?;
+    let name = stem.to_string();
+    if name.is_empty() || name.contains('/') || name.contains("..") {
+        return Err(format!("invalid module name: {name}"));
+    }
+
+    let target = modules_dir().join(&name);
+    if target.exists() {
+        if !force {
+            return Err(format!("{name} is already installed (use --force to reinstall)"));
+        }
+        fs::remove_dir_all(&target).map_err(|e| format!("failed to clear {}: {e}", target.display()))?;
+    }
+    fs::create_dir_all(&target).map_err(|e| format!("failed to create {}: {e}", target.display()))?;
+
+    let content = fs::read(path).map_err(|e| format!("failed to read {path}: {e}"))?;
+    let sha = sha256_hex(&content);
+
+    // Write the .z file as main.z so `import name` finds it
+    fs::write(target.join(format!("{name}.z")), &content)
+        .map_err(|e| format!("failed to write {}: {e}", target.join(format!("{name}.z")).display()))?;
+
+    // Auto-generate a zen.json manifest
+    let manifest = serde_json::json!({
+        "name": name,
+        "version": "0.1.0",
+        "description": format!("Installed from {path}"),
+        "entry": format!("{name}.z"),
+    });
+    fs::write(target.join(MANIFEST), serde_json::to_string_pretty(&manifest).unwrap())
+        .map_err(|e| format!("failed to write manifest: {e}"))?;
+
+    // Write lockfile
+    let mut locked = serde_json::Map::new();
+    locked.insert("name".into(), serde_json::json!(name));
+    locked.insert("source".into(), serde_json::json!(path));
+    locked.insert("sha256".into(), serde_json::json!(sha));
+    fs::write(target.join(".zen-lock.json"), serde_json::Value::Object(locked).to_string())
+        .map_err(|e| format!("failed to write lockfile: {e}"))?;
+
+    eprintln!("Installed {name} (from {path}) -> {}", target.display());
+    Ok(name)
+}
+
+/// Install a local directory as a module.
+fn install_local_dir(path: &str, force: bool) -> Result<String, String> {
+    let dir_path = Path::new(path);
+    if !dir_path.is_dir() {
+        return Err(format!("not a directory: {path}"));
+    }
+
+    // Determine module name from zen.json or directory name
+    let (name, version) = if let Ok(text) = fs::read_to_string(dir_path.join(MANIFEST)) {
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("invalid {MANIFEST}: {e}"))?;
+        let n = v.get("name").and_then(|x| x.as_str())
+            .ok_or_else(|| format!("{MANIFEST} missing 'name'"))?
+            .to_string();
+        let ver = v.get("version").and_then(|x| x.as_str()).unwrap_or("0.1.0").to_string();
+        (n, ver)
+    } else {
+        // Use directory name as module name
+        let n = dir_path.file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| format!("cannot determine module name from {path}"))?
+            .to_string();
+        (n, "0.1.0".to_string())
+    };
+
+    if name.is_empty() || name.contains('/') || name.contains("..") {
+        return Err(format!("invalid module name: {name}"));
+    }
+
+    let target = modules_dir().join(&name);
+    if target.exists() {
+        if !force {
+            return Err(format!("{name} is already installed (use --force to reinstall)"));
+        }
+        fs::remove_dir_all(&target).map_err(|e| format!("failed to clear {}: {e}", target.display()))?;
+    }
+
+    // Copy the directory recursively
+    copy_dir_recursive(dir_path, &target)
+        .map_err(|e| format!("failed to copy {path}: {e}"))?;
+
+    // Ensure zen.json exists
+    if !target.join(MANIFEST).exists() {
+        let manifest = serde_json::json!({
+            "name": name,
+            "version": version,
+            "description": format!("Installed from {path}"),
+        });
+        fs::write(target.join(MANIFEST), serde_json::to_string_pretty(&manifest).unwrap())
+            .map_err(|e| format!("failed to write manifest: {e}"))?;
+    }
+
+    eprintln!("Installed {name} v{version} (from {path}) -> {}", target.display());
+    Ok(name)
+}
+
+/// Recursively copy a directory.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| format!("failed to create {}: {e}", dst.display()))?;
+    for entry in fs::read_dir(src).map_err(|e| format!("failed to read {}: {e}", src.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)
+                .map_err(|e| format!("failed to copy {}: {e}", src_path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Initialize a new Zen module in the current directory.
+pub fn init(name: Option<&str>, description: Option<&str>) -> Result<String, String> {
+    let manifest_path = Path::new(MANIFEST);
+    if manifest_path.exists() {
+        return Err(format!("{MANIFEST} already exists in current directory"));
+    }
+
+    let module_name = if let Some(n) = name {
+        n.to_string()
+    } else {
+        // Use current directory name
+        std::env::current_dir()
+            .map_err(|e| format!("failed to get cwd: {e}"))?
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mymodule")
+            .to_string()
+    };
+
+    let desc = description.unwrap_or("A Zen module");
+
+    let manifest = serde_json::json!({
+        "name": module_name,
+        "version": "0.1.0",
+        "description": desc,
+        "entry": "main.z",
+    });
+
+    fs::write(MANIFEST, serde_json::to_string_pretty(&manifest).unwrap())
+        .map_err(|e| format!("failed to write {MANIFEST}: {e}"))?;
+
+    // Create a starter main.z if it doesn't exist
+    let main_z = Path::new("main.z");
+    if !main_z.exists() {
+        fs::write(main_z, format!("func hello() {{\n    return \"Hello from {module_name}!\"\n}}\n"))
+            .map_err(|e| format!("failed to write main.z: {e}"))?;
+    }
+
+    eprintln!("Initialized module '{module_name}' in current directory");
+    eprintln!("  {MANIFEST} created");
+    if !main_z.exists() {
+        eprintln!("  main.z created");
+    }
+    Ok(module_name)
 }
 
 fn manifest_path<'a>(files: &'a [TarballFile], root: &str) -> Option<&'a TarballFile> {

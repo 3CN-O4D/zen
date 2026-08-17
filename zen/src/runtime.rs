@@ -33,6 +33,16 @@ fn function_registry() -> &'static std::sync::Mutex<std::collections::HashMap<St
     FUNCTION_REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+// Pending error class definitions from errors.define() native calls.
+// (name, optional_parent, optional_message)
+static PENDING_ERROR_CLASSES: std::sync::OnceLock<
+    std::sync::Mutex<Vec<(String, Option<String>, String)>>,
+> = std::sync::OnceLock::new();
+
+fn pending_error_classes() -> &'static std::sync::Mutex<Vec<(String, Option<String>, String)>> {
+    PENDING_ERROR_CLASSES.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Instance {
     class_name: String,
@@ -155,6 +165,7 @@ enum Kind {
     Catch,
     Finally,
     Throw,
+    Super,
     Typeof,
     And,
     Or,
@@ -471,6 +482,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 "catch" | "except" => Kind::Catch,
                 "finally" => Kind::Finally,
                 "throw" => Kind::Throw,
+                "super" => Kind::Super,
                 "typeof" => Kind::Typeof,
                 "is" => Kind::Is,
                 "switch" => Kind::Switch,
@@ -734,6 +746,7 @@ enum Expr {
     Increment(Box<Expr>, i64),
     Lambda(Vec<String>, Vec<Stmt>),
     Spread(Box<Expr>),
+    Super(Vec<Expr>),
 }
 #[derive(Clone, Debug)]
 enum LetTarget {
@@ -753,7 +766,7 @@ struct Stmt {
 enum StmtKind {
     Let(LetTarget, Expr, bool),
     Assign(String, Kind, Expr),
-    Print(Vec<Expr>),
+    Print(Vec<Expr>, Option<String>, Option<String>),
     If(Expr, Vec<Stmt>, Vec<Stmt>),
     While(Expr, Vec<Stmt>),
     For(String, Expr, Vec<Stmt>),
@@ -767,6 +780,7 @@ enum StmtKind {
     Class(String, Option<String>, Vec<Stmt>),
     Import(Vec<(String, Option<String>)>),
     FromImport(String, Vec<(String, Option<String>)>),
+    StarImport(String),
     Include(String),
     Load(String),
     SetMember(Expr, String, Expr),
@@ -800,6 +814,12 @@ impl Parser {
     }
     fn same(a: &Kind, b: &Kind) -> bool {
         std::mem::discriminant(a) == std::mem::discriminant(b)
+    }
+    fn peek_ident(&self, name: &str) -> bool {
+        matches!(&self.current().kind, Kind::Ident(s) if s == name)
+    }
+    fn peek_eq(&self) -> bool {
+        self.pos + 1 < self.tokens.len() && matches!(self.tokens[self.pos + 1].kind, Kind::Assign)
     }
     fn take(&mut self, kind: Kind) -> bool {
         if Self::same(&self.current().kind, &kind) {
@@ -944,11 +964,40 @@ impl Parser {
             }
             Kind::Print => {
                 self.advance();
-                let mut values = vec![self.expr()?];
-                while self.take(Kind::Comma) {
+                let mut values = vec![];
+                let mut sep: Option<String> = None;
+                let mut end: Option<String> = None;
+                if self.take(Kind::LParen) {
+                    if !self.take(Kind::RParen) {
+                        loop {
+                            if self.peek_ident("sep") && self.peek_eq() {
+                                self.advance();
+                                self.advance();
+                                if let Expr::Value(Value::String(s)) = self.expr()? {
+                                    sep = Some(s);
+                                }
+                            } else if self.peek_ident("end") && self.peek_eq() {
+                                self.advance();
+                                self.advance();
+                                if let Expr::Value(Value::String(s)) = self.expr()? {
+                                    end = Some(s);
+                                }
+                            } else {
+                                values.push(self.expr()?);
+                            }
+                            if !self.take(Kind::Comma) {
+                                break;
+                            }
+                        }
+                        self.expect(Kind::RParen)?;
+                    }
+                } else {
                     values.push(self.expr()?);
+                    while self.take(Kind::Comma) {
+                        values.push(self.expr()?);
+                    }
                 }
-                Ok(mk(StmtKind::Print(values)))
+                Ok(mk(StmtKind::Print(values, sep, end)))
             }
             Kind::If => {
                 self.advance();
@@ -1052,8 +1101,21 @@ impl Parser {
                 let mut imports = vec![];
                 loop {
                     let module = match self.advance() {
-                        Kind::Ident(name) => name,
-                        _ => return Err("expected module name".into()),
+                        Kind::Ident(name) => {
+                            let mut full = name;
+                            while self.take(Kind::Dot) {
+                                match self.advance() {
+                                    Kind::Ident(part) => {
+                                        full.push('.');
+                                        full.push_str(&part);
+                                    }
+                                    _ => return Err("expected submodule name after '.' in import".into()),
+                                }
+                            }
+                            full
+                        }
+                        Kind::String(path) => path,
+                        _ => return Err("expected module name or path".into()),
                     };
                     let alias = if self.take(Kind::As) {
                         match self.advance() {
@@ -1073,15 +1135,31 @@ impl Parser {
             Kind::From => {
                 self.advance();
                 let module = match self.advance() {
-                    Kind::Ident(name) => name,
+                    Kind::Ident(name) => {
+                        let mut full = name;
+                        while self.take(Kind::Dot) {
+                            match self.advance() {
+                                Kind::Ident(part) => {
+                                    full.push('.');
+                                    full.push_str(&part);
+                                }
+                                _ => return Err("expected submodule name after '.' in import".into()),
+                            }
+                        }
+                        full
+                    }
                     _ => return Err("expected module name".into()),
                 };
                 self.expect(Kind::Import)?;
+                // from module import *
+                if self.take(Kind::Star) {
+                    return Ok(mk(StmtKind::StarImport(module)));
+                }
                 let mut items = vec![];
                 loop {
                     let item = match self.advance() {
                         Kind::Ident(name) => name,
-                        _ => return Err("expected item name".into()),
+                        _ => return Err("expected item name or *".into()),
                     };
                     let alias = if self.take(Kind::As) {
                         match self.advance() {
@@ -1227,6 +1305,24 @@ impl Parser {
                         Expr::Var(name) => Ok(mk(StmtKind::Assign(name, op, value))),
                         Expr::Member(object, member) if matches!(op, Kind::Assign) => {
                             Ok(mk(StmtKind::SetMember(*object, member, value)))
+                        }
+                        Expr::Member(object, member) => {
+                            let bin_op = match &op {
+                                Kind::PlusAssign => Kind::Plus,
+                                Kind::MinusAssign => Kind::Minus,
+                                Kind::StarAssign => Kind::Star,
+                                Kind::SlashAssign => Kind::Slash,
+                                Kind::PercentAssign => Kind::Percent,
+                                Kind::AmpAssign => Kind::Amp,
+                                Kind::PipeAssign => Kind::Pipe,
+                                Kind::CaretAssign => Kind::Caret,
+                                Kind::LShiftAssign => Kind::LShift,
+                                Kind::RShiftAssign => Kind::RShift,
+                                _ => return Err("invalid compound assignment target".into()),
+                            };
+                            let read = Expr::Member(object.clone(), member.clone());
+                            let new_val = Expr::Binary(Box::new(read), bin_op, Box::new(value));
+                            Ok(mk(StmtKind::SetMember(*object, member, new_val)))
                         }
                         _ => Err("invalid assignment target".into()),
                     }
@@ -1623,6 +1719,18 @@ impl Parser {
                 }
                 Ok(Expr::New(class_name, args))
             }
+            Kind::Super => {
+                self.expect(Kind::LParen)?;
+                let mut args = vec![];
+                if !self.take(Kind::RParen) {
+                    args.push(self.expr()?);
+                    while self.take(Kind::Comma) {
+                        args.push(self.expr()?);
+                    }
+                    self.expect(Kind::RParen)?;
+                }
+                Ok(Expr::Super(args))
+            }
             Kind::LParen => {
                 let e = self.expr()?;
                 self.expect(Kind::RParen)?;
@@ -1701,6 +1809,7 @@ impl Parser {
 struct Function {
     params: Vec<String>,
     body: Vec<Stmt>,
+    captured: HashMap<String, Value>,
 }
 #[derive(Clone)]
 struct ZenClass {
@@ -1715,11 +1824,14 @@ struct Vm {
     native_functions: HashMap<String, NativeFunc>,
     classes: HashMap<String, ZenClass>,
     imported_modules: HashMap<String, HashMap<String, Value>>,
+    stdlib_factories: HashMap<String, fn() -> Value>,
     lambda_counter: u64,
     locked: std::collections::HashSet<String>,
     file: String,
     lines: Vec<String>,
     stack: Vec<String>,
+    current_class: Option<String>,
+    current_method: Option<String>,
 }
 enum Flow {
     Normal,
@@ -1736,11 +1848,14 @@ impl Vm {
             native_functions: HashMap::new(),
             classes: HashMap::new(),
             imported_modules: HashMap::new(),
+            stdlib_factories: HashMap::new(),
             lambda_counter: 0,
             locked: std::collections::HashSet::new(),
             file: "<string>".into(),
             lines: Vec::new(),
             stack: vec!["<module>".into()],
+            current_class: None,
+            current_method: None,
         };
         vm.register_builtins();
         vm.register_error_classes();
@@ -1762,6 +1877,7 @@ impl Vm {
                 line: 0,
                 col: 0,
             }],
+            captured: HashMap::new(),
         };
         let mut register = |leaf: &str, parent: Option<&str>| {
             let parent_q = parent.map(|p| format!("errors.{p}"));
@@ -1803,6 +1919,7 @@ impl Vm {
         // The `errors` module: a dict exposing every error type so that
         // `import errors`, `print errors.ValueError`, etc. work.
         let mut errors_map = BTreeMap::new();
+        errors_map.insert("define".into(), Value::NativeFunction("errors_define".into()));
         for leaf in [
             "Error",
             "TypeError",
@@ -1831,6 +1948,8 @@ impl Vm {
             errors_map.insert(leaf.into(), Value::String(leaf.into()));
         }
         self.vars.insert("errors".into(), Value::Dict(errors_map));
+
+        // Register errors_define as a native function so errors.define() works
     }
 
     fn register_builtins(&mut self) {
@@ -1968,6 +2087,7 @@ impl Vm {
         let json = Value::Dict(BTreeMap::from([
             ("parse".into(), Value::NativeFunction("json_decode".into())),
             ("encode".into(), Value::NativeFunction("json_encode".into())),
+            ("stringify".into(), Value::NativeFunction("json_encode".into())),
             ("load".into(), Value::NativeFunction("json_load".into())),
             ("save".into(), Value::NativeFunction("json_save".into())),
         ]));
@@ -2115,11 +2235,18 @@ impl Vm {
             ("pid".into(), Value::NativeFunction("os_pid".into())),
             ("cwd".into(), Value::NativeFunction("os_cwd".into())),
             ("chdir".into(), Value::NativeFunction("fs_cd".into())),
-            ("name".into(), Value::NativeFunction("os_platform".into())),
+            ("name".into(), Value::String(std::env::consts::OS.into())),
             ("sep".into(), Value::String(std::path::MAIN_SEPARATOR.to_string())),
             ("linesep".into(), Value::String("\n".into())),
             ("cpu_count".into(), Value::NativeFunction("os_cpu_count".into())),
             ("system".into(), Value::NativeFunction("os_system".into())),
+            ("arch".into(), Value::NativeFunction("os_arch".into())),
+            ("execute".into(), Value::NativeFunction("os_execute".into())),
+            ("run".into(), Value::NativeFunction("os_run".into())),
+            ("popen".into(), Value::NativeFunction("os_popen".into())),
+            ("args".into(), Value::NativeFunction("os_args".into())),
+            ("pids".into(), Value::NativeFunction("os_pids".into())),
+            ("kill".into(), Value::NativeFunction("os_kill".into())),
             ("home".into(), Value::NativeFunction("os_home".into())),
         ]));
         self.vars.insert("os".into(), os);
@@ -2207,6 +2334,10 @@ impl Vm {
             ("uuid1".into(), Value::NativeFunction("uuid_uuid1".into())),
             ("uuid3".into(), Value::NativeFunction("uuid_uuid3".into())),
             ("uuid5".into(), Value::NativeFunction("uuid_uuid5".into())),
+            ("v4".into(), Value::NativeFunction("uuid_uuid4".into())),
+            ("v1".into(), Value::NativeFunction("uuid_uuid1".into())),
+            ("v3".into(), Value::NativeFunction("uuid_uuid3".into())),
+            ("v5".into(), Value::NativeFunction("uuid_uuid5".into())),
             ("NAMESPACE_DNS".into(), Value::String("dns".into())),
             ("NAMESPACE_URL".into(), Value::String("url".into())),
             ("NAMESPACE_OID".into(), Value::String("oid".into())),
@@ -2599,7 +2730,7 @@ impl Vm {
         self.vars.insert("binascii".into(), binascii);
 
         // Register all core native functions eagerly
-        const NATIVES: [&str; 359] = [
+          const NATIVES: [&str; 367] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -2725,6 +2856,14 @@ impl Vm {
             "os_pid",
             "os_cpu_count",
             "os_system",
+            "os_arch",
+            "os_execute",
+            "os_run",
+            "os_popen",
+            "os_args",
+            "os_pids",
+            "os_kill",
+            "errors_define",
             "crypto_sha256",
             "crypto_sha1",
             "crypto_md5",
@@ -3120,9 +3259,60 @@ impl Vm {
                 let function = Function {
                     params: params.clone(),
                     body: body.clone(),
+                    captured: self.vars.clone(),
                 };
                 self.functions.insert(fname.clone(), function);
                 Ok(Value::Function(fname))
+            }
+            Expr::Super(args) => {
+                let class_name = self.current_class.clone()
+                    .ok_or("super() can only be used inside a class method")?;
+                let method_name = self.current_method.clone()
+                    .ok_or("super() can only be used inside a class method")?;
+                let class = self.classes.get(&class_name)
+                    .ok_or_else(|| format!("unknown class: {class_name}"))?;
+                let parent_name = class.parent.clone()
+                    .ok_or_else(|| format!("{class_name} has no parent class"))?;
+                let parent_class = self.classes.get(&parent_name)
+                    .ok_or_else(|| format!("unknown parent class: {parent_name}"))?;
+                let parent_func = parent_class.methods.get(&method_name)
+                    .ok_or_else(|| format!("{parent_name} has no method: {method_name}"))?;
+                let function = parent_func.clone();
+                let mut values = Vec::new();
+                for arg in args {
+                    values.push(self.eval(arg)?);
+                }
+                if values.len() != function.params.len() {
+                    return Err(format!(
+                        "{parent_name}.{method_name} expects {} arguments, got {}",
+                        function.params.len(), values.len()
+                    ));
+                }
+                let instance = self.vars.get("self").cloned()
+                    .ok_or("super() requires self")?;
+                let caller_vars = self.vars.clone();
+                let prev_class = self.current_class.take();
+                let prev_method = self.current_method.take();
+                self.current_class = Some(parent_name.clone());
+                self.current_method = Some(method_name.clone());
+                self.vars.insert("self".into(), instance);
+                for (param, val) in function.params.iter().zip(values) {
+                    self.vars.insert(param.clone(), val);
+                }
+                self.stack.push(format!("{parent_name}.{method_name}"));
+                let flow = self.exec(&function.body);
+                self.stack.pop();
+                let result = match flow? {
+                    Flow::Return(v) => Ok(v),
+                    Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
+                    Flow::Normal => Ok(Value::Null),
+                    _ => Err("loop control escaped super call".into()),
+                };
+                let _saved_vars = self.vars.clone();
+                self.vars = caller_vars;
+                self.current_class = prev_class;
+                self.current_method = prev_method;
+                result
             }
             Expr::Call(callee, arguments) => {
                 let mut values = Vec::new();
@@ -3295,10 +3485,10 @@ impl Vm {
                     }
                 })
                 .ok_or_else(|| format!("dictionary has no member: {name}")),
-            Value::List(values) if name == "len" || name == "count" => {
+            Value::List(values) if name == "len" || name == "count" || name == "length" => {
                 Ok(Value::Number(values.len() as f64))
             }
-            Value::String(value) if name == "len" || name == "count" => {
+            Value::String(value) if name == "len" || name == "count" || name == "length" => {
                 Ok(Value::Number(value.chars().count() as f64))
             }
             Value::Instance(instance) => instance
@@ -3337,7 +3527,7 @@ impl Vm {
                 let suffix = one()?;
                 Ok(Value::Bool(value.ends_with(&suffix)))
             }
-            "trim" => Ok(Value::String(value.trim().into())),
+            "trim" | "strip" => Ok(Value::String(value.trim().into())),
             "trimEnd" | "trimRight" => Ok(Value::String(value.trim_end().into())),
             "trimStart" | "trimLeft" => Ok(Value::String(value.trim_start().into())),
             "lower" | "toLower" | "toLowerCase" => Ok(Value::String(value.to_lowercase())),
@@ -3720,9 +3910,57 @@ impl Vm {
     }
 
     fn resolve_module(&self, name: &str) -> Result<String, String> {
+        // Absolute path: /path/to/module.z or /path/to/module
+        if name.starts_with('/') || name.starts_with("./") || name.starts_with("../") {
+            let candidates = [
+                name.to_string(),
+                format!("{name}.z"),
+                format!("{name}/main.z"),
+            ];
+            for c in &candidates {
+                if std::path::Path::new(c).exists() {
+                    return Ok(c.clone());
+                }
+            }
+            return Err(format!("module not found: {name}"));
+        }
+        // Dotted names: pkg.sub.mod -> pkg/sub/mod.z, pkg/sub/main.z, etc.
+        let parts: Vec<&str> = name.split('.').collect();
+        if parts.len() > 1 {
+            let path_name = parts.join("/");
+            let base_candidates = [
+                format!("{path_name}.z"),
+                format!("{path_name}/main.z"),
+                format!("{path_name}/{}", parts.last().unwrap_or(&"")),
+            ];
+            // Try local first
+            for c in &base_candidates {
+                if std::path::Path::new(c).exists() {
+                    return Ok(c.clone());
+                }
+            }
+            // Try PM modules dir
+            let pm_dir = crate::pm::modules_dir();
+            for c in &base_candidates {
+                let pm_path = pm_dir.join(c);
+                if pm_path.is_file() {
+                    return Ok(pm_path.to_string_lossy().into_owned());
+                }
+            }
+        }
+        // Simple name: try local, pm, std
         let local = format!("{name}.z");
         if std::path::Path::new(&local).exists() {
             return Ok(local);
+        }
+        // Package directory: name/main.z or name/name.z
+        let pkg_main = format!("{name}/main.z");
+        let pkg_self = format!("{name}/{}.z", name);
+        if std::path::Path::new(&pkg_main).exists() {
+            return Ok(pkg_main);
+        }
+        if std::path::Path::new(&pkg_self).exists() {
+            return Ok(pkg_self);
         }
         if let Some(path) = crate::pm::resolve_module_file(name) {
             return Ok(path);
@@ -3761,6 +3999,13 @@ impl Vm {
             ));
         }
         let caller_vars = self.vars.clone();
+        if !function.captured.is_empty() {
+            for (k, v) in &function.captured {
+                if !function.params.contains(k) {
+                    self.vars.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
+        }
         for (parameter, value) in function.params.iter().zip(values) {
             self.vars.insert(parameter.clone(), value);
         }
@@ -3768,7 +4013,13 @@ impl Vm {
         let flow = self.exec(&function.body);
         self.stack.pop();
         let flow = flow?;
-        self.vars = caller_vars;
+        let mut restored = caller_vars;
+        for k in function.captured.keys() {
+            if let Some(v) = self.vars.get(k) {
+                restored.insert(k.clone(), v.clone());
+            }
+        }
+        self.vars = restored;
         Ok(match flow {
             Flow::Return(value) => Flow::Return(value),
             Flow::Throw(value) => Flow::Throw(value),
@@ -3821,6 +4072,10 @@ impl Vm {
             ));
         }
         let caller_vars = self.vars.clone();
+        let prev_class = self.current_class.take();
+        let prev_method = self.current_method.take();
+        self.current_class = Some(class_name.clone());
+        self.current_method = Some(method.to_string());
         self.vars.insert("self".into(), Value::Instance(instance));
         for (parameter, value) in function.params.iter().zip(values) {
             self.vars.insert(parameter.clone(), value);
@@ -3830,6 +4085,8 @@ impl Vm {
         self.stack.pop();
         let flow = flow?;
         self.vars = caller_vars;
+        self.current_class = prev_class;
+        self.current_method = prev_method;
         Ok(match flow {
             Flow::Return(value) => Flow::Return(value),
             Flow::Throw(value) => Flow::Throw(value),
@@ -3851,14 +4108,54 @@ impl Vm {
         for stmt in stmts {
             let result = self.exec_one(stmt);
             match result {
-                Ok(Flow::Normal | Flow::Continue) => {}
+                Ok(Flow::Normal) => {}
+                Ok(Flow::Continue) => return Ok(Flow::Continue),
                 Ok(Flow::Break) => return Ok(Flow::Break),
                 Ok(Flow::Return(value)) => return Ok(Flow::Return(value)),
                 Ok(Flow::Throw(value)) => return Ok(Flow::Throw(value)),
                 Err(e) => return Err(self.locate(stmt.line, stmt.col, e)),
             }
+            // Drain pending error class definitions from errors.define() calls
+            self.drain_pending_error_classes();
         }
         Ok(Flow::Normal)
+    }
+    fn drain_pending_error_classes(&mut self) {
+        let pending = if let Ok(mut lock) = pending_error_classes().lock() {
+            std::mem::take(&mut *lock)
+        } else {
+            return;
+        };
+        for (name, parent, message) in pending {
+            // Register as a class
+            let parent_q = parent.clone().map(|p| format!("errors.{p}"));
+            let qualified = format!("errors.{name}");
+            let init = Function {
+                params: vec!["message".into()],
+                body: vec![Stmt {
+                    kind: StmtKind::SetMember(
+                        Expr::Var("self".into()),
+                        "message".into(),
+                        Expr::Var("message".into()),
+                    ),
+                    line: 0,
+                    col: 0,
+                }],
+                captured: HashMap::new(),
+            };
+            let mut methods = HashMap::new();
+            methods.insert("init".into(), init);
+            let class = ZenClass {
+                parent: parent_q.clone(),
+                methods: methods.clone(),
+            };
+            self.classes.insert(name.clone(), class.clone());
+            self.classes.insert(qualified, class);
+            // Also add to the errors dict so errors.MyErr works
+            if let Some(Value::Dict(errors_dict)) = self.vars.get_mut("errors") {
+                errors_dict.insert(name, Value::String(message));
+            }
+        }
     }
     fn exec_one(&mut self, stmt: &Stmt) -> Result<Flow, String> {
         match &stmt.kind {
@@ -3955,13 +4252,15 @@ impl Vm {
                     self.vars.insert(n.clone(), v);
                     Ok(Flow::Normal)
                 }
-                StmtKind::Print(values) => {
+                StmtKind::Print(values, sep, end) => {
+                    let sep_str = sep.clone().unwrap_or_else(|| " ".to_string());
+                    let end_str = end.clone().unwrap_or_else(|| "\n".to_string());
                     let text = values
                         .iter()
                         .map(|e| self.eval(e).map(|v| v.to_string()))
                         .collect::<Result<Vec<_>, _>>()?
-                        .join(" ");
-                    println!("{text}");
+                        .join(&sep_str);
+                    print!("{text}{end_str}");
                     Ok(Flow::Normal)
                 }
                 StmtKind::Expr(e) => {
@@ -4011,6 +4310,7 @@ impl Vm {
                     let function = Function {
                         params: params.clone(),
                         body: body.clone(),
+                        captured: self.vars.clone(),
                     };
                     if let Ok(mut registry) = function_registry().lock() {
                         registry.insert(name.clone(), function.clone());
@@ -4049,7 +4349,8 @@ impl Vm {
                     };
                     if let Some(finally) = finally_body {
                         match self.exec(&finally) {
-                            Ok(Flow::Normal | Flow::Continue) => {}
+                Ok(Flow::Normal) => {}
+                Ok(Flow::Continue) => return Ok(Flow::Continue),
                             Ok(flow) => return Ok(flow),
                             Err(e) => return Err(e),
                         }
@@ -4071,32 +4372,132 @@ impl Vm {
                 StmtKind::Import(imports) => {
                     for (module, alias) in imports {
                         let name = alias.clone().unwrap_or(module.clone());
-                        if let Some(Value::Dict(existing)) = self.vars.get(module).cloned() {
+                        // Check if already loaded as a dict in vars
+                        if let Some(Value::Dict(existing)) = self.vars.get(name.as_str()).cloned() {
                             let mut map = HashMap::new();
                             for (k, v) in existing {
                                 map.insert(k, v);
                             }
-                            self.imported_modules.insert(name, map);
+                            self.imported_modules.insert(name.clone(), map);
                             continue;
                         }
-                        let path = self.resolve_module(module)?;
+                        // Check if it's a dotted submodule (e.g. pkg.sub -> parent.sub)
+                        if module.contains('.') {
+                            let parts: Vec<&str> = module.splitn(2, '.').collect();
+                            let parent = parts[0];
+                            let child = parts[1];
+                            if let Some(parent_mod) = self.imported_modules.get(parent).cloned() {
+                                if let Some(child_val) = parent_mod.get(child) {
+                                    if let Value::Dict(d) = child_val {
+                                        let mut map = HashMap::new();
+                                        for (k, v) in d.clone() {
+                                            map.insert(k, v);
+                                        }
+                                        self.imported_modules.insert(name, map);
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        // Check stdlib lazy registry
+                        if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
+                            let mod_val = factory();
+                            if let Value::Dict(d) = &mod_val {
+                                let mut map = HashMap::new();
+                                for (k, v) in d {
+                                    map.insert(k.clone(), v.clone());
+                                }
+                                self.imported_modules.insert(name.clone(), map);
+                            }
+                            self.vars.insert(name, mod_val);
+                            continue;
+                        }
+                        // Resolve as file
+                        let path = self.resolve_module(&module)?;
                         let vars = self.run_module(&path, &name)?;
+                        // For dotted imports like mypkg.utils, also register the parent
+                        if module.contains('.') {
+                            let parts: Vec<&str> = module.splitn(2, '.').collect();
+                            let parent = parts[0];
+                            let child = parts[1];
+                            let parent_map = self.imported_modules.entry(parent.to_string()).or_insert_with(HashMap::new);
+                            let child_dict: BTreeMap<String, Value> = vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                            parent_map.insert(child.to_string(), Value::Dict(child_dict));
+                        }
                         self.imported_modules.insert(name, vars);
                     }
                     Ok(Flow::Normal)
                 }
                 StmtKind::FromImport(module, items) => {
-                    let vars = if let Some(Value::Dict(existing)) = self.vars.get(module).cloned()
+                    let vars = if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned()
                     {
                         existing.into_iter().collect()
+                    } else if let Some(map) = self.imported_modules.get(module.as_str()).cloned() {
+                        map.into_iter().collect()
+                    } else if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
+                        let mod_val = factory();
+                        if let Value::Dict(d) = &mod_val {
+                            d.clone().into_iter().collect()
+                        } else {
+                            HashMap::new()
+                        }
                     } else {
-                        let path = self.resolve_module(module)?;
-                        self.run_module(&path, module)?
+                        let path = self.resolve_module(&module)?;
+                        self.run_module(&path, &module)?
                     };
                     for (item, alias) in items {
-                        let value = vars.get(item).cloned().ok_or_else(|| format!("item {} not found in {}", item, module))?;
+                        let value = if let Some(v) = vars.get(item).cloned() {
+                            v
+                        } else {
+                            // Item not in module dict — try as a submodule file:
+                            // from pkg import sub  ->  pkg/sub.z or pkg/sub/main.z
+                            let sub_name = if module.contains('.') {
+                                format!("{}.{}", module, item)
+                            } else {
+                                format!("{}.{}", module, item)
+                            };
+                            match self.resolve_module(&sub_name) {
+                                Ok(path) => {
+                                    let sub_vars = self.run_module(&path, &sub_name)?;
+                                    // Cache the submodule dict in imported_modules
+                                    let mut map = HashMap::new();
+                                    for (k, v) in &sub_vars {
+                                        map.insert(k.clone(), v.clone());
+                                    }
+                                    self.imported_modules.insert(sub_name.clone(), map);
+                                    Value::Dict(sub_vars.into_iter().collect())
+                                }
+                                Err(_) => {
+                                    return Err(format!("item '{}' not found in module '{}'", item, module));
+                                }
+                            }
+                        };
                         let name = alias.clone().unwrap_or(item.clone());
                         self.vars.insert(name, value);
+                    }
+                    Ok(Flow::Normal)
+                }
+                StmtKind::StarImport(module) => {
+                    let vars = if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned()
+                    {
+                        existing.into_iter().collect()
+                    } else if let Some(map) = self.imported_modules.get(module.as_str()).cloned() {
+                        map.into_iter().collect()
+                    } else if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
+                        let mod_val = factory();
+                        if let Value::Dict(d) = &mod_val {
+                            d.clone().into_iter().collect()
+                        } else {
+                            HashMap::new()
+                        }
+                    } else {
+                        let path = self.resolve_module(&module)?;
+                        self.run_module(&path, &module)?
+                    };
+                    for (name, value) in vars {
+                        if !name.starts_with('_') {
+                            self.vars.insert(name, value);
+                        }
                     }
                     Ok(Flow::Normal)
                 }
@@ -4144,6 +4545,7 @@ impl Vm {
                                 Function {
                                     params: params.clone(),
                                     body: body.clone(),
+                                    captured: HashMap::new(),
                                 },
                             );
                         } else {
@@ -4164,11 +4566,12 @@ impl Vm {
                 StmtKind::SetMember(object, member, value) => {
                     match self.eval(object)? {
                         Value::Instance(instance) => {
+                            let new_val = self.eval(value)?;
                             instance
                                 .lock()
                                 .unwrap()
                                 .fields
-                                .insert(member.clone(), self.eval(value)?);
+                                .insert(member.clone(), new_val);
                         }
                         Value::Dict(dict) => {
                             let mut dict = dict;
@@ -6790,6 +7193,126 @@ fn native_for(name: &str) -> NativeFunc {
                 .map_err(|e| format!("os.system failed: {e}"))?;
             Ok(Value::Number(status.code().unwrap_or(-1) as f64))
         },
+        "os_arch" => |_| Ok(Value::String(std::env::consts::ARCH.into())),
+        "errors_define" => |args| {
+            let name = match args.first() {
+                Some(Value::String(s)) => s.clone(),
+                _ => return Err("errors.define expects (name [, parent, message])".into()),
+            };
+            let parent = args.get(1).and_then(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            });
+            let message = args.get(2).and_then(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            }).unwrap_or_default();
+            // Store the definition; the VM will drain and register after the statement
+            if let Ok(mut pending) = pending_error_classes().lock() {
+                pending.push((name, parent, message));
+            }
+            Ok(Value::Null)
+        },
+        "os_execute" => |args| {
+            let cmd = match args.first() {
+                Some(Value::String(c)) => c,
+                _ => return Err("os.execute expects a command string".into()),
+            };
+            let output = process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .output()
+                .map_err(|e| format!("os.execute failed: {e}"))?;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let mut result = BTreeMap::new();
+            result.insert("ok".into(), Value::Bool(output.status.success()));
+            result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
+            result.insert("stdout".into(), Value::String(stdout));
+            result.insert("stderr".into(), Value::String(stderr));
+            Ok(Value::Dict(result))
+        },
+        "os_run" => |args| {
+            let cmd = match args.first() {
+                Some(Value::String(c)) => c.clone(),
+                _ => return Err("os.run expects a command string".into()),
+            };
+            let output = process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .output()
+                .map_err(|e| format!("os.run failed: {e}"))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let code = output.status.code().unwrap_or(-1);
+                return Err(format!("command failed (exit {code}): {stderr}"));
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            Ok(Value::String(stdout))
+        },
+        "os_popen" => |args| {
+            let cmd = match args.first() {
+                Some(Value::String(c)) => c.clone(),
+                _ => return Err("os.popen expects a command string".into()),
+            };
+            let output = process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .stdout(process::Stdio::piped())
+                .stderr(process::Stdio::piped())
+                .stdin(process::Stdio::null())
+                .output()
+                .map_err(|e| format!("os.popen failed: {e}"))?;
+            let mut result = BTreeMap::new();
+            result.insert("ok".into(), Value::Bool(output.status.success()));
+            result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
+            result.insert("stdout".into(), Value::String(String::from_utf8_lossy(&output.stdout).to_string()));
+            result.insert("stderr".into(), Value::String(String::from_utf8_lossy(&output.stderr).to_string()));
+            Ok(Value::Dict(result))
+        },
+        "os_args" => |_| {
+            let args: Vec<Value> = std::env::args().skip(1)
+                .map(|a| Value::String(a))
+                .collect();
+            Ok(Value::List(args))
+        },
+        "os_pids" => |_| {
+            let mut pids = Vec::new();
+            if let Ok(entries) = fs::read_dir("/proc") {
+                for entry in entries.flatten() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        if name.chars().all(|c| c.is_ascii_digit()) {
+                            if let Ok(pid) = name.parse::<f64>() {
+                                pids.push(Value::Number(pid));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Value::List(pids))
+        },
+        "os_kill" => |args| {
+            let pid = arg_number(&args, 0)? as i32;
+            let signal = arg_number(&args, 1).unwrap_or(15.0) as i32;
+            #[cfg(unix)]
+            {
+                unsafe {
+                    libc::kill(pid, signal);
+                }
+                Ok(Value::Null)
+            }
+            #[cfg(not(unix))]
+            {
+                Err("os.kill is only supported on Unix".into())
+            }
+        },
+        "os_home" => |_| {
+            Ok(Value::String(
+                std::env::var("HOME")
+                    .or_else(|_| std::env::var("USERPROFILE"))
+                    .unwrap_or_else(|_| "/".into()),
+            ))
+        },
         "time_unix" => |_| {
             let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
             Ok(Value::Number(now.as_secs_f64()))
@@ -6881,12 +7404,6 @@ fn native_for(name: &str) -> NativeFunc {
                 _ => return Err("os.getenv expects a string key".into()),
             };
             match env::var(key) {
-                Ok(value) => Ok(Value::String(value)),
-                Err(_) => Ok(Value::Null),
-            }
-        },
-        "os_home" => |_| {
-            match env::var("HOME") {
                 Ok(value) => Ok(Value::String(value)),
                 Err(_) => Ok(Value::Null),
             }
@@ -9412,26 +9929,26 @@ pub fn module_help(name: &str) -> Option<String> {
     match name {
         "errors" => Some(
             "errors — Python-style error classes with inheritance and typed catch\n\n\
-             Classes: Exception, RuntimeError, ValueError, TypeError, IndexError, KeyError,\n\
-             FileNotFoundError, PermissionError, ZeroDivisionError, ArithmeticError,\n\
-             OverflowError, NotImplementedError, StopIteration, AssertionError,\n\
-             AttributeError, SyntaxError, ImportError, RecursionError, BufferError,\n\
-             OSError, ConnectionError, TimeoutError, EOFError, MemoryError,\n\
-             DeprecationWarning, FutureWarning\n\n\
-             Creating custom errors:\n\
-             errors.define(\"MyError\", \"Exception\", \"Something went wrong\")\n\
-             throw MyError(\"details\")\n\
-             catch MyError as e { print e.message }\n\n\
-             Typed catch:\n\
-             catch ValueError as e { ... } catch TypeError as e { ... }"
+             Built-in: Error, TypeError, ValueError, IndexError, KeyError,\n\
+             FileNotFoundError, ZeroDivisionError, ArithmeticError, RuntimeError,\n\
+             NotImplementedError, StopIteration, AssertionError, ImportError,\n\
+             RecursionError, OSError, SystemExit\n\n\
+             Custom errors:\n\
+             errors.define(\"MyError\", \"Error\", \"default message\")\n\
+             throw new MyError(\"details\")\n\n\
+             Catch syntax:\n\
+             try { ... } catch as e { print e }\n\
+             try { ... } catch TypeError as e { ... }\n\
+             try { ... } catch MyError as e { ... } catch as e { ... }"
                 .into(),
         ),
         "json" => Some(
             "json — JSON encode/decode\n\n\
              json.parse(string)          decode JSON string to dict/list\n\
-             json.stringify(value)        encode value to JSON string\n\
-             json.pretty(value, indent?)  encode with indentation (default 2)\n\
-             json.is_valid(string)        check if string is valid JSON"
+             json.encode(value)          encode value to JSON string\n\
+             json.stringify(value)       alias for encode\n\
+             json.load(path)             read and parse JSON file\n\
+             json.save(path, value)      encode and write JSON file"
                 .into(),
         ),
         "fs" => Some(
@@ -9518,16 +10035,24 @@ pub fn module_help(name: &str) -> Option<String> {
         "os" => Some(
             "os — OS interaction\n\n\
              os.platform()            OS name (linux, macos, windows)\n\
+             os.name                  OS name (constant)\n\
+             os.arch()                CPU architecture\n\
+             os.pid()                 current process ID\n\
+             os.pids()                list all process IDs\n\
+             os.kill(pid, signal?)    send signal to process (default SIGTERM)\n\
              os.env(key?)             environment variable or all env vars\n\
              os.setenv(key, val)      set environment variable\n\
-             os.execute(cmd)          run shell command, return {ok, code, stdout, stderr}\n\
-             os.args()                command line arguments\n\
+             os.unsetenv(key)         remove environment variable\n\
+             os.execute(cmd)          run command, return {ok, code, stdout, stderr}\n\
+             os.run(cmd)              run command, return stdout or throw on failure\n\
+             os.popen(cmd)            run command (alias for execute)\n\
+             os.system(cmd)           run command, return exit code\n\
              os.cwd()                 current working directory\n\
              os.chdir(path)           change directory\n\
-             os.kill(pid, signal?)    send signal to process\n\
-             os.pids()                list process IDs\n\
+             os.home()                home directory\n\
              os.hostname()            machine hostname\n\
-             os.arch()                CPU architecture"
+             os.cpu_count()           number of CPUs\n\
+             os.exit(code?)           exit program"
                 .into(),
         ),
         "base64" => Some(
@@ -9569,11 +10094,10 @@ pub fn module_help(name: &str) -> Option<String> {
         ),
         "uuid" => Some(
             "uuid — UUID generation\n\n\
-             uuid.v1()     time-based UUID\n\
-             uuid.v3(name) name-based UUID (MD5)\n\
-             uuid.v4()     random UUID\n\
-             uuid.v5(name) name-based UUID (SHA-1)\n\
-             uuid.str(uuid) format UUID to string"
+             uuid.uuid1()  or uuid.v1()   time-based UUID\n\
+             uuid.uuid3(n) or uuid.v3(n)  name-based UUID (MD5)\n\
+             uuid.uuid4()  or uuid.v4()   random UUID\n\
+             uuid.uuid5(n) or uuid.v5(n)  name-based UUID (SHA-1)"
                 .into(),
         ),
         "color" => Some(
@@ -9955,7 +10479,7 @@ pub fn help_types() -> &'static str {
 pub fn help_builtins() -> &'static str {
     "Zen Built-in Functions\n\n\
      I/O:\n\
-       print(values...)      print to stdout (space-separated, newline appended)\n\
+        print(values..., sep?, end?)  print to stdout (space-separated, newline appended)\n\
        input(prompt?)        read line from stdin, returns string\n\
        exit(code?)           terminate program\n\n\
      Type conversion:\n\
@@ -10063,8 +10587,18 @@ pub fn help_keywords() -> &'static str {
        raise         alias for throw\n\
        except        alias for catch\n\n\
      Modules:\n\
-       import        import a module\n\
-       from          selective import (from mod import name)\n\n\
+       import        import a module or package\n\
+       from          selective import (from mod import name)\n\
+       as            alias (import mod as m, from mod import f as g)\n\
+       load          load and execute a file\n\n\
+     Packages:\n\
+       import pkg              load pkg/main.z or pkg/pkg.z\n\
+       import pkg.sub          load pkg/sub.z\n\
+       import /path/to/mod     load by absolute path\n\
+       from pkg import sub     load pkg/sub.z as sub\n\
+       from pkg.sub import f   load f from pkg/sub.z\n\
+       zen pm init [name]      create zen.json + main.z\n\
+       zen pm install <spec>   install from repo/url/file/directory\n\n\
      Other:\n\
        null          null value\n\
        true/false    booleans\n\
@@ -10106,10 +10640,13 @@ pub fn help_builtin(name: &str) -> Option<String> {
     match name {
         // I/O
         "print" => Some(
-            "print(values...)  — print values to stdout\n\
-             Prints each argument separated by spaces, followed by a newline.\n\n\
+            "print(values..., sep?, end?)  — print values to stdout\n\
+             Prints each argument separated by spaces (or custom sep), followed by\n\
+             a newline (or custom end).\n\n\
              Example: print(\"hello\", 42, true)  =>  hello 42 true\n\
-             Example: print(1 + 1)  =>  2"
+             Example: print(1 + 1)  =>  2\n\
+             Example: print(\"a\", \"b\", sep=\"-\")  =>  a-b\n\
+             Example: print(\"hi\", end=\"\")  =>  hi (no newline)"
                 .into(),
         ),
         "input" => Some(

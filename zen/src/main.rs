@@ -6,7 +6,7 @@ mod state;
 use std::{env, fs, process};
 
 fn usage() {
-    eprintln!("Zen native runtime\n\nUsage:\n  zen run <file.z>\n  zen <file.z>\n  zen -e <source>\n  zen --version\n\nCommands:\n  zen run <file.z>            execute a script\n  zen check <file.z>          parse and validate a script without running it\n  zen lint <file.z>           report suspicious patterns and errors\n  zen repl                    start an interactive session\n\nPackage manager:\n  zen pm install <owner/repo>[@tag] | <url> | <file>\n  zen pm install --force <spec>   reinstall\n  zen pm install -r <freeze.txt>  install from freeze file\n  zen pm list\n  zen pm freeze\n  zen pm remove <name>\n  zen pm info <name>\n  zen pm verify <name>            check sha256 against source\n  zen pm pack <dir>               build publishable tarball\n  zen pm publish <dir> <git-remote>");
+    eprintln!("Zen native runtime\n\nUsage:\n  zen run <file.z>\n  zen <file.z>\n  zen -e <source>\n  zen --version\n\nCommands:\n  zen run <file.z>            execute a script\n  zen check <file.z>          parse and validate a script without running it\n  zen lint <file.z>           report suspicious patterns and errors\n  zen repl                    start an interactive session\n\nPackage manager:\n  zen pm init [name]          initialize a new module (creates zen.json + main.z)\n  zen pm install <spec>       install: owner/repo, url, .z file, or local directory\n  zen pm install --force <spec>   reinstall\n  zen pm install -r <freeze.txt>  install from freeze file\n  zen pm list\n  zen pm freeze\n  zen pm remove <name>\n  zen pm info <name>\n  zen pm verify <name>            check sha256 against source\n  zen pm pack <dir>               build publishable tarball\n  zen pm publish <dir> <git-remote>");
 }
 
 fn main() {
@@ -23,6 +23,10 @@ fn main() {
                 ("install", [spec]) => pm::install(spec, false).map(|_| ()),
                 ("install", ["--force", spec]) | ("install", [spec, "--force"]) => pm::install(spec, true).map(|_| ()),
                 ("install", ["-r", file]) | ("install", ["--requirements", file]) => pm::install_requirements(file),
+                ("init", []) => pm::init(None, None).map(|_| ()),
+                ("init", ["--name", name]) => pm::init(Some(name), None).map(|_| ()),
+                ("init", ["--name", name, "--desc", desc]) => pm::init(Some(name), Some(desc)).map(|_| ()),
+                ("init", [name]) => pm::init(Some(name), None).map(|_| ()),
                 ("list", []) => pm::list(),
                 ("freeze", []) => pm::freeze(),
                 ("remove", [name]) | ("uninstall", [name]) => pm::remove(name),
