@@ -10101,6 +10101,622 @@ pub fn help_module(name: &str) -> String {
     })
 }
 
+/// Return help for a specific built-in function or constant.
+pub fn help_builtin(name: &str) -> Option<String> {
+    match name {
+        // I/O
+        "print" => Some(
+            "print(values...)  — print values to stdout\n\
+             Prints each argument separated by spaces, followed by a newline.\n\n\
+             Example: print(\"hello\", 42, true)  =>  hello 42 true\n\
+             Example: print(1 + 1)  =>  2"
+                .into(),
+        ),
+        "input" => Some(
+            "input(prompt?)  — read a line from stdin\n\
+             Shows the prompt string (if given), reads one line, returns it as a string.\n\n\
+             Example: let name = input(\"Name: \")\n\
+             Example: let line = input()"
+                .into(),
+        ),
+        "exit" => Some(
+            "exit(code?)  — terminate the program\n\
+             Exits with the given exit code (default 0).\n\n\
+             Example: exit(0)\n\
+             Example: exit(1)"
+                .into(),
+        ),
+        "len" => Some(
+            "len(x)  — length of a string, list, or dict\n\
+             Returns the number of characters (string), elements (list), or keys (dict).\n\n\
+             Example: len(\"hello\")  =>  5\n\
+             Example: len([1, 2, 3])  =>  3\n\
+             Example: len({a: 1, b: 2})  =>  2"
+                .into(),
+        ),
+
+        // Type conversion
+        "str" => Some(
+            "str(x)  — convert to string\n\
+             Converts any value to its string representation.\n\n\
+             Example: str(42)  =>  \"42\"\n\
+             Example: str(true)  =>  \"true\"\n\
+             Example: str([1,2])  =>  \"[1, 2]\""
+                .into(),
+        ),
+        "int" => Some(
+            "int(x)  — convert to integer\n\
+             Converts a value to an integer. Floats are truncated (toward zero).\n\
+             Strings are parsed as base-10 integers.\n\n\
+             Example: int(3.9)  =>  3\n\
+             Example: int(\"42\")  =>  42\n\
+             Example: int(true)  =>  1"
+                .into(),
+        ),
+        "float" => Some(
+            "float(x)  — convert to float\n\
+             Converts a value to a floating-point number.\n\n\
+             Example: float(42)  =>  42.0\n\
+             Example: float(\"3.14\")  =>  3.14"
+                .into(),
+        ),
+        "bool" => Some(
+            "bool(x)  — convert to boolean\n\
+             Converts a value to a boolean.\n\
+             Falsy: null, false, 0, 0.0, \"\"\n\
+             Everything else is truthy.\n\n\
+             Example: bool(0)  =>  false\n\
+             Example: bool(\"hello\")  =>  true\n\
+             Example: bool(null)  =>  false"
+                .into(),
+        ),
+        "list" => Some(
+            "list(x)  — convert to list\n\
+             Converts a value to a list.\n\
+             Strings become list of characters. Dicts become list of [key, value] pairs.\n\n\
+             Example: list(\"abc\")  =>  [a, b, c]\n\
+             Example: list({a: 1})  =>  [[a, 1]]"
+                .into(),
+        ),
+        "dict" => Some(
+            "dict(pairs)  — create dict from pairs\n\
+             Creates a dict from a list of [key, value] pairs.\n\n\
+             Example: dict([[\"a\", 1], [\"b\", 2]])  =>  {a: 1, b: 2}"
+                .into(),
+        ),
+        "typeof" => Some(
+            "typeof x  — type name of a value\n\
+             Returns a string naming the type: \"null\", \"bool\", \"int\", \"float\",\n\
+             \"string\", \"list\", \"dict\", \"function\", \"class\", \"instance\", etc.\n\
+             Can also be written as: type(x)\n\n\
+             Example: typeof 42  =>  \"int\"\n\
+             Example: typeof \"hello\"  =>  \"string\"\n\
+             Example: typeof [1]  =>  \"list\""
+                .into(),
+        ),
+        "type" => Some(
+            "type(x)  — alias for typeof x\n\
+             Returns the type name as a string.\n\n\
+             Example: type(3.14)  =>  \"float\""
+                .into(),
+        ),
+
+        // Numeric
+        "abs" => Some(
+            "abs(x)  — absolute value\n\
+             Returns the absolute (non-negative) value.\n\n\
+             Example: abs(-5)  =>  5\n\
+             Example: abs(3.14)  =>  3.14"
+                .into(),
+        ),
+        "min" => Some(
+            "min(a, b, ...)  — minimum value\n\
+             Returns the smallest of the given values.\n\
+             For a single list argument, finds the minimum element.\n\n\
+             Example: min(3, 1, 2)  =>  1\n\
+             Example: min([5, 2, 8])  =>  2"
+                .into(),
+        ),
+        "max" => Some(
+            "max(a, b, ...)  — maximum value\n\
+             Returns the largest of the given values.\n\
+             For a single list argument, finds the maximum element.\n\n\
+             Example: max(3, 1, 2)  =>  3\n\
+             Example: max([5, 2, 8])  =>  8"
+                .into(),
+        ),
+        "round" => Some(
+            "round(x)  — round to nearest integer\n\
+             Rounds a number to the nearest integer.\n\n\
+             Example: round(3.6)  =>  4\n\
+             Example: round(3.2)  =>  3\n\
+             Example: round(-1.5)  =>  -2"
+                .into(),
+        ),
+        "trunc" => Some(
+            "trunc(x)  — truncate to integer\n\
+             Truncates toward zero (drops the decimal part).\n\n\
+             Example: trunc(3.9)  =>  3\n\
+             Example: trunc(-3.9)  =>  -3"
+                .into(),
+        ),
+        "hex" => Some(
+            "hex(x)  — hex string representation\n\
+             Converts an integer to a hex string with \"0x\" prefix.\n\n\
+             Example: hex(255)  =>  \"0xff\"\n\
+             Example: hex(16)  =>  \"0x10\""
+                .into(),
+        ),
+        "range" => Some(
+            "range(end) / range(start, end)  — inclusive range list\n\
+             Returns a list of integers.\n\
+             One arg: [0, 1, ..., end].\n\
+             Two args: [start, start+1, ..., end].\n\n\
+             Example: range(5)  =>  [0, 1, 2, 3, 4, 5]\n\
+             Example: range(2, 5)  =>  [2, 3, 4, 5]"
+                .into(),
+        ),
+
+        // Time
+        "sleep" => Some(
+            "sleep(sec)  — pause execution for N seconds\n\
+             Blocks the current thread for the given number of seconds (fractional OK).\n\n\
+             Example: sleep(1)     — pause 1 second\n\
+             Example: sleep(0.5)   — pause 500 milliseconds"
+                .into(),
+        ),
+        "wait" => Some(
+            "wait(ms)  — pause execution for N milliseconds\n\
+             Blocks the current thread for the given number of milliseconds.\n\n\
+             Example: wait(1000)   — pause 1 second\n\
+             Example: wait(500)    — pause 500 milliseconds"
+                .into(),
+        ),
+
+        // Error handling
+        "throw" => Some(
+            "throw value  — raise an error\n\
+             Throws a value as an error. Can be caught with try/catch.\n\
+             Values can be strings, dicts, or instances of error classes.\n\n\
+             Example: throw \"something went wrong\"\n\
+             Example: throw {type: \"Error\", message: \"oops\"}\n\
+             Example: errors.define(\"MyError\", \"Exception\", \"msg\")\n\
+             throw MyError(\"details\")"
+                .into(),
+        ),
+        "raise" => Some(
+            "raise value  — alias for throw\n\
+             Same as throw. Raises an error that can be caught with try/catch.\n\n\
+             Example: raise \"oops\""
+                .into(),
+        ),
+        "try" => Some(
+            "try { ... } catch <var> { ... } finally { ... }  — error handling\n\
+             try: code that might throw\n\
+             catch: handles the error (supports typed catch)\n\
+             finally: always runs, whether or not there was an error\n\n\
+             Example:\n\
+             try {\n\
+               let x = 1 / 0\n\
+             } catch e {\n\
+               print \"Error:\", e\n\
+             }\n\n\
+             Typed catch:\n\
+             try {\n\
+               throw ValueError(\"bad\")\n\
+             } catch ValueError as e {\n\
+               print e.message\n\
+             } catch TypeError as e {\n\
+               print \"wrong type\"\n\
+             }"
+                .into(),
+        ),
+        "catch" => Some(
+            "catch [as var] { ... }  — handle error in try block\n\
+             Catches an error thrown by throw/raise. Without a type, catches all.\n\
+             With a type name, catches only that error type.\n\n\
+             Example: catch e { print e }\n\
+             Example: catch ValueError as e { print e.message }\n\
+             Example: catch TypeError as e { ... }"
+                .into(),
+        ),
+        "finally" => Some(
+            "finally { ... }  — always-execute block\n\
+             Used after try/catch. Runs regardless of whether an error was thrown.\n\n\
+             Example:\n\
+             try { risky_call() }\n\
+             catch e { handle(e) }\n\
+             finally { cleanup() }"
+                .into(),
+        ),
+        "assert" => Some(
+            "assert condition  — assertion check\n\
+             Throws an error if the condition is falsy.\n\n\
+             Example: assert 1 == 1\n\
+             Example: assert len([1, 2]) == 2"
+                .into(),
+        ),
+
+        // Variables
+        "let" => Some(
+            "let name = value  — declare a mutable variable\n\
+             Creates a new variable in the current scope.\n\n\
+             Example: let x = 42\n\
+             Example: let name = \"zen\""
+                .into(),
+        ),
+        "const" => Some(
+            "const NAME = value  — declare an immutable constant\n\
+             Creates a constant that cannot be reassigned.\n\
+             Convention: UPPER_CASE names.\n\n\
+             Example: const PI = 3.14159\n\
+             Example: const MAX_RETRIES = 3"
+                .into(),
+        ),
+        "global" => Some(
+            "global name  — declare a global variable\n\
+             Makes a variable accessible across all scopes.\n\n\
+             Example: global counter = 0"
+                .into(),
+        ),
+
+        // Functions
+        "func" | "def" => Some(
+            "func name(args) { body }  — define a named function\n\
+             'def' and 'fn' are aliases for 'func'.\n\
+             Functions can have default arguments and rest parameters.\n\n\
+             Example:\n\
+             func add(a, b) {\n\
+               return a + b\n\
+             }\n\
+             print add(2, 3)  // 5\n\n\
+             Default args:\n\
+             func greet(name = \"world\") {\n\
+               print \"hello \" + name\n\
+             }\n\n\
+             Rest parameters:\n\
+             func sum(nums...) {\n\
+               let total = 0\n\
+               for n in nums { total += n }\n\
+               return total\n\
+             }"
+                .into(),
+        ),
+        "fn" => Some(
+            "fn(args) { body }  — define a named function (alias for func)\n\
+             Same as func. Can also be used as a lambda keyword.\n\n\
+             Example: fn double(x) { x * 2 }"
+                .into(),
+        ),
+        "lambda" => Some(
+            "lambda(args) { body }  — anonymous function\n\
+             Creates an unnamed function value. Can be assigned to a variable.\n\n\
+             Example: let f = lambda(x) { x * 2 }\n\
+             Example: [1, 2, 3].map(lambda(x) { x * 2 })\n\
+             Example: [1, 2, 3].filter(lambda(x) { x > 1 })"
+                .into(),
+        ),
+        "return" => Some(
+            "return value  — return from a function\n\
+             Exits the current function, returning the given value.\n\
+             Without a value, returns null.\n\n\
+             Example:\n\
+             func abs(x) {\n\
+               if x < 0 { return -x }\n\
+               return x\n\
+             }"
+                .into(),
+        ),
+
+        // Control flow
+        "if" => Some(
+            "if condition { body } elif cond { body } else { body }  — conditional\n\
+             Branches based on a condition. elif and else are optional.\n\n\
+             Example:\n\
+             if x > 10 {\n\
+               print \"big\"\n\
+             } elif x > 5 {\n\
+               print \"medium\"\n\
+             } else {\n\
+               print \"small\"\n\
+             }\n\n\
+             As expression:\n\
+             let size = if x > 10 { \"big\" } else { \"small\" }"
+                .into(),
+        ),
+        "elif" => Some(
+            "elif condition { body }  — else-if branch\n\
+             Used after if or another elif. Adds another condition to check.\n\n\
+             Example:\n\
+             if x > 0 { print \"positive\" }\n\
+             elif x < 0 { print \"negative\" }\n\
+             else { print \"zero\" }"
+                .into(),
+        ),
+        "else" => Some(
+            "else { body }  — default branch\n\
+             Executes when no preceding if/elif condition is true.\n\n\
+             Example:\n\
+             if x > 0 { print \"positive\" }\n\
+             else { print \"non-positive\" }"
+                .into(),
+        ),
+        "while" => Some(
+            "while condition { body }  — while loop\n\
+             Repeats the body while the condition is true.\n\n\
+             Example:\n\
+             let i = 0\n\
+             while i < 5 {\n\
+               print i\n\
+               i += 1\n\
+             }\n\n\
+             Use break to exit early, continue to skip to next iteration."
+                .into(),
+        ),
+        "for" => Some(
+            "for var in iterable { body }  — for-each loop\n\
+             Iterates over each element in a list, string, or dict.\n\n\
+             Example:\n\
+             for x in [1, 2, 3] {\n\
+               print x\n\
+             }\n\n\
+             Dict iteration:\n\
+             for key in {a: 1, b: 2} {\n\
+               print key, \":\", {a: 1, b: 2}[key]\n\
+             }\n\n\
+             String iteration:\n\
+             for ch in \"hello\" {\n\
+               print ch\n\
+             }"
+                .into(),
+        ),
+        "in" => Some(
+            "x in collection  — membership test\n\
+             Returns true if x is an element of the collection.\n\
+             For strings: true if x is a substring.\n\
+             For dicts: true if x is a key.\n\n\
+             Example: 2 in [1, 2, 3]  =>  true\n\
+             Example: \"l\" in \"hello\"  =>  true\n\
+             Example: \"a\" in {a: 1}  =>  true"
+                .into(),
+        ),
+        "break" => Some(
+            "break  — exit a loop immediately\n\
+             Used inside while or for loops to stop looping.\n\n\
+             Example:\n\
+             for x in [1, 2, 3, 4, 5] {\n\
+               if x == 3 { break }\n\
+               print x\n\
+             }\n\
+             // prints 1, 2"
+                .into(),
+        ),
+        "continue" => Some(
+            "continue  — skip to next loop iteration\n\
+             Used inside while or for loops to skip the rest of the body.\n\n\
+             Example:\n\
+             for x in [1, 2, 3, 4, 5] {\n\
+               if x % 2 == 0 { continue }\n\
+               print x\n\
+             }\n\
+             // prints 1, 3, 5"
+                .into(),
+        ),
+
+        // Classes
+        "class" => Some(
+            "class Name { ... } / class Name < Parent { ... }  — define a class\n\
+             Creates a class with optional inheritance.\n\
+             'inherit' keyword is an alias for '<'.\n\n\
+             Example:\n\
+             class Animal {\n\
+               func init(name) {\n\
+                 this.name = name\n\
+               }\n\
+               func speak() {\n\
+                 return \"...\"\n\
+               }\n\
+             }\n\
+             class Dog < Animal {\n\
+               func speak() {\n\
+                 return \"woof!\"\n\
+               }\n\
+             }\n\
+             let d = Dog(\"Rex\")\n\
+             print d.speak()  // woof!"
+                .into(),
+        ),
+        "inherit" => Some(
+            "inherit  — inheritance keyword (alias for <)\n\
+             Used in class declarations to inherit from a parent class.\n\n\
+             Example: class Dog < Animal { ... }\n\
+             Example: class Dog inherit Animal { ... }"
+                .into(),
+        ),
+        "this" => Some(
+            "this  — reference to the current instance\n\
+             Inside a class method, 'this' refers to the instance being used.\n\
+             Used to access fields and methods of the current object.\n\n\
+             Example:\n\
+             class Person {\n\
+               func init(name, age) {\n\
+                 this.name = name\n\
+                 this.age = age\n\
+               }\n\
+               func greet() {\n\
+                 return \"Hi, I'm \" + this.name\n\
+               }\n\
+             }"
+                .into(),
+        ),
+        "new" => Some(
+            "new is a reserved keyword in Zen.\n\
+             Class instances are created by calling the class name directly:\n\n\
+             Example:\n\
+             class Foo { func init(x) { this.x = x } }\n\
+             let f = Foo(42)  // calls Foo.new(42) internally\n\
+             print f.x  // 42\n\n\
+             Note: You cannot use 'new' as a variable or function name."
+                .into(),
+        ),
+
+        // Modules
+        "import" => Some(
+            "import module  — import a module\n\
+             Loads a .z file or makes a built-in module available.\n\
+             All built-in modules are already available as globals —\n\
+             import is mainly for .z files.\n\n\
+             Example: import mylib\n\
+             Example: import mylib.z"
+                .into(),
+        ),
+        "from" => Some(
+            "from module import name  — selective import\n\
+             Imports specific names from a module.\n\n\
+             Example: from string import upper, lower\n\
+             Example: from itertools import range, enumerate"
+                .into(),
+        ),
+
+        // Match/When
+        "match" => Some(
+            "match value { pattern => expr, ... }  — pattern matching\n\
+             Matches a value against patterns and returns the matching expression.\n\n\
+             Example:\n\
+             match x {\n\
+               1 => \"one\",\n\
+               2 => \"two\",\n\
+               _ => \"other\"\n\
+             }\n\n\
+             With guards:\n\
+             match x {\n\
+               n if n > 0 => \"positive\",\n\
+               0 => \"zero\",\n\
+               _ => \"negative\"\n\
+             }"
+                .into(),
+        ),
+        "when" => Some(
+            "when { condition => expr, ... }  — expression-based branching\n\
+             Like match, but evaluates conditions (like acond). Returns the value\n\
+             for the first true condition.\n\n\
+             Example:\n\
+             let label = when {\n\
+               x > 10 => \"big\",\n\
+               x > 5 => \"medium\",\n\
+               _ => \"small\"\n\
+             }"
+                .into(),
+        ),
+
+        // Special
+        "null" => Some(
+            "null  — the null value\n\
+             Represents absence of value or nothingness.\n\
+             Equality: null == null is true.\n\
+             Falsy in boolean context.\n\n\
+             Example:\n\
+             let x = null\n\
+             if x == null { print \"nothing\" }"
+                .into(),
+        ),
+        "true" => Some(
+            "true  — boolean true\n\
+             One of two boolean values (true/false).\n\
+             Returned by comparisons and truthiness checks.\n\n\
+             Example: 1 == 1  =>  true\n\
+             Example: bool(1)  =>  true"
+                .into(),
+        ),
+        "false" => Some(
+            "false  — boolean false\n\
+             One of two boolean values (true/false).\n\
+             Falsy values: null, false, 0, 0.0, \"\".\n\n\
+             Example: 1 == 2  =>  false"
+                .into(),
+        ),
+        "is" => Some(
+            "x is Type  — type checking\n\
+             Returns true if x is an instance of the given class/type.\n\n\
+             Example: 42 is int  =>  true\n\
+             Example: \"hi\" is string  =>  true\n\
+             Example: [1] is list  =>  true"
+                .into(),
+        ),
+        "as" => Some(
+            "as  — used in imports and typed catch\n\
+             In imports: from mod import func as alias\n\
+             In catch: catch TypeError as e { ... }\n\n\
+             Example: from string import upper as up\n\
+             Example: catch ValueError as e { print e }"
+                .into(),
+        ),
+
+        // List methods
+        "map" | "filter" | "reduce" | "find" | "find_index" | "flat_map"
+        | "some" | "every" | "sort" | "sort_by" | "reverse" | "fill"
+        | "copy" | "first" | "last" | "contains" | "includes" | "index_of"
+        | "last_index_of" | "keys" | "values" | "entries" | "slice"
+        | "splice" | "flat" | "compact" | "uniq" | "union"
+        | "intersection" | "difference" | "pluck" | "shuffle"
+        | "sample" | "take" | "drop" | "chunk" | "zip"
+        | "flatten" | "sum" => Some(
+            format!(
+                "{name}()  — list method (call on a list value)\n\
+                 This is a method on list objects, not a standalone function.\n\
+                 Call it on a list: mylist.{name}(args)\n\n\
+                 Example: [1, 2, 3].{name}(args)"
+            ).into(),
+        ),
+        // Dict methods
+        "get" | "set" | "has_key" | "delete" | "update"
+        | "merge" | "map_values" | "filter_values"
+        | "key_of" | "invert" => Some(
+            format!(
+                "{name}()  — dict method (call on a dict value)\n\
+                 This is a method on dict objects, not a standalone function.\n\
+                 Call it on a dict: mydict.{name}(args)\n\n\
+                 Example: {{a: 1}}.{name}(args)"
+            ).into(),
+        ),
+
+        _ => None,
+    }
+}
+
+/// Help for a specific builtin, with fuzzy-match suggestions on miss.
+pub fn help_builtin_or_error(name: &str) -> String {
+    help_builtin(name).unwrap_or_else(|| {
+        let builtins = [
+            "print", "input", "exit", "len", "str", "int", "float", "bool",
+            "list", "dict", "typeof", "type", "abs", "min", "max", "round",
+            "trunc", "hex", "range", "sleep", "wait", "throw", "raise",
+            "try", "catch", "finally", "assert", "let", "const", "global",
+            "func", "def", "fn", "lambda", "return", "if", "elif", "else",
+            "while", "for", "in", "break", "continue", "class", "inherit",
+            "this", "new", "import", "from", "match", "when", "null",
+            "true", "false", "is", "as",
+            // List methods
+            "map", "filter", "reduce", "sort", "reverse", "fill", "copy",
+            "first", "last", "slice", "splice", "flat", "compact", "uniq",
+            "union", "intersection", "difference", "shuffle", "sample",
+            "take", "drop", "chunk", "zip", "flatten", "sum",
+            // Dict methods
+            "get", "set", "has_key", "delete", "update", "merge",
+            "map_values", "filter_values", "key_of", "invert",
+        ];
+        let close: Vec<&str> = builtins.iter()
+            .filter(|b| levenshtein(name, b) <= 2)
+            .cloned()
+            .collect();
+        if close.is_empty() {
+            format!("Unknown name: {name}\n\nRun :help for help, :help functions for a full list.")
+        } else {
+            format!("Unknown name: {name}\n\nDid you mean: {}?", close.join(", "))
+        }
+    })
+}
+
 fn levenshtein(a: &str, b: &str) -> usize {
     let a_len = a.len();
     let b_len = b.len();

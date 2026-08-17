@@ -200,13 +200,19 @@ fn repl() {
             _ => {}
         }
 
-        // :help <module>
+        // :help <module> or :help <builtin>
         if let Some(modname) = line.strip_prefix(":help ") {
             let modname = modname.trim();
             if modname.is_empty() {
                 println!("{}", runtime::repl_help());
             } else {
-                print!("{}", runtime::help_module(modname));
+                // Try module help first; if not found, try builtin help.
+                let result = runtime::help_module(modname);
+                if result.starts_with("Unknown") {
+                    print!("{}", runtime::help_builtin_or_error(modname));
+                } else {
+                    print!("{}", result);
+                }
             }
             continue;
         }
