@@ -9323,6 +9323,803 @@ impl Repl {
     }
 }
 
+/// Return general REPL help text.
+pub fn repl_help() -> &'static str {
+    "Zen REPL — interactive session\n\n\
+     REPL Commands:\n\
+       :help               show this help\n\
+       :help modules       list all available modules\n\
+       :help <module>      detailed help for a module\n\
+       :help types         list all data types\n\
+       :help functions     list all built-in functions\n\
+       :help operators     list all operators\n\
+       :help keywords      list all keywords\n\
+       :c <expr>           shorthand for: print <expr>\n\
+       :q / :quit / :exit  quit the REPL\n\n\
+     Keyboard shortcuts:\n\
+       Up/Down             cycle through command history\n\
+       Left/Right          move cursor\n\
+       Tab                 auto-complete (when available)\n\
+       Ctrl-A              move to start of line\n\
+       Ctrl-E              move to end of line\n\
+       Ctrl-K              delete to end of line\n\
+       Ctrl-U              delete to start of line\n\
+       Ctrl-C              cancel current input\n\
+       Ctrl-D              exit (EOF)\n\n\
+     Importing modules:\n\
+       All built-in modules are available as globals — no import needed.\n\
+       Use them directly: string.upper(\"hello\"), hashlib.md5(\"x\"), etc.\n\
+       Custom modules: save a .z file, then: import mymodule"
+}
+
+/// Return list of all module names with one-line descriptions.
+pub fn list_modules() -> String {
+    let modules = [
+        ("errors", "Python-style error classes with inheritance and typed catch"),
+        ("json", "JSON encode/decode (parse, stringify, pretty)"),
+        ("fs", "Filesystem operations (read, write, exists, list_dir, mkdir, etc.)"),
+        ("re", "Regular expressions (match, find, findall, replace, split)"),
+        ("random", "Random number generation (int, float, choice, shuffle, seed)"),
+        ("math", "Math constants and functions (sin, cos, sqrt, floor, etc.)"),
+        ("time", "Time functions (now, format, parse, sleep, etc.)"),
+        ("os", "OS info and process control (platform, env, execute)"),
+        ("base64", "Base64 encode/decode (encode, decode)"),
+        ("crypto", "Cryptographic hashes (sha256, md5, sha1, etc.)"),
+        ("datetime", "Date/time objects and formatting"),
+        ("uuid", "UUID generation (v1, v3, v4, v5)"),
+        ("color", "ANSI color helpers (rgb, hex, 256-color, styled text)"),
+        ("csv", "CSV parsing and writing"),
+        ("http", "HTTP client (get, post, put, del, head, patch)"),
+        ("decimal", "Arbitrary-precision decimal arithmetic"),
+        ("threading", "Background function execution"),
+        ("statistics", "Statistical functions (mean, median, stdev, etc.)"),
+        ("socket", "Low-level TCP sockets (open, send, recv, close)"),
+        ("browser", "Browser automation over CDP (Chrome DevTools Protocol)"),
+        ("string", "String helpers and constants (upper, split, join, replace, etc.)"),
+        ("subprocess", "Run external commands (run, call, check_output)"),
+        ("hashlib", "Cryptographic hashing (sha256, md5, create, algorithms_available)"),
+        ("struct", "Binary data pack/unpack (pack, unpack, calcsize)"),
+        ("shutil", "High-level file operations (copy, move, rmtree, which, disk_usage)"),
+        ("pathlib", "Path manipulation (join, name, parent, stem, suffix, exists, etc.)"),
+        ("glob", "File pattern matching (glob)"),
+        ("urllib", "URL handling (parse, quote, unquote, urlencode, urlopen)"),
+        ("collections", "Data structures (Counter, chain, flatten)"),
+        ("itertools", "Iterators (enumerate, zip, range, product, combinations, etc.)"),
+        ("tempfile", "Temporary files/dirs (dir, mkdtemp, mkstemp)"),
+        ("binascii", "Binary/ASCII encoding (hexlify, unhexlify, base64)"),
+        ("socket", "Low-level networking (open, send, recv, close)"),
+        ("ftp", "Pure-Rust FTP client (connect, login, list, retr, stor, etc.)"),
+        ("smtp", "Pure-Rust SMTP client (connect, login, sendmail, message)"),
+        ("pop3", "Pure-Rust POP3 client (connect, stat, list, retr, dele)"),
+        ("imap", "Pure-Rust IMAP client (connect, select, search, fetch)"),
+        ("telnet", "Pure-Rust telnet client (connect, write, read, read_until)"),
+        ("dns", "DNS resolver (resolve, query)"),
+        ("ssh", "System SSH/SCP wrapper (run, upload, download, available)"),
+        ("scapy", "Packet crafting/sniffing (ip, tcp, udp, build, parse, send, sniff)"),
+    ];
+    let mut out = String::from("Available modules (all available as globals, no import needed):\n\n");
+    for (name, desc) in modules {
+        out.push_str(&format!("  {:<14} {}\n", name, desc));
+    }
+    out.push_str("\nUsage: <module>.<function>(args...)\n");
+    out.push_str("Example: string.upper(\"hello\")\n");
+    out.push_str("Example: hashlib.sha256(\"data\")\n");
+    out
+}
+
+/// Return help for a specific module.
+pub fn module_help(name: &str) -> Option<String> {
+    match name {
+        "errors" => Some(
+            "errors — Python-style error classes with inheritance and typed catch\n\n\
+             Classes: Exception, RuntimeError, ValueError, TypeError, IndexError, KeyError,\n\
+             FileNotFoundError, PermissionError, ZeroDivisionError, ArithmeticError,\n\
+             OverflowError, NotImplementedError, StopIteration, AssertionError,\n\
+             AttributeError, SyntaxError, ImportError, RecursionError, BufferError,\n\
+             OSError, ConnectionError, TimeoutError, EOFError, MemoryError,\n\
+             DeprecationWarning, FutureWarning\n\n\
+             Creating custom errors:\n\
+             errors.define(\"MyError\", \"Exception\", \"Something went wrong\")\n\
+             throw MyError(\"details\")\n\
+             catch MyError as e { print e.message }\n\n\
+             Typed catch:\n\
+             catch ValueError as e { ... } catch TypeError as e { ... }"
+                .into(),
+        ),
+        "json" => Some(
+            "json — JSON encode/decode\n\n\
+             json.parse(string)          decode JSON string to dict/list\n\
+             json.stringify(value)        encode value to JSON string\n\
+             json.pretty(value, indent?)  encode with indentation (default 2)\n\
+             json.is_valid(string)        check if string is valid JSON"
+                .into(),
+        ),
+        "fs" => Some(
+            "fs — Filesystem operations\n\n\
+             fs.read(path)               read file to string\n\
+             fs.write(path, data)        write string to file\n\
+             fs.read_binary(path)        read file to binary string\n\
+             fs.write_binary(path, data) write binary string to file\n\
+             fs.exists(path)             check if path exists\n\
+             fs.is_file(path)            check if path is a file\n\
+             fs.is_dir(path)             check if path is a directory\n\
+             fs.list_dir(path)           list directory contents\n\
+             fs.mkdir(path)              create directory\n\
+             fs.rmdir(path)              remove empty directory\n\
+             fs.rmtree(path)             remove directory tree\n\
+             fs.remove(path)             delete file\n\
+             fs.copy(src, dst)           copy file\n\
+             fs.move(src, dst)           move/rename file\n\
+             fs.size(path)               file size in bytes\n\
+             fs.mtime(path)              modification time\n\
+             fs.append(path, data)       append to file\n\
+             fs.glob(pattern)            glob pattern match\n\
+             fs.join(parts...)           join path components\n\
+             fs.basename(path)           filename from path\n\
+             fs.dirname(path)            directory from path\n\
+             fs.extension(path)          file extension\n\
+             fs.cwd()                    current working directory\n\
+             fs.home()                   user home directory"
+                .into(),
+        ),
+        "re" => Some(
+            "re — Regular expressions\n\n\
+             re.match(pattern, string)     match at start (returns list or null)\n\
+             re.find(pattern, string)      find first match\n\
+             re.findall(pattern, string)   find all matches (list of strings)\n\
+             re.replace(pattern, str, rep) replace matches\n\
+             re.split(pattern, string)     split by pattern\n\
+             re.search(pattern, string)    search anywhere in string"
+                .into(),
+        ),
+        "random" => Some(
+            "random — Random number generation\n\n\
+             random.int(min, max)       random integer in [min, max]\n\
+             random.float(min?, max?)   random float (default 0.0-1.0)\n\
+             random.choice(list)        random element from list\n\
+             random.shuffle(list)       shuffle list in place\n\
+             random.seed(n?)            set random seed\n\
+             random.gauss(mu, sigma)    Gaussian distribution"
+                .into(),
+        ),
+        "math" => Some(
+            "math — Math functions and constants\n\n\
+             Constants: pi, e, tau, inf, nan\n\n\
+             Trigonometry: sin, cos, tan, asin, acos, atan, atan2\n\
+             Hyperbolic: sinh, cosh, tanh\n\
+             Rounding: floor, ceil, trunc, round\n\
+             Roots/powers: sqrt, cbrt, pow\n\
+             Logarithmic: log, log2, log10, log1p\n\
+             Other: fabs, fmod, gcd, lcm, factorial, comb, perm\n\
+             Comparison: isclose(a, b, rel_tol?, abs_tol?)"
+                .into(),
+        ),
+        "time" => Some(
+            "time — Time functions\n\n\
+             time.now()              current timestamp (seconds since epoch)\n\
+             time.unix()             same as now()\n\
+             time.utc()              current UTC time string\n\
+             time.date()             current date string\n\
+             time.format(ts, fmt?)   format timestamp (default ISO)\n\
+             time.parse(str, fmt?)   parse time string\n\
+             time.sleep(sec)         sleep seconds\n\
+             time.wait(ms)           sleep milliseconds\n\
+             time.year()             current year\n\
+             time.month()            current month\n\
+             time.day()              current day\n\
+             time.hour()             current hour\n\
+             time.minute()           current minute\n\
+             time.second()           current second\n\
+             time.weekday()          day of week (0=Mon)\n\
+             time.from_unix(n)       timestamp to dict\n\
+             time.add_days(ts, n)    add days to timestamp"
+                .into(),
+        ),
+        "os" => Some(
+            "os — OS interaction\n\n\
+             os.platform()            OS name (linux, macos, windows)\n\
+             os.env(key?)             environment variable or all env vars\n\
+             os.setenv(key, val)      set environment variable\n\
+             os.execute(cmd)          run shell command, return {ok, code, stdout, stderr}\n\
+             os.args()                command line arguments\n\
+             os.cwd()                 current working directory\n\
+             os.chdir(path)           change directory\n\
+             os.kill(pid, signal?)    send signal to process\n\
+             os.pids()                list process IDs\n\
+             os.hostname()            machine hostname\n\
+             os.arch()                CPU architecture"
+                .into(),
+        ),
+        "base64" => Some(
+            "base64 — Base64 encoding\n\n\
+             base64.encode(data)    encode to base64 string\n\
+             base64.decode(data)    decode base64 string"
+                .into(),
+        ),
+        "crypto" => Some(
+            "crypto — Cryptographic hashing\n\n\
+             crypto.sha256(data)    SHA-256 hex digest\n\
+             crypto.sha1(data)      SHA-1 hex digest\n\
+             crypto.md5(data)       MD5 hex digest\n\
+             crypto.sha512(data)    SHA-512 hex digest\n\
+             crypto.sha224(data)    SHA-224 hex digest\n\
+             crypto.sha384(data)    SHA-384 hex digest\n\
+             crypto.sha3_256(data)  SHA3-256 hex digest\n\
+             crypto.sha3_512(data)  SHA3-512 hex digest\n\
+             crypto.blake2b(data)   BLAKE2b hex digest\n\
+             crypto.blake2s(data)   BLAKE2s hex digest"
+                .into(),
+        ),
+        "hashlib" => Some(
+            "hashlib — Cryptographic hashing (Python-compatible)\n\n\
+             hashlib.sha256(data)      SHA-256 hex digest\n\
+             hashlib.md5(data)         MD5 hex digest\n\
+             hashlib.sha1(data)        SHA-1 hex digest\n\
+             hashlib.sha512(data)      SHA-512 hex digest\n\
+             hashlib.sha224(data)      SHA-224 hex digest\n\
+             hashlib.sha384(data)      SHA-384 hex digest\n\
+             hashlib.sha3_256(data)    SHA3-256 hex digest\n\
+             hashlib.sha3_512(data)    SHA3-512 hex digest\n\
+             hashlib.blake2b(data)     BLAKE2b hex digest\n\
+             hashlib.blake2s(data)     BLAKE2s hex digest\n\
+             hashlib.create(algo, data) returns {hexdigest, name}\n\
+             hashlib.pbkdf2_hmac(...)  key derivation\n\
+             hashlib.algorithms_available  list of algorithm names"
+                .into(),
+        ),
+        "uuid" => Some(
+            "uuid — UUID generation\n\n\
+             uuid.v1()     time-based UUID\n\
+             uuid.v3(name) name-based UUID (MD5)\n\
+             uuid.v4()     random UUID\n\
+             uuid.v5(name) name-based UUID (SHA-1)\n\
+             uuid.str(uuid) format UUID to string"
+                .into(),
+        ),
+        "color" => Some(
+            "color — ANSI color helpers\n\n\
+             color.rgb(r, g, b, text)       24-bit RGB color\n\
+             color.hex(hex, text)            hex color\n\
+             color.c256(n, text)             256-color palette\n\
+             color.red(text) / green / blue / yellow / cyan / magenta / white / gray\n\
+             color.bold(text) / dim / italic / underline / blink / reverse\n\
+             color.reset()                   reset all styling\n\
+             color.strip(text)               strip ANSI escape codes"
+                .into(),
+        ),
+        "csv" => Some(
+            "csv — CSV parsing and writing\n\n\
+             csv.parse(text)              parse CSV to list of dicts\n\
+             csv.parse_rows(text)         parse CSV to list of lists\n\
+             csv.stringify(headers, rows)  encode to CSV string\n\
+             csv.read(path)               read CSV file\n\
+             csv.write(path, headers, rows) write CSV file"
+                .into(),
+        ),
+        "http" => Some(
+            "http — HTTP client\n\n\
+             http.get(url, headers?)       GET request\n\
+             http.post(url, body, h?)      POST request\n\
+             http.put(url, body, h?)       PUT request\n\
+             http.del(url, h?)             DELETE request\n\
+             http.head(url, h?)            HEAD request\n\
+             http.patch(url, body, h?)     PATCH request\n\n\
+             Response: {status, ok, body, text, json, headers}\n\
+             Body types: response.json(), response.text()"
+                .into(),
+        ),
+        "decimal" => Some(
+            "decimal — Arbitrary-precision decimal arithmetic\n\n\
+             decimal.make(value)     create Decimal from string/number\n\
+             decimal.add(a, b)       addition\n\
+             decimal.sub(a, b)       subtraction\n\
+             decimal.mul(a, b)       multiplication\n\
+             decimal.div(a, b)       division\n\
+             decimal.cmp(a, b)       compare (-1, 0, 1)\n\
+             decimal.to_str(d)       to string with precision"
+                .into(),
+        ),
+        "threading" => Some(
+            "threading — Background function execution\n\n\
+             threading.run(func, args?)  run function in background thread\n\
+             threading.sleep(sec)        sleep current thread\n\
+             threading.yield_now()       yield to scheduler"
+                .into(),
+        ),
+        "statistics" => Some(
+            "statistics — Statistical functions\n\n\
+             statistics.mean(list)        arithmetic mean\n\
+             statistics.median(list)      median value\n\
+             statistics.mode(list)        most common value\n\
+             statistics.stdev(list)       sample standard deviation\n\
+             statistics.variance(list)    sample variance\n\
+             statistics.pstdev(list)      population standard deviation\n\
+             statistics.pvariance(list)   population variance\n\
+             statistics.quantiles(list)   quartile boundaries\n\
+             statistics.correlation(x, y) Pearson correlation\n"
+                .into(),
+        ),
+        "socket" => Some(
+            "socket — Low-level TCP networking\n\n\
+             socket.open(host, port)    connect to host:port, returns session\n\
+             socket.send(session, data) send data (string or bytes)\n\
+             socket.recv(session, n?)   receive up to n bytes (default 4096)\n\
+             socket.close(session)      close connection"
+                .into(),
+        ),
+        "browser" => Some(
+            "browser — Browser automation (Chrome DevTools Protocol)\n\n\
+             browser.go(url)              navigate to URL\n\
+             browser.click(selector)      click element\n\
+             browser.fill(sel, val)       fill input field\n\
+             browser.text(sel?)           get text content\n\
+             browser.attr(sel, name)      get element attribute\n\
+             browser.wait_for(sel, ms?)   wait for element\n\
+             browser.shot(path?)          screenshot\n\
+             browser.title()              page title\n\
+             browser.url()                current URL\n\
+             browser.page()               page HTML\n\
+             browser.eval(js)             evaluate JavaScript"
+                .into(),
+        ),
+        "string" => Some(
+            "string — String helpers and constants\n\n\
+             Case:      upper(s), lower(s), title(s), capitalize(s), swapcase(s)\n\
+             Trim:      strip(s), lstrip(s), rstrip(s)\n\
+             Split:     split(s, sep?), splitlines(s)\n\
+             Join:      join(sep, list)\n\
+             Replace:   replace(s, old, new)\n\
+             Search:    count(s, sub), find(s, sub), rfind(s, sub)\n\
+             Test:      startswith(s, prefix), endswith(s, suffix), contains(s, sub)\n\
+             Pad:       ljust(s, w, fill?), rjust(s, w, fill?), center(s, w, fill?), zfill(s, w)\n\
+             Repeat:    repeat(s, n)\n\
+             Check:     isdigit(s), isalpha(s), isalnum(s), isspace(s), islower(s), isupper(s)\n\n\
+             Constants: digits, hexdigits, octdigits, ascii_letters, ascii_lowercase,\n\
+                        ascii_uppercase, punctuation, whitespace, printable"
+                .into(),
+        ),
+        "subprocess" => Some(
+            "subprocess — Run external commands\n\n\
+             subprocess.run(cmd, cwd?)         run command, returns {ok, code, stdout, stderr}\n\
+             subprocess.call(cmd)              run and return exit code\n\
+             subprocess.check_output(cmd)      run and return stdout (throws on error)\n\n\
+             cmd can be a string (shell) or list of strings (no shell).\n\
+             Example: subprocess.run([\"ls\", \"-la\"], null)\n\
+             Example: subprocess.run(\"echo hello\", null)"
+                .into(),
+        ),
+        "struct" => Some(
+            "struct — Binary data packing/unpacking\n\n\
+             struct.pack(fmt, values...)   pack values to binary string\n\
+             struct.unpack(fmt, data)      unpack binary string to list\n\
+             struct.calcsize(fmt)          size in bytes for format\n\n\
+             Format characters:\n\
+               b/B  signed/unsigned 8-bit integer (i8/u8)\n\
+               h/H  signed/unsigned 16-bit integer (i16/u16)\n\
+               i/I  signed/unsigned 32-bit integer (i32/u32)\n\
+               q/Q  signed/unsigned 64-bit integer (i64/u64)\n\
+               f    32-bit float\n\
+               d    64-bit float\n\
+               s    string (with size, e.g. 4s for 4-byte string)\n\
+               x    pad byte (no output)\n\
+               ?    boolean\n\n\
+             Byte order prefix:\n\
+               >    big-endian (network byte order)\n\
+               <    little-endian\n\
+               =    native byte order\n\n\
+             Example: struct.pack(\">HHL\", 1, 2, 3)\n\
+             Example: struct.unpack(\">HHL\", packed_data)"
+                .into(),
+        ),
+        "shutil" => Some(
+            "shutil — High-level file operations\n\n\
+             shutil.copy(src, dst)           copy file\n\
+             shutil.copy2(src, dst)          copy file with metadata\n\
+             shutil.move(src, dst)           move/rename file\n\
+             shutil.rmtree(path)             recursively remove directory tree\n\
+             shutil.copytree(src, dst)       recursively copy directory\n\
+             shutil.which(name)              find executable in PATH\n\
+             shutil.disk_usage(path)         returns {total, used, free}"
+                .into(),
+        ),
+        "pathlib" => Some(
+            "pathlib — Path manipulation\n\n\
+             Join:     join(parts...)\n\
+             Parts:    name(path), parent(path), stem(path), suffix(path), suffixes(path)\n\
+             Test:     is_absolute(path), exists(path), is_file(path), is_dir(path)\n\
+             Resolve:  resolve(path), absolute(path)\n\
+             Find:     glob(path, pattern)\n\
+             Create:   touch(path), mkdir(path, parents?)\n\
+             Delete:   rmdir(path), unlink(path)\n\
+             Modify:   rename(src, dst)\n\
+             Read:     read_text(path)\n\
+             Write:    write_text(path, data)\n\n\
+             Example: pathlib.name(\"/home/user/file.txt\")  =>  \"file.txt\"\n\
+             Example: pathlib.join(\"/home\", \"user\", \"file.txt\")"
+                .into(),
+        ),
+        "glob" => Some(
+            "glob — File pattern matching\n\n\
+             glob.glob(pattern)   match files, returns list of paths\n\n\
+             Pattern syntax:\n\
+               *      matches any characters except /\n\
+               **     matches any characters including /\n\
+               ?      matches single character\n\
+               [abc]  matches one of a, b, or c\n\
+               [a-z]  matches range\n\n\
+             Example: glob.glob(\"*.z\")\n\
+             Example: glob.glob(\"**/*.rs\")"
+                .into(),
+        ),
+        "urllib" => Some(
+            "urllib — URL handling\n\n\
+             urllib.urlopen(url)              HTTP GET, returns response\n\
+             urllib.parse(url)                parse URL => {scheme, host, port, path, query}\n\
+             urllib.parse_qs(query)           parse query string => {key: [val, ...]}\n\
+             urllib.quote(s)                  percent-encode string\n\
+             urllib.unquote(s)                percent-decode string\n\
+             urllib.urlencode(dict)           encode dict to query string\n\n\
+             Example: urllib.parse(\"https://example.com:8080/path?q=1\")\n\
+             Example: urllib.urlencode({\"name\": \"zen\", \"ver\": \"1\"})"
+                .into(),
+        ),
+        "collections" => Some(
+            "collections — Data structures\n\n\
+             collections.Counter(list)        count occurrences of each element\n\
+             collections.chain(a, b, ...)     concatenate lists\n\
+             collections.flatten(nested)      recursively flatten nested lists\n\n\
+             Example: collections.Counter([\"a\", \"a\", \"b\"])  =>  {a: 2, b: 1}\n\
+             Example: collections.chain([1, 2], [3, 4])  =>  [1, 2, 3, 4]\n\
+             Example: collections.flatten([[1, 2], [3, [4, 5]]])  =>  [1, 2, 3, 4, 5]"
+                .into(),
+        ),
+        "itertools" => Some(
+            "itertools — Iterator combinators\n\n\
+             itertools.range(start, end?, step?)    numeric range list\n\
+             itertools.enumerate(list)               [[0, a], [1, b], ...]\n\
+             itertools.zip(a, b, ...)                paired elements\n\
+             itertools.chain(a, b, ...)              concatenate lists\n\
+             itertools.product(a, b, ...)            cartesian product\n\
+             itertools.combinations(list, r)         r-element combinations\n\
+             itertools.permutations(list, r?)        r-element permutations\n\
+             itertools.accumulate(list)              running sum\n\
+             itertools.take(n, list)                 first n elements\n\
+             itertools.drop(n, list)                 skip first n elements\n\
+             itertools.repeat(val, n)                repeat value n times\n\n\
+             Example: itertools.range(5)  =>  [0, 1, 2, 3, 4]\n\
+             Example: itertools.product([1,2], [\"a\",\"b\"])  =>  [[1,a],[1,b],[2,a],[2,b]]"
+                .into(),
+        ),
+        "tempfile" => Some(
+            "tempfile — Temporary files and directories\n\n\
+             tempfile.dir()                    system temp directory\n\
+             tempfile.mkdtemp(prefix?)        create temp dir, returns path\n\
+             tempfile.mkstemp(prefix?)        create temp file, returns path"
+                .into(),
+        ),
+        "binascii" => Some(
+            "binascii — Binary/ASCII encoding\n\n\
+             binascii.hexlify(data)           bytes to hex string\n\
+             binascii.unhexlify(hex)          hex string to bytes\n\
+             binascii.b2a_base64(data)        bytes to base64 string\n\
+             binascii.a2b_base64(data)        base64 string to bytes\n\n\
+             Example: binascii.hexlify(\"hello\")  =>  \"68656c6c6f\"\n\
+             Example: binascii.unhexlify(\"68656c6c6f\")  =>  \"hello\""
+                .into(),
+        ),
+        "ftp" => Some(
+            "ftp — Pure-Rust FTP client\n\n\
+             ftp.connect(host, port?)          connect to FTP server (default port 21)\n\
+             ftp.login(session, user, pass)    authenticate\n\
+             ftp.pwd(session)                  current directory\n\
+             ftp.list(session, path?)          LIST command (full details)\n\
+             ftp.nlist(session, path?)         names only\n\
+             ftp.cwd(session, dir)             change directory\n\
+             ftp.retr(session, file)           download file content\n\
+             ftp.stor(session, file, data)     upload content to file\n\
+             ftp.dele(session, file)           delete file\n\
+             ftp.mkdir(session, dir)           create directory\n\
+             ftp.rmdir(session, dir)           remove directory\n\
+             ftp.rename(session, old, new)     rename file\n\
+             ftp.quit(session)                 disconnect\n\n\
+             Example:\n\
+             let s = ftp.connect(\"ftp.example.com\", 21)\n\
+             ftp.login(s, \"user\", \"pass\")\n\
+             print ftp.nlist(s)\n\
+             ftp.quit(s)"
+                .into(),
+        ),
+        "smtp" => Some(
+            "smtp — Pure-Rust SMTP client\n\n\
+             smtp.connect(host, port?)          connect (default port 25)\n\
+             smtp.login(session, user, pass)    authenticate (STARTTLS)\n\
+             smtp.sendmail(session, from, to, msg)  send email\n\
+             smtp.message(from, to, sub, body)  build MIME message string\n\
+             smtp.quit(session)                 disconnect\n\n\
+             Example:\n\
+             let s = smtp.connect(\"smtp.gmail.com\", 587)\n\
+             smtp.login(s, \"me@gmail.com\", \"app-password\")\n\
+             let msg = smtp.message(\"me@gmail.com\", \"you@gmail.com\", \"Hi\", \"Hello!\")\n\
+             smtp.sendmail(s, \"me@gmail.com\", \"you@gmail.com\", msg)"
+                .into(),
+        ),
+        "pop3" => Some(
+            "pop3 — Pure-Rust POP3 client\n\n\
+             pop3.connect(host, user, pass, port?)  connect + login (default port 110)\n\
+             pop3.stat(session)                {count, size}\n\
+             pop3.list(session)                message sizes list\n\
+             pop3.retr(session, id)            retrieve message by ID\n\
+             pop3.dele(session, id)            mark message for deletion\n\
+             pop3.quit(session)                disconnect"
+                .into(),
+        ),
+        "imap" => Some(
+            "imap — Pure-Rust IMAP client\n\n\
+             imap.connect(host, user, pass, port?)  connect + login (default port 143)\n\
+             imap.select(session, mailbox)     select mailbox (e.g. \"INBOX\")\n\
+             imap.search(session, criteria)    search (e.g. \"ALL\", \"UNSEEN\")\n\
+             imap.fetch(session, id)           fetch message => {flags, body}\n\
+             imap.list(session)                list available mailboxes\n\
+             imap.logout(session)              disconnect"
+                .into(),
+        ),
+        "telnet" => Some(
+            "telnet — Pure-Rust telnet client\n\n\
+             telnet.connect(host, port?)       connect (default port 23)\n\
+             telnet.write(session, data)       send data\n\
+             telnet.read(session, size?)       read bytes (default 4096)\n\
+             telnet.read_until(session, marker) read until marker found\n\
+             telnet.close(session)             disconnect"
+                .into(),
+        ),
+        "dns" => Some(
+            "dns — DNS resolver (pure-Rust, no system resolver dependency)\n\n\
+             dns.resolve(name)                 resolve to IP address list\n\
+             dns.query(name, type?)            query records\n\n\
+             Record types: A, AAAA, MX, TXT, NS, CNAME, SOA, SRV, PTR\n\n\
+             Example: dns.resolve(\"example.com\")  =>  [\"93.184.216.34\"]\n\
+             Example: dns.query(\"gmail.com\", \"MX\")"
+                .into(),
+        ),
+        "ssh" => Some(
+            "ssh — System SSH/SCP wrapper (requires ssh binary in PATH)\n\n\
+             ssh.available()                   true if ssh is installed\n\
+             ssh.run(opts, command)            run remote command\n\
+             ssh.upload(opts, local, remote)   upload file via scp\n\
+             ssh.download(opts, remote, local) download file via scp\n\n\
+             opts: {host, user?, port?, key?, strict_host_key?: false}\n\n\
+             Example:\n\
+             let opts = {\"host\": \"192.168.1.1\", \"user\": \"root\"}\n\
+             print ssh.run(opts, \"uname -a\")"
+                .into(),
+        ),
+        "scapy" => Some(
+            "scapy — Packet crafting and sniffing (requires root/CAP_NET_RAW)\n\n\
+             Build:\n\
+               scapy.ip(src, dst, proto?, ttl?, payload?)  build IP layer\n\
+               scapy.tcp(sport, dport, flags?, payload?)   build TCP layer\n\
+               scapy.udp(sport, dport, payload?)            build UDP layer\n\
+               scapy.icmp(type?, code?, payload?)           build ICMP layer\n\
+               scapy.raw(data)                              raw data layer\n\n\
+             Serialize/parse:\n\
+               scapy.build(layer)       serialize to bytes\n\
+               scapy.parse(bytes)       parse bytes to layers\n\n\
+             Send/receive:\n\
+               scapy.send(layer)        send raw packet\n\
+               scapy.sniff(count?, timeout?)  capture packets\n\n\
+             Utilities:\n\
+               scapy.checksum(data)     internet checksum\n\
+               scapy.ip_to_int(ip)      IP string to integer\n\
+               scapy.int_to_ip(int)     integer to IP string\n\n\
+             Example:\n\
+             let pkt = scapy.ip(\"10.0.0.1\", \"10.0.0.2\", \"TCP\", scapy.tcp(12345, 80, 0x02))\n\
+             scapy.send(pkt)"
+                .into(),
+        ),
+        _ => None,
+    }
+}
+
+/// Return list of all data types.
+pub fn help_types() -> &'static str {
+    "Zen Data Types\n\n\
+     Scalar types:\n\
+       null        absence of value\n\
+       true/false  boolean values\n\
+       42          integer (i64)\n\
+       3.14        float (f64)\n\
+       \"hello\"     string (UTF-8)\n\n\
+     Compound types:\n\
+       [1, 2, 3]        list (ordered, mutable)\n\
+       {a: 1, b: 2}     dict (key-value map, keys are strings)\n\
+       func(x) { x }    function\n\
+       class Foo {}      class (with optional inheritance)\n\
+       obj               instance of a class\n\n\
+     Special values:\n\
+       null              null (absence of value)\n\
+       true / false      booleans\n\
+       <native>          built-in function\n\n\
+     Type checking:\n\
+       typeof x          returns type name string\n\
+       type(x)           same as typeof\n\n\
+     Type conversion:\n\
+       str(x)            to string\n\
+       int(x)            to integer (truncates float)\n\
+       float(x)          to float\n\
+       bool(x)           to boolean (null/false= false, 0= false, \"\"= false)\n\
+       list(x)           to list\n\
+       dict(pairs)       to dict from list of [key, value] pairs"
+}
+
+/// Return list of all built-in functions.
+pub fn help_builtins() -> &'static str {
+    "Zen Built-in Functions\n\n\
+     I/O:\n\
+       print(values...)      print to stdout (space-separated, newline appended)\n\
+       input(prompt?)        read line from stdin, returns string\n\
+       exit(code?)           terminate program\n\n\
+     Type conversion:\n\
+       str(x)                to string\n\
+       int(x)                to integer\n\
+       float(x)              to float\n\
+       bool(x)               to boolean\n\
+       list(x)               to list\n\
+       typeof x              type name string\n\n\
+     Numeric:\n\
+       abs(x)                absolute value\n\
+       min(a, b, ...)        minimum value\n\
+       max(a, b, ...)        maximum value\n\
+       round(x)              round to nearest integer\n\
+       trunc(x)              truncate to integer\n\
+       hex(x)                hex string (e.g. \"0xff\")\n\
+       range(end)            [0..end] inclusive list\n\
+       range(start, end)     [start..end] inclusive list\n\n\
+     String:\n\
+       len(x)                length of string/list/dict\n\
+       str.repeat(s, n)      (use string.repeat)\n\n\
+     Time:\n\
+       sleep(sec)            pause execution seconds\n\
+       wait(ms)              pause execution milliseconds\n\n\
+     Data:\n\
+       json.parse(s)         parse JSON\n\
+       json.stringify(v)      encode JSON\n\
+       base64.encode(s)      base64 encode\n\
+       base64.decode(s)      base64 decode\n\n\
+     Errors:\n\
+       errors.define(name, base?, msg?)  define custom error class\n\
+       throw value                       throw an error\n\n\
+     See :help modules for the full list of available modules."
+}
+
+/// Return list of all operators.
+pub fn help_operators() -> &'static str {
+    "Zen Operators\n\n\
+     Arithmetic:\n\
+       +   addition / string concatenation\n\
+       -   subtraction / negation\n\
+       *   multiplication / string repetition (str * int)\n\
+       /   division\n\
+       %   modulo\n\
+       **  exponentiation\n\n\
+     Comparison:\n\
+       ==  equal\n\
+       !=  not equal\n\
+       <   less than\n\
+       >   greater than\n\
+       <=  less or equal\n\
+       >=  greater or equal\n\n\
+     Logical:\n\
+       and  logical AND\n\
+       or   logical OR\n\
+       not  logical NOT\n\n\
+     Bitwise:\n\
+       &   bitwise AND\n\
+       |   bitwise OR\n\
+       ^   bitwise XOR\n\
+       ~   bitwise NOT\n\
+       <<  left shift\n\
+       >>  right shift\n\n\
+     Membership:\n\
+       in       element in list/string/dict\n\
+       not in   element not in collection\n\n\
+     Other:\n\
+       =       assignment\n\
+       += -= *= /= %=  compound assignment\n\
+       .       member access\n\
+       []      index / slice\n\
+       ()      function call\n\
+       =>      arrow (lambda, match arm)\n\
+       ..      range (inclusive)\n\
+       ??      null-coalescing\n\
+       ?.      optional chaining"
+}
+
+/// Return list of all keywords.
+pub fn help_keywords() -> &'static str {
+    "Zen Keywords\n\n\
+     Variables:\n\
+       let         mutable variable\n\
+       const       immutable constant\n\
+       global      global variable declaration\n\n\
+     Functions:\n\
+       func/fn/def  define function\n\
+       return        return from function\n\n\
+     Classes:\n\
+       class       define class\n\
+       new         create instance (reserved)\n\
+       inherit     inherit from parent class\n\
+       this        reference to current instance\n\n\
+     Control flow:\n\
+       if/elif/else  conditional branching\n\
+       while         while loop\n\
+       for/in        for-each loop\n\
+       break         exit loop\n\
+       continue      skip to next iteration\n\n\
+     Error handling:\n\
+       throw         raise an error\n\
+       try           try block\n\
+       catch         catch block (typed catch supported)\n\
+       finally       always-execute block\n\
+       raise         alias for throw\n\
+       except        alias for catch\n\n\
+     Modules:\n\
+       import        import a module\n\
+       from          selective import (from mod import name)\n\n\
+     Other:\n\
+       null          null value\n\
+       true/false    booleans\n\
+       lambda        anonymous function\n\
+       match         pattern matching\n\
+       when          expression-based branching\n\
+       as            type alias / import alias\n\
+       is            type checking\n\
+       typeof        type of expression\n\
+       exit          terminate program\n\
+       assert        assertion"
+}
+
+/// Return help for a specific module (alias: `help_module` for external use).
+pub fn help_module(name: &str) -> String {
+    module_help(name).unwrap_or_else(|| {
+        let modules = [
+            "errors", "json", "fs", "re", "random", "math", "time", "os",
+            "base64", "crypto", "hashlib", "uuid", "color", "csv", "http",
+            "decimal", "threading", "statistics", "socket", "browser",
+            "string", "subprocess", "struct", "shutil", "pathlib", "glob",
+            "urllib", "collections", "itertools", "tempfile", "binascii",
+            "ftp", "smtp", "pop3", "imap", "telnet", "dns", "ssh", "scapy",
+        ];
+        let close = modules.iter()
+            .filter(|m| levenshtein(name, m) <= 2)
+            .cloned()
+            .collect::<Vec<_>>();
+        if close.is_empty() {
+            format!("Unknown module: {name}\n\nRun :help modules to see all available modules.")
+        } else {
+            format!("Unknown module: {name}\n\nDid you mean: {}?", close.join(", "))
+        }
+    })
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a_len = a.len();
+    let b_len = b.len();
+    let mut matrix = vec![vec![0usize; b_len + 1]; a_len + 1];
+    for i in 0..=a_len { matrix[i][0] = i; }
+    for j in 0..=b_len { matrix[0][j] = j; }
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    for i in 1..=a_len {
+        for j in 1..=b_len {
+            let cost = if a_bytes[i - 1] == b_bytes[j - 1] { 0 } else { 1 };
+            matrix[i][j] = (matrix[i - 1][j] + 1)
+                .min(matrix[i][j - 1] + 1)
+                .min(matrix[i - 1][j - 1] + cost);
+        }
+    }
+    matrix[a_len][b_len]
+}
+
 /// Parse and validate a program without executing it.
 pub fn check(source: &str) -> Result<(), String> {
     let tokens = lex(source)?;

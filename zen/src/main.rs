@@ -113,7 +113,9 @@ fn main() {
 }
 
 fn repl() {
-    use std::io::{stdin, stdout, Write};
+    use rustyline::error::ReadlineError;
+    use rustyline::{Config, DefaultEditor};
+
     let mut session = match runtime::Repl::new() {
         Ok(s) => s,
         Err(e) => {
@@ -121,37 +123,117 @@ fn repl() {
             process::exit(1);
         }
     };
+
+    // ── History file ────────────────────────────────────────────────────
+    let hist_path = dirs()
+        .join(".zen_history");
+    let _ = std::fs::create_dir_all(hist_path.parent().unwrap_or(std::path::Path::new(".")));
+
+    let config = Config::builder()
+        .history_ignore_space(true)
+        .build();
+
+    let mut rl = match DefaultEditor::with_config(config) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("zen: failed to initialize readline: {e}");
+            process::exit(1);
+        }
+    };
+
+    // Load existing history
+    let _ = rl.load_history(&hist_path);
+
+    println!("Zen {} — interactive session", env!("CARGO_PKG_VERSION"));
+    println!("Type :help for help, :q to quit.\n");
+
     loop {
-        print!("zen> ");
-        let _ = stdout().flush();
-        let mut line = String::new();
-        match stdin().read_line(&mut line) {
-            Ok(0) => {
+        let prompt = match rl.readline("zen> ") {
+            Ok(line) => line,
+            Err(ReadlineError::Interrupted) => {
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
                 println!();
                 break;
             }
-            Ok(_) => {}
-            Err(_) => break,
-        }
-        let line = line.trim();
+            Err(e) => {
+                eprintln!("zen: readline error: {e}");
+                break;
+            }
+        };
+        let line = prompt.trim().to_string();
         if line.is_empty() {
             continue;
         }
-        match line {
+
+        // Add to history (only non-empty, non-command lines)
+        let _ = rl.add_history_entry(line.as_str());
+
+        // ── REPL commands ────────────────────────────────────────────
+        match line.as_str() {
             ":q" | ":quit" | ":exit" => break,
             ":h" | ":help" => {
-            println!("Zen native runtime help:\nCommands:\n  zen run <file>      execute a script\n  zen <file>          execute a script\n  zen -e <source>     evaluate source code\n  zen check <file>    parse and validate without running\n  zen lint <file>     report suspicious patterns\n  zen repl            start interactive session\n  zen pm              package manager operations\n  zen --version       print version info\n  zen -h / zen --help show this help message");
+                println!("{}", runtime::repl_help());
+                continue;
+            }
+            ":help modules" => {
+                print!("{}", runtime::list_modules());
+                continue;
+            }
+            ":help types" => {
+                println!("{}", runtime::help_types());
+                continue;
+            }
+            ":help functions" | ":help builtins" => {
+                println!("{}", runtime::help_builtins());
+                continue;
+            }
+            ":help operators" => {
+                println!("{}", runtime::help_operators());
+                continue;
+            }
+            ":help keywords" => {
+                println!("{}", runtime::help_keywords());
                 continue;
             }
             _ => {}
         }
+
+        // :help <module>
+        if let Some(modname) = line.strip_prefix(":help ") {
+            let modname = modname.trim();
+            if modname.is_empty() {
+                println!("{}", runtime::repl_help());
+            } else {
+                print!("{}", runtime::help_module(modname));
+            }
+            continue;
+        }
+
+        // :c <expr> — shorthand for print <expr>
         if let Some(code) = line.strip_prefix(":c ") {
             match session.eval_line(&format!("print {code}")) {
                 Ok(()) => {}
                 Err(e) => eprintln!("zen: {e}"),
             }
-        } else if let Err(e) = session.eval_line(line) {
+            continue;
+        }
+
+        // ── Evaluate Zen code ────────────────────────────────────────
+        if let Err(e) = session.eval_line(&line) {
             eprintln!("zen: {e}");
         }
+    }
+
+    // Save history on exit
+    let _ = rl.save_history(&hist_path);
+}
+
+fn dirs() -> std::path::PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        std::path::PathBuf::from(home).join(".zen")
+    } else {
+        std::path::PathBuf::from(".zen")
     }
 }
