@@ -483,3 +483,265 @@ The bundled `std/browser.z` is loaded automatically as a prelude, so legacy
 scripts that call `go`, `click`, `fill`, `text`, `attr`, `wait_for`, `shot`,
 `title`, `url`, `page`, and `browser` work unchanged. See
 [Browser automation](../modules/browser.md).
+
+## Standard Modules
+
+All modules below are available as globals (no import needed).
+
+### string
+
+| Function | Description |
+|----------|-------------|
+| `string.upper(s)` | uppercase |
+| `string.lower(s)` | lowercase |
+| `string.title(s)` | title case |
+| `string.capitalize(s)` | capitalize first char |
+| `string.swapcase(s)` | swap case |
+| `string.strip(s)` | trim whitespace |
+| `string.lstrip(s)` / `string.rstrip(s)` | left/right trim |
+| `string.split(s, sep)` | split by separator |
+| `string.splitlines(s)` | split by newlines |
+| `string.join(sep, list)` | join list with separator |
+| `string.replace(s, old, new)` | replace substring |
+| `string.count(s, sub)` | count occurrences |
+| `string.find(s, sub)` | index of first occurrence (-1 if not found) |
+| `string.rfind(s, sub)` | index of last occurrence |
+| `string.startswith(s, prefix)` | starts with prefix |
+| `string.endswith(s, suffix)` | ends with suffix |
+| `string.contains(s, sub)` | contains substring |
+| `string.ljust(s, width, fill)` | left justify |
+| `string.rjust(s, width, fill)` | right justify |
+| `string.center(s, width, fill)` | center |
+| `string.zfill(s, width)` | zero-pad |
+| `string.repeat(s, n)` | repeat string |
+| `string.isdigit(s)` | all chars are digits |
+| `string.isalpha(s)` | all chars are alphabetic |
+| `string.isalnum(s)` | all chars are alphanumeric |
+| `string.isspace(s)` | all chars are whitespace |
+| `string.islower(s)` | all chars are lowercase |
+| `string.isupper(s)` | all chars are uppercase |
+| `string.digits` | "0123456789" |
+| `string.ascii_letters` | "abc...XYZ" |
+| `string.ascii_lowercase` | "abc...xyz" |
+| `string.ascii_uppercase` | "ABC...XYZ" |
+| `string.punctuation` | !"#$%&'()*+,-./... |
+| `string.whitespace` | space, tab, newline... |
+| `string.printable` | all printable characters |
+
+### hashlib
+
+| Function | Description |
+|----------|-------------|
+| `hashlib.sha256(data)` | SHA-256 hex digest |
+| `hashlib.md5(data)` | MD5 hex digest |
+| `hashlib.sha1(data)` | SHA-1 hex digest |
+| `hashlib.create(algo, data)` | returns `{hexdigest, name}` |
+| `hashlib.algorithms_available` | list of supported algorithms |
+
+### struct
+
+| Function | Description |
+|----------|-------------|
+| `struct.pack(fmt, values...)` | pack values to binary string |
+| `struct.unpack(fmt, data)` | unpack binary string to list |
+| `struct.calcsize(fmt)` | size in bytes for format |
+
+Format chars: `b/B` (i8/u8), `h/H` (i16/u16), `i/I` (i32/u32), `q/Q` (i64/u64), `f` (f32), `d` (f64), `s` (string), `x` (pad byte), `?` (bool). Prefix: `>` (big-endian), `<` (little-endian).
+
+### subprocess
+
+| Function | Description |
+|----------|-------------|
+| `subprocess.run(cmd, cwd?)` | returns `{ok, code, stdout, stderr}` |
+| `subprocess.call(cmd)` | returns exit code |
+| `subprocess.check_output(cmd)` | returns stdout or throws on error |
+
+### collections
+
+| Function | Description |
+|----------|-------------|
+| `collections.Counter(list)` | counts of each element |
+| `collections.chain(a, b, ...)` | concatenate lists |
+| `collections.flatten(nested)` | recursive flatten |
+
+### itertools
+
+| Function | Description |
+|----------|-------------|
+| `itertools.range(start, end?, step?)` | numeric range |
+| `itertools.enumerate(list)` | `[[0, a], [1, b], ...]` |
+| `itertools.zip(a, b)` | paired elements |
+| `itertools.chain(a, b, ...)` | concatenate |
+| `itertools.product(a, b)` | cartesian product |
+| `itertools.combinations(list, r)` | r-element combinations |
+| `itertools.permutations(list, r?)` | r-element permutations |
+| `itertools.accumulate(list)` | running sum |
+| `itertools.take(n, list)` | first n elements |
+| `itertools.drop(n, list)` | skip first n elements |
+| `itertools.repeat(val, n)` | repeat value n times |
+
+### pathlib
+
+| Function | Description |
+|----------|-------------|
+| `pathlib.join(parts...)` | join path components |
+| `pathlib.name(path)` | filename |
+| `pathlib.parent(path)` | parent directory |
+| `pathlib.stem(path)` | filename without extension |
+| `pathlib.suffix(path)` | extension (with dot) |
+| `pathlib.suffixes(path)` | list of extensions |
+| `pathlib.is_absolute(path)` | is absolute |
+| `pathlib.resolve(path)` | canonicalize |
+| `pathlib.absolute(path)` | make absolute |
+| `pathlib.exists(path)` | file/dir exists |
+| `pathlib.is_file(path)` | is a regular file |
+| `pathlib.is_dir(path)` | is a directory |
+| `pathlib.glob(pattern)` | glob match |
+| `pathlib.touch(path)` | create/touch file |
+| `pathlib.mkdir(path, parents?)` | create directory |
+| `pathlib.rmdir(path)` | remove directory |
+| `pathlib.unlink(path)` | delete file |
+| `pathlib.rename(src, dst)` | rename |
+| `pathlib.read_text(path)` | read file to string |
+| `pathlib.write_text(path, data)` | write string to file |
+
+### shutil
+
+| Function | Description |
+|----------|-------------|
+| `shutil.copy(src, dst)` | copy file |
+| `shutil.copy2(src, dst)` | copy with metadata |
+| `shutil.move(src, dst)` | move/rename |
+| `shutil.rmtree(path)` | recursive delete |
+| `shutil.copytree(src, dst)` | recursive copy |
+| `shutil.which(name)` | find executable in PATH |
+| `shutil.disk_usage(path)` | returns `{total, used, free}` |
+
+### urllib
+
+| Function | Description |
+|----------|-------------|
+| `urllib.urlopen(url)` | HTTP GET (returns response dict) |
+| `urllib.parse(url)` | parse URL into `{scheme, host, port, path, query}` |
+| `urllib.parse_qs(query)` | parse query string to dict |
+| `urllib.quote(s)` | percent-encode |
+| `urllib.unquote(s)` | percent-decode |
+| `urllib.urlencode(dict)` | encode dict to query string |
+
+### tempfile
+
+| Function | Description |
+|----------|-------------|
+| `tempdir()` | system temp directory |
+| `tempfile.mkdtemp(prefix?)` | create temp dir |
+| `tempfile.mkstemp(prefix?)` | create temp file |
+
+### binascii
+
+| Function | Description |
+|----------|-------------|
+| `binascii.hexlify(data)` | bytes to hex string |
+| `binascii.unhexlify(hex)` | hex string to bytes |
+| `binascii.b2a_base64(data)` | bytes to base64 |
+| `binascii.a2b_base64(data)` | base64 to bytes |
+
+### glob
+
+| Function | Description |
+|----------|-------------|
+| `glob.glob(pattern)` | match files by pattern |
+
+## Protocol Modules
+
+### ftp
+
+| Function | Description |
+|----------|-------------|
+| `ftp.connect(host, port?)` | connect to FTP server |
+| `ftp.login(session, user, pass)` | authenticate |
+| `ftp.pwd(session)` | current directory |
+| `ftp.list(session, path?)` | LIST output |
+| `ftp.nlist(session, path?)` | names only |
+| `ftp.cwd(session, dir)` | change directory |
+| `ftp.retr(session, file)` | download file |
+| `ftp.stor(session, file, data)` | upload file |
+| `ftp.dele(session, file)` | delete file |
+| `ftp.mkdir(session, dir)` | create directory |
+| `ftp.rmdir(session, dir)` | remove directory |
+| `ftp.rename(session, from, to)` | rename |
+| `ftp.quit(session)` | disconnect |
+
+### smtp
+
+| Function | Description |
+|----------|-------------|
+| `smtp.connect(host, port?)` | connect |
+| `smtp.login(session, user, pass)` | authenticate |
+| `smtp.sendmail(session, from, to, msg)` | send email |
+| `smtp.message(from, to, subject, body)` | build MIME message |
+| `smtp.quit(session)` | disconnect |
+
+### pop3
+
+| Function | Description |
+|----------|-------------|
+| `pop3.connect(host, user, pass, port?)` | connect + login |
+| `pop3.stat(session)` | `{count, size}` |
+| `pop3.list(session)` | message list |
+| `pop3.retr(session, id)` | retrieve message |
+| `pop3.dele(session, id)` | delete message |
+| `pop3.quit(session)` | disconnect |
+
+### imap
+
+| Function | Description |
+|----------|-------------|
+| `imap.connect(host, user, pass, port?)` | connect + login |
+| `imap.select(session, mailbox)` | select mailbox |
+| `imap.search(session, criteria)` | search (e.g. "ALL") |
+| `imap.fetch(session, id)` | `{flags, body}` |
+| `imap.list(session)` | list mailboxes |
+| `imap.logout(session)` | disconnect |
+
+### telnet
+
+| Function | Description |
+|----------|-------------|
+| `telnet.connect(host, port?)` | connect |
+| `telnet.write(session, data)` | send data |
+| `telnet.read(session, size?)` | read bytes |
+| `telnet.read_until(session, marker)` | read until marker |
+| `telnet.close(session)` | disconnect |
+
+### dns
+
+| Function | Description |
+|----------|-------------|
+| `dns.resolve(name)` | resolve to IP list |
+| `dns.query(name, type?)` | query records (A, AAAA, MX, TXT, NS, CNAME) |
+
+### ssh
+
+| Function | Description |
+|----------|-------------|
+| `ssh.available()` | true if ssh binary exists |
+| `ssh.run(opts, command)` | run remote command (opts: `{host, user?, port?, key?}`) |
+| `ssh.upload(opts, local, remote)` | upload via scp |
+| `ssh.download(opts, remote, local)` | download via scp |
+
+### scapy
+
+| Function | Description |
+|----------|-------------|
+| `scapy.ip(src, dst, proto?, ttl?, payload?)` | build IP layer |
+| `scapy.tcp(sport, dport, payload?)` | build TCP layer |
+| `scapy.udp(sport, dport, payload?)` | build UDP layer |
+| `scapy.icmp(type?, code?, payload?)` | build ICMP layer |
+| `scapy.raw(data)` | build raw data layer |
+| `scapy.build(layer)` | serialize to bytes |
+| `scapy.parse(bytes)` | parse bytes to layers |
+| `scapy.send(layer)` | send raw packet (requires root) |
+| `scapy.sniff(count?, timeout?)` | sniff packets (requires root) |
+| `scapy.checksum(data)` | internet checksum |
+| `scapy.ip_to_int(ip)` | convert IP string to integer |
+| `scapy.int_to_ip(int)` | convert integer to IP string |

@@ -3016,6 +3016,7 @@ dependencies = [
  "chrono",
  "flate2",
  "hmac",
+ "libc",
  "md-5",
  "pbkdf2",
  "rand 0.9.5",

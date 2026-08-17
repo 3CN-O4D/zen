@@ -4,11 +4,11 @@ use std::{
     fmt,
     fs,
     io::{Read, Write},
-    net::TcpStream,
-    path::Path,
-    process,
+    net::{IpAddr, SocketAddr, TcpStream, UdpSocket},
+    path::{Path, PathBuf},
+    process::{self, Command},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 type InstanceRef = Arc<Mutex<Instance>>;
@@ -2312,8 +2312,294 @@ impl Vm {
         ]));
         self.vars.insert("statistics".into(), statistics);
 
+        // socket module
+        let socket = Value::Dict(BTreeMap::from([
+            ("open".into(), Value::NativeFunction("socket_open".into())),
+            ("send".into(), Value::NativeFunction("socket_send".into())),
+            ("recv".into(), Value::NativeFunction("socket_recv".into())),
+            ("close".into(), Value::NativeFunction("socket_close".into())),
+        ]));
+        self.vars.insert("socket".into(), socket);
+
+        // ftp module (pure-Rust FTP client)
+        let ftp = Value::Dict(BTreeMap::from([
+            ("connect".into(), Value::NativeFunction("ftp_connect".into())),
+            ("login".into(), Value::NativeFunction("ftp_login".into())),
+            ("pwd".into(), Value::NativeFunction("ftp_pwd".into())),
+            ("list".into(), Value::NativeFunction("ftp_list".into())),
+            ("nlist".into(), Value::NativeFunction("ftp_nlist".into())),
+            ("cwd".into(), Value::NativeFunction("ftp_cwd".into())),
+            ("retr".into(), Value::NativeFunction("ftp_retr".into())),
+            ("stor".into(), Value::NativeFunction("ftp_stor".into())),
+            ("dele".into(), Value::NativeFunction("ftp_dele".into())),
+            ("mkdir".into(), Value::NativeFunction("ftp_mkdir".into())),
+            ("rmdir".into(), Value::NativeFunction("ftp_rmdir".into())),
+            ("rename".into(), Value::NativeFunction("ftp_rename".into())),
+            ("quit".into(), Value::NativeFunction("ftp_quit".into())),
+        ]));
+        self.vars.insert("ftp".into(), ftp);
+
+        // smtp module (pure-Rust SMTP client)
+        let smtp = Value::Dict(BTreeMap::from([
+            ("connect".into(), Value::NativeFunction("smtp_connect".into())),
+            ("login".into(), Value::NativeFunction("smtp_login".into())),
+            ("sendmail".into(), Value::NativeFunction("smtp_sendmail".into())),
+            ("quit".into(), Value::NativeFunction("smtp_quit".into())),
+            ("message".into(), Value::NativeFunction("smtp_message".into())),
+        ]));
+        self.vars.insert("smtp".into(), smtp);
+
+        // pop3 module (pure-Rust POP3 client)
+        let pop3 = Value::Dict(BTreeMap::from([
+            ("connect".into(), Value::NativeFunction("pop3_connect".into())),
+            ("stat".into(), Value::NativeFunction("pop3_stat".into())),
+            ("list".into(), Value::NativeFunction("pop3_list".into())),
+            ("retr".into(), Value::NativeFunction("pop3_retr".into())),
+            ("dele".into(), Value::NativeFunction("pop3_dele".into())),
+            ("quit".into(), Value::NativeFunction("pop3_quit".into())),
+        ]));
+        self.vars.insert("pop3".into(), pop3);
+
+        // imap module (pure-Rust IMAP client)
+        let imap = Value::Dict(BTreeMap::from([
+            ("connect".into(), Value::NativeFunction("imap_connect".into())),
+            ("select".into(), Value::NativeFunction("imap_select".into())),
+            ("search".into(), Value::NativeFunction("imap_search".into())),
+            ("fetch".into(), Value::NativeFunction("imap_fetch".into())),
+            ("list".into(), Value::NativeFunction("imap_list".into())),
+            ("logout".into(), Value::NativeFunction("imap_logout".into())),
+        ]));
+        self.vars.insert("imap".into(), imap);
+
+        // telnet module (pure-Rust telnet client)
+        let telnet = Value::Dict(BTreeMap::from([
+            ("connect".into(), Value::NativeFunction("telnet_connect".into())),
+            ("write".into(), Value::NativeFunction("telnet_write".into())),
+            ("read".into(), Value::NativeFunction("telnet_read".into())),
+            ("read_until".into(), Value::NativeFunction("telnet_read_until".into())),
+            ("close".into(), Value::NativeFunction("telnet_close".into())),
+        ]));
+        self.vars.insert("telnet".into(), telnet);
+
+        // dns module (pure-Rust DNS client)
+        let dns = Value::Dict(BTreeMap::from([
+            ("resolve".into(), Value::NativeFunction("dns_resolve".into())),
+            ("lookup".into(), Value::NativeFunction("dns_resolve".into())),
+            ("query".into(), Value::NativeFunction("dns_query".into())),
+        ]));
+        self.vars.insert("dns".into(), dns);
+
+        // ssh module (wraps the system ssh/scp binaries)
+        let ssh = Value::Dict(BTreeMap::from([
+            ("run".into(), Value::NativeFunction("ssh_run".into())),
+            ("upload".into(), Value::NativeFunction("ssh_upload".into())),
+            ("download".into(), Value::NativeFunction("ssh_download".into())),
+            ("available".into(), Value::NativeFunction("ssh_available".into())),
+        ]));
+        self.vars.insert("ssh".into(), ssh);
+
+        // scapy module (packet crafting / sniffing)
+        let scapy = Value::Dict(BTreeMap::from([
+            ("checksum".into(), Value::NativeFunction("scapy_checksum".into())),
+            ("ip".into(), Value::NativeFunction("scapy_ip".into())),
+            ("tcp".into(), Value::NativeFunction("scapy_tcp".into())),
+            ("udp".into(), Value::NativeFunction("scapy_udp".into())),
+            ("icmp".into(), Value::NativeFunction("scapy_icmp".into())),
+            ("raw".into(), Value::NativeFunction("scapy_raw".into())),
+            ("build".into(), Value::NativeFunction("scapy_build".into())),
+            ("parse".into(), Value::NativeFunction("scapy_parse".into())),
+            ("send".into(), Value::NativeFunction("scapy_send".into())),
+            ("sniff".into(), Value::NativeFunction("scapy_sniff".into())),
+            ("ip_to_int".into(), Value::NativeFunction("scapy_ip_to_int".into())),
+            ("int_to_ip".into(), Value::NativeFunction("scapy_int_to_ip".into())),
+        ]));
+        self.vars.insert("scapy".into(), scapy);
+
+        // string module (Python string helpers + constants)
+        let string = Value::Dict(BTreeMap::from([
+            ("upper".into(), Value::NativeFunction("str_upper".into())),
+            ("lower".into(), Value::NativeFunction("str_lower".into())),
+            ("title".into(), Value::NativeFunction("str_title".into())),
+            ("capitalize".into(), Value::NativeFunction("str_capitalize".into())),
+            ("swapcase".into(), Value::NativeFunction("str_swapcase".into())),
+            ("strip".into(), Value::NativeFunction("str_strip".into())),
+            ("lstrip".into(), Value::NativeFunction("str_lstrip".into())),
+            ("rstrip".into(), Value::NativeFunction("str_rstrip".into())),
+            ("split".into(), Value::NativeFunction("str_split".into())),
+            ("splitlines".into(), Value::NativeFunction("str_splitlines".into())),
+            ("join".into(), Value::NativeFunction("str_join".into())),
+            ("replace".into(), Value::NativeFunction("str_replace".into())),
+            ("count".into(), Value::NativeFunction("str_count".into())),
+            ("find".into(), Value::NativeFunction("str_find".into())),
+            ("rfind".into(), Value::NativeFunction("str_rfind".into())),
+            ("startswith".into(), Value::NativeFunction("str_startswith".into())),
+            ("endswith".into(), Value::NativeFunction("str_endswith".into())),
+            ("contains".into(), Value::NativeFunction("str_contains".into())),
+            ("ljust".into(), Value::NativeFunction("str_ljust".into())),
+            ("rjust".into(), Value::NativeFunction("str_rjust".into())),
+            ("center".into(), Value::NativeFunction("str_center".into())),
+            ("zfill".into(), Value::NativeFunction("str_zfill".into())),
+            ("repeat".into(), Value::NativeFunction("str_repeat".into())),
+            ("isdigit".into(), Value::NativeFunction("str_isdigit".into())),
+            ("isalpha".into(), Value::NativeFunction("str_isalpha".into())),
+            ("isalnum".into(), Value::NativeFunction("str_isalnum".into())),
+            ("isspace".into(), Value::NativeFunction("str_isspace".into())),
+            ("islower".into(), Value::NativeFunction("str_islower".into())),
+            ("isupper".into(), Value::NativeFunction("str_isupper".into())),
+            ("digits".into(), Value::String("0123456789".into())),
+            ("hexdigits".into(), Value::String("0123456789abcdefABCDEF".into())),
+            ("octdigits".into(), Value::String("01234567".into())),
+            ("ascii_letters".into(), Value::String("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into())),
+            ("ascii_lowercase".into(), Value::String("abcdefghijklmnopqrstuvwxyz".into())),
+            ("ascii_uppercase".into(), Value::String("ABCDEFGHIJKLMNOPQRSTUVWXYZ".into())),
+            ("punctuation".into(), Value::String("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".into())),
+            ("whitespace".into(), Value::String(" \t\n\r\x0b\x0c".into())),
+            ("printable".into(), Value::String("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r\x0b\x0c".into())),
+        ]));
+        self.vars.insert("string".into(), string);
+
+        // subprocess module
+        let subprocess = Value::Dict(BTreeMap::from([
+            ("run".into(), Value::NativeFunction("subprocess_run".into())),
+            ("call".into(), Value::NativeFunction("subprocess_call".into())),
+            ("check_output".into(), Value::NativeFunction("subprocess_check_output".into())),
+        ]));
+        self.vars.insert("subprocess".into(), subprocess);
+
+        // struct module (binary pack/unpack)
+        let struct_mod = Value::Dict(BTreeMap::from([
+            ("pack".into(), Value::NativeFunction("struct_pack".into())),
+            ("unpack".into(), Value::NativeFunction("struct_unpack".into())),
+            ("calcsize".into(), Value::NativeFunction("struct_calcsize".into())),
+        ]));
+        self.vars.insert("struct".into(), struct_mod);
+
+        // hashlib module (alias to the crypto hashes)
+        let hashlib = Value::Dict(BTreeMap::from([
+            ("sha256".into(), Value::NativeFunction("crypto_sha256".into())),
+            ("sha1".into(), Value::NativeFunction("crypto_sha1".into())),
+            ("md5".into(), Value::NativeFunction("crypto_md5".into())),
+            ("sha512".into(), Value::NativeFunction("crypto_sha512".into())),
+            ("sha224".into(), Value::NativeFunction("crypto_sha224".into())),
+            ("sha384".into(), Value::NativeFunction("crypto_sha384".into())),
+            ("sha3_256".into(), Value::NativeFunction("crypto_sha3_256".into())),
+            ("sha3_512".into(), Value::NativeFunction("crypto_sha3_512".into())),
+            ("blake2b".into(), Value::NativeFunction("crypto_blake2b".into())),
+            ("blake2s".into(), Value::NativeFunction("crypto_blake2s".into())),
+            ("pbkdf2_hmac".into(), Value::NativeFunction("crypto_pbkdf2".into())),
+            ("create".into(), Value::NativeFunction("hashlib_new".into())),
+            ("algorithms_available".into(), Value::List(vec![
+                Value::String("md5".into()),
+                Value::String("sha1".into()),
+                Value::String("sha224".into()),
+                Value::String("sha256".into()),
+                Value::String("sha384".into()),
+                Value::String("sha512".into()),
+                Value::String("sha3_256".into()),
+                Value::String("sha3_512".into()),
+                Value::String("blake2b".into()),
+                Value::String("blake2s".into()),
+            ])),
+        ]));
+        self.vars.insert("hashlib".into(), hashlib);
+
+        // shutil module (file utilities)
+        let shutil = Value::Dict(BTreeMap::from([
+            ("copy".into(), Value::NativeFunction("shutil_copy".into())),
+            ("copy2".into(), Value::NativeFunction("shutil_copy2".into())),
+            ("move".into(), Value::NativeFunction("shutil_move".into())),
+            ("rmtree".into(), Value::NativeFunction("shutil_rmtree".into())),
+            ("copytree".into(), Value::NativeFunction("shutil_copytree".into())),
+            ("which".into(), Value::NativeFunction("shutil_which".into())),
+            ("disk_usage".into(), Value::NativeFunction("shutil_disk_usage".into())),
+        ]));
+        self.vars.insert("shutil".into(), shutil);
+
+        // pathlib module
+        let pathlib = Value::Dict(BTreeMap::from([
+            ("join".into(), Value::NativeFunction("pathlib_join".into())),
+            ("name".into(), Value::NativeFunction("pathlib_name".into())),
+            ("parent".into(), Value::NativeFunction("pathlib_parent".into())),
+            ("stem".into(), Value::NativeFunction("pathlib_stem".into())),
+            ("suffix".into(), Value::NativeFunction("pathlib_suffix".into())),
+            ("suffixes".into(), Value::NativeFunction("pathlib_suffixes".into())),
+            ("is_absolute".into(), Value::NativeFunction("pathlib_is_absolute".into())),
+            ("resolve".into(), Value::NativeFunction("pathlib_resolve".into())),
+            ("absolute".into(), Value::NativeFunction("pathlib_absolute".into())),
+            ("exists".into(), Value::NativeFunction("pathlib_exists".into())),
+            ("is_file".into(), Value::NativeFunction("pathlib_is_file".into())),
+            ("is_dir".into(), Value::NativeFunction("pathlib_is_dir".into())),
+            ("glob".into(), Value::NativeFunction("pathlib_glob".into())),
+            ("touch".into(), Value::NativeFunction("pathlib_touch".into())),
+            ("mkdir".into(), Value::NativeFunction("pathlib_mkdir".into())),
+            ("rmdir".into(), Value::NativeFunction("pathlib_rmdir".into())),
+            ("unlink".into(), Value::NativeFunction("pathlib_unlink".into())),
+            ("rename".into(), Value::NativeFunction("pathlib_rename".into())),
+            ("read_text".into(), Value::NativeFunction("pathlib_read_text".into())),
+            ("write_text".into(), Value::NativeFunction("pathlib_write_text".into())),
+        ]));
+        self.vars.insert("pathlib".into(), pathlib);
+
+        // glob module
+        let glob = Value::Dict(BTreeMap::from([
+            ("glob".into(), Value::NativeFunction("fs_glob".into())),
+        ]));
+        self.vars.insert("glob".into(), glob);
+
+        // urllib module
+        let urllib = Value::Dict(BTreeMap::from([
+            ("urlopen".into(), Value::NativeFunction("urllib_urlopen".into())),
+            ("quote".into(), Value::NativeFunction("urllib_quote".into())),
+            ("unquote".into(), Value::NativeFunction("urllib_unquote".into())),
+            ("urlencode".into(), Value::NativeFunction("urllib_urlencode".into())),
+            ("parse".into(), Value::NativeFunction("urllib_parse".into())),
+            ("parse_qs".into(), Value::NativeFunction("urllib_parse_qs".into())),
+        ]));
+        self.vars.insert("urllib".into(), urllib);
+
+        // collections module
+        let collections = Value::Dict(BTreeMap::from([
+            ("Counter".into(), Value::NativeFunction("collections_counter".into())),
+            ("chain".into(), Value::NativeFunction("collections_chain".into())),
+            ("flatten".into(), Value::NativeFunction("collections_flatten".into())),
+        ]));
+        self.vars.insert("collections".into(), collections);
+
+        // itertools module
+        let itertools = Value::Dict(BTreeMap::from([
+            ("enumerate".into(), Value::NativeFunction("itertools_enumerate".into())),
+            ("zip".into(), Value::NativeFunction("itertools_zip".into())),
+            ("chain".into(), Value::NativeFunction("itertools_chain".into())),
+            ("repeat".into(), Value::NativeFunction("itertools_repeat".into())),
+            ("product".into(), Value::NativeFunction("itertools_product".into())),
+            ("permutations".into(), Value::NativeFunction("itertools_permutations".into())),
+            ("combinations".into(), Value::NativeFunction("itertools_combinations".into())),
+            ("accumulate".into(), Value::NativeFunction("itertools_accumulate".into())),
+            ("take".into(), Value::NativeFunction("itertools_take".into())),
+            ("drop".into(), Value::NativeFunction("itertools_drop".into())),
+            ("range".into(), Value::NativeFunction("itertools_range".into())),
+        ]));
+        self.vars.insert("itertools".into(), itertools);
+
+        // tempfile module
+        let tempfile = Value::Dict(BTreeMap::from([
+            ("dir".into(), Value::NativeFunction("tempfile_dir".into())),
+            ("mkdtemp".into(), Value::NativeFunction("tempfile_mkdtemp".into())),
+            ("mkstemp".into(), Value::NativeFunction("tempfile_mkstemp".into())),
+        ]));
+        self.vars.insert("tempfile".into(), tempfile);
+
+        // binascii module
+        let binascii = Value::Dict(BTreeMap::from([
+            ("hexlify".into(), Value::NativeFunction("binascii_hexlify".into())),
+            ("unhexlify".into(), Value::NativeFunction("binascii_unhexlify".into())),
+            ("a2b_base64".into(), Value::NativeFunction("binascii_a2b_base64".into())),
+            ("b2a_base64".into(), Value::NativeFunction("binascii_b2a_base64".into())),
+        ]));
+        self.vars.insert("binascii".into(), binascii);
+
         // Register all core native functions eagerly
-        const NATIVES: [&str; 215] = [
+        const NATIVES: [&str; 359] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -2529,6 +2815,150 @@ impl Vm {
             "browser_query",
             "browser_wait_for",
             "browser_close",
+            "socket_close",
+            "ftp_connect",
+            "ftp_login",
+            "ftp_pwd",
+            "ftp_list",
+            "ftp_nlist",
+            "ftp_cwd",
+            "ftp_retr",
+            "ftp_stor",
+            "ftp_dele",
+            "ftp_mkdir",
+            "ftp_rmdir",
+            "ftp_rename",
+            "ftp_quit",
+            "smtp_connect",
+            "smtp_login",
+            "smtp_sendmail",
+            "smtp_quit",
+            "smtp_message",
+            "pop3_connect",
+            "pop3_stat",
+            "pop3_list",
+            "pop3_retr",
+            "pop3_dele",
+            "pop3_quit",
+            "imap_connect",
+            "imap_select",
+            "imap_search",
+            "imap_fetch",
+            "imap_list",
+            "imap_logout",
+            "telnet_connect",
+            "telnet_write",
+            "telnet_read",
+            "telnet_read_until",
+            "telnet_close",
+            "dns_resolve",
+            "dns_query",
+            "ssh_run",
+            "ssh_upload",
+            "ssh_download",
+            "ssh_available",
+            "scapy_checksum",
+            "scapy_ip",
+            "scapy_tcp",
+            "scapy_udp",
+            "scapy_icmp",
+            "scapy_raw",
+            "scapy_build",
+            "scapy_parse",
+            "scapy_send",
+            "scapy_sniff",
+            "scapy_ip_to_int",
+            "scapy_int_to_ip",
+            "str_upper",
+            "str_lower",
+            "str_title",
+            "str_capitalize",
+            "str_swapcase",
+            "str_strip",
+            "str_lstrip",
+            "str_rstrip",
+            "str_split",
+            "str_splitlines",
+            "str_join",
+            "str_replace",
+            "str_count",
+            "str_find",
+            "str_rfind",
+            "str_startswith",
+            "str_endswith",
+            "str_contains",
+            "str_ljust",
+            "str_rjust",
+            "str_center",
+            "str_zfill",
+            "str_repeat",
+            "str_isdigit",
+            "str_isalpha",
+            "str_isalnum",
+            "str_isspace",
+            "str_islower",
+            "str_isupper",
+            "subprocess_run",
+            "subprocess_call",
+            "subprocess_check_output",
+            "struct_pack",
+            "struct_unpack",
+            "struct_calcsize",
+            "hashlib_new",
+            "shutil_copy",
+            "shutil_copy2",
+            "shutil_move",
+            "shutil_rmtree",
+            "shutil_copytree",
+            "shutil_which",
+            "shutil_disk_usage",
+            "pathlib_join",
+            "pathlib_name",
+            "pathlib_parent",
+            "pathlib_stem",
+            "pathlib_suffix",
+            "pathlib_suffixes",
+            "pathlib_is_absolute",
+            "pathlib_resolve",
+            "pathlib_absolute",
+            "pathlib_exists",
+            "pathlib_is_file",
+            "pathlib_is_dir",
+            "pathlib_glob",
+            "pathlib_touch",
+            "pathlib_mkdir",
+            "pathlib_rmdir",
+            "pathlib_unlink",
+            "pathlib_rename",
+            "pathlib_read_text",
+            "pathlib_write_text",
+            "urllib_urlopen",
+            "urllib_quote",
+            "urllib_unquote",
+            "urllib_urlencode",
+            "urllib_parse",
+            "urllib_parse_qs",
+            "collections_counter",
+            "collections_chain",
+            "collections_flatten",
+            "itertools_enumerate",
+            "itertools_zip",
+            "itertools_chain",
+            "itertools_repeat",
+            "itertools_product",
+            "itertools_permutations",
+            "itertools_combinations",
+            "itertools_accumulate",
+            "itertools_take",
+            "itertools_drop",
+            "itertools_range",
+            "tempfile_dir",
+            "tempfile_mkdtemp",
+            "tempfile_mkstemp",
+            "binascii_hexlify",
+            "binascii_unhexlify",
+            "binascii_a2b_base64",
+            "binascii_b2a_base64",
         ];
         for name in NATIVES {
             self.native_functions.insert(name.to_string(), native_for(name));
@@ -4520,6 +4950,1154 @@ fn simple_glob(pattern: &str, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn arg_string(args: &[Value], i: usize) -> Result<String, String> {
+    match args.get(i) {
+        Some(Value::String(s)) => Ok(s.clone()),
+        Some(Value::Number(n)) => Ok(n.to_string()),
+        _ => Err(format!("argument {} must be a string", i + 1)),
+    }
+}
+
+fn arg_number(args: &[Value], i: usize) -> Result<f64, String> {
+    match args.get(i) {
+        Some(Value::Number(n)) => Ok(*n),
+        _ => Err(format!("argument {} must be a number", i + 1)),
+    }
+}
+
+fn arg_dict(args: &[Value], i: usize) -> Result<BTreeMap<String, Value>, String> {
+    match args.get(i) {
+        Some(Value::Dict(d)) => Ok(d.clone()),
+        _ => Err(format!("argument {} must be a dict", i + 1)),
+    }
+}
+
+fn arg_list(args: &[Value], i: usize) -> Result<Vec<Value>, String> {
+    match args.get(i) {
+        Some(Value::List(l)) => Ok(l.clone()),
+        _ => Err(format!("argument {} must be a list", i + 1)),
+    }
+}
+
+fn session_socket(session: &Value) -> Result<Arc<Mutex<TcpStream>>, String> {
+    match session {
+        Value::Dict(d) => match d.get("socket") {
+            Some(Value::Socket(s)) => Ok(s.clone()),
+            _ => Err("session has no socket (was connect() used?)".into()),
+        },
+        _ => Err("expected a session dict returned by connect()".into()),
+    }
+}
+
+fn stream_write_all(stream: &mut TcpStream, data: &[u8]) -> Result<(), String> {
+    stream.write_all(data).map_err(|e| format!("socket write failed: {e}"))
+}
+
+fn read_line(stream: &mut TcpStream) -> Result<String, String> {
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = stream.read(&mut byte).map_err(|e| format!("socket read failed: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        if byte[0] != b'\r' {
+            buf.push(byte[0]);
+        }
+        if buf.len() > 65536 {
+            return Err("line too long".into());
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn ftp_read_reply(stream: &mut TcpStream) -> Result<(u16, String), String> {
+    let first = read_line(stream)?;
+    if first.len() < 3 {
+        return Err(format!("malformed FTP reply: {first}"));
+    }
+    let code: u16 = first[..3].parse().map_err(|_| format!("bad FTP reply: {first}"))?;
+    if first.as_bytes().get(3) == Some(&b'-') {
+        let mut full = first.clone();
+        loop {
+            let line = read_line(stream)?;
+            full.push('\n');
+            full.push_str(&line);
+            if line.len() >= 4 && line[..3] == first[..3] && line.as_bytes().get(3) == Some(&b' ') {
+                break;
+            }
+        }
+        Ok((code, full))
+    } else {
+        Ok((code, first))
+    }
+}
+
+fn ftp_data_connect(stream: &mut TcpStream) -> Result<TcpStream, String> {
+    stream_write_all(stream, b"PASV\r\n")?;
+    let (code, reply) = ftp_read_reply(stream)?;
+    if code != 227 {
+        return Err(format!("PASV failed ({code}): {reply}"));
+    }
+    let start = reply.find('(').ok_or_else(|| format!("no passive info in: {reply}"))?;
+    let end = reply.find(')').ok_or_else(|| format!("no passive info in: {reply}"))?;
+    let nums: Vec<u16> = reply[start + 1..end]
+        .split(',')
+        .map(|s| s.trim().parse().unwrap_or(0))
+        .collect();
+    if nums.len() != 6 {
+        return Err(format!("bad PASV response: {reply}"));
+    }
+    let host = format!("{}.{}.{}.{}", nums[0], nums[1], nums[2], nums[3]);
+    let port = nums[4] * 256 + nums[5];
+    TcpStream::connect((host.as_str(), port)).map_err(|e| format!("FTP data connect failed: {e}"))
+}
+
+fn smtp_read_reply(stream: &mut TcpStream) -> Result<(u16, String), String> {
+    let first = read_line(stream)?;
+    if first.len() < 3 {
+        return Err(format!("malformed SMTP reply: {first}"));
+    }
+    let code: u16 = first[..3].parse().map_err(|_| format!("bad SMTP reply: {first}"))?;
+    if first.as_bytes().get(3) == Some(&b'-') {
+        let mut full = first.clone();
+        loop {
+            let line = read_line(stream)?;
+            full.push('\n');
+            full.push_str(&line);
+            if line.len() >= 4 && line[..3] == first[..3] && line.as_bytes().get(3) == Some(&b' ') {
+                break;
+            }
+        }
+        Ok((code, full))
+    } else {
+        Ok((code, first))
+    }
+}
+
+fn imap_command(stream: &mut TcpStream, tag: &str, cmd: &str) -> Result<String, String> {
+    stream_write_all(stream, format!("{tag} {cmd}\r\n").as_bytes())?;
+    let mut response = String::new();
+    loop {
+        let line = read_line(stream)?;
+        if line.starts_with('*') {
+            response.push_str(&line);
+            response.push('\n');
+        } else if line.starts_with(tag) {
+            if !line.contains(" OK") {
+                return Err(format!("IMAP {cmd}: {line}"));
+            }
+            return Ok(response);
+        } else {
+            response.push_str(&line);
+            response.push('\n');
+        }
+    }
+}
+
+fn strip_telnet_iac(buf: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(buf.len());
+    let mut i = 0;
+    while i < buf.len() {
+        if buf[i] == 0xff {
+            if i + 1 < buf.len() && buf[i + 1] == 0xff {
+                out.push(0xff);
+                i += 2;
+                continue;
+            }
+            if i + 1 < buf.len() && buf[i + 1] == 0xfb {
+                out.extend_from_slice(&[0xff, 0xfc]); // DO -> DONT
+                i += 2;
+                continue;
+            }
+            if i + 1 < buf.len() && buf[i + 1] == 0xfd {
+                out.extend_from_slice(&[0xff, 0xfe]); // WILL -> WONT
+                i += 2;
+                continue;
+            }
+            if i + 2 < buf.len() {
+                i += 3;
+                continue;
+            }
+            i = buf.len();
+        } else {
+            out.push(buf[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn dns_name_to_bytes(name: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for label in name.trim_end_matches('.').split('.') {
+        let bytes = label.as_bytes();
+        if !bytes.is_empty() {
+            out.push(bytes.len() as u8);
+            out.extend_from_slice(bytes);
+        }
+    }
+    out.push(0);
+    out
+}
+
+fn dns_read_name(bytes: &[u8], offset: usize) -> (String, usize) {
+    let mut labels = Vec::new();
+    let mut pos = offset;
+    let mut jumped = false;
+    let mut jump_from = offset;
+    loop {
+        if pos >= bytes.len() {
+            break;
+        }
+        let len = bytes[pos];
+        if len == 0 {
+            pos += 1;
+            if !jumped {
+                jump_from = pos;
+            }
+            break;
+        }
+        if len & 0xc0 == 0xc0 {
+            if pos + 1 >= bytes.len() {
+                break;
+            }
+            let ptr = (((len & 0x3f) as usize) << 8) | bytes[pos + 1] as usize;
+            if !jumped {
+                jump_from = pos + 2;
+            }
+            pos = ptr;
+            jumped = true;
+            continue;
+        }
+        if pos + 1 + len as usize > bytes.len() {
+            break;
+        }
+        labels.push(String::from_utf8_lossy(&bytes[pos + 1..pos + 1 + len as usize]).into_owned());
+        pos += 1 + len as usize;
+    }
+    (labels.join("."), jump_from)
+}
+
+fn internet_checksum(data: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    let mut i = 0;
+    while i + 1 < data.len() {
+        sum += ((data[i] as u32) << 8) | data[i + 1] as u32;
+        i += 2;
+    }
+    if i < data.len() {
+        sum += (data[i] as u32) << 8;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+fn ip_str_to_u32(ip: &str) -> Result<u32, String> {
+    let parts: Vec<u32> = ip
+        .split('.')
+        .map(|s| s.parse().unwrap_or(0))
+        .collect();
+    if parts.len() != 4 {
+        return Err(format!("bad IPv4 address: {ip}"));
+    }
+    Ok((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3])
+}
+
+fn u32_to_ip(v: u32) -> String {
+    format!(
+        "{}.{}.{}.{}",
+        (v >> 24) & 0xff,
+        (v >> 16) & 0xff,
+        (v >> 8) & 0xff,
+        v & 0xff
+    )
+}
+
+fn layer_bytes(layer: &BTreeMap<String, Value>) -> Result<Vec<u8>, String> {
+    match layer.get("type") {
+        Some(Value::String(t)) if t == "Raw" => match layer.get("data") {
+            Some(Value::String(d)) => Ok(d.as_bytes().to_vec()),
+            Some(Value::List(l)) => Ok(l
+                .iter()
+                .map(|v| match v {
+                    Value::Number(n) => *n as u8 as u32 as u8,
+                    _ => 0,
+                })
+                .collect()),
+            _ => Err("raw layer needs data".into()),
+        },
+        _ => {
+            let payload = match layer.get("payload") {
+                Some(Value::Dict(p)) => layer_bytes(p)?,
+                Some(Value::String(s)) => s.as_bytes().to_vec(),
+                _ => Vec::new(),
+            };
+            match layer.get("type") {
+                Some(Value::String(t)) if t == "IP" => {
+                    let src = match layer.get("src") {
+                        Some(Value::String(s)) => s,
+                        _ => return Err("IP layer needs src".into()),
+                    };
+                    let dst = match layer.get("dst") {
+                        Some(Value::String(s)) => s,
+                        _ => return Err("IP layer needs dst".into()),
+                    };
+                    let proto: u8 = match layer.get("proto") {
+                        Some(Value::String(p)) if p == "TCP" => 6,
+                        Some(Value::String(p)) if p == "UDP" => 17,
+                        Some(Value::String(p)) if p == "ICMP" => 1,
+                        Some(Value::Number(n)) => *n as u8,
+                        _ => match payload.first() {
+                            Some(b) => match b {
+                                0x45..=0xff => 6,
+                                _ => 17,
+                            },
+                            None => 1,
+                        },
+                    };
+                    let ttl: u8 = match layer.get("ttl") {
+                        Some(Value::Number(n)) => *n as u8,
+                        _ => 64,
+                    };
+                    let id: u16 = match layer.get("id") {
+                        Some(Value::Number(n)) => *n as u16,
+                        _ => rand::random(),
+                    };
+                    let total = 20 + payload.len();
+                    let mut header = Vec::with_capacity(20);
+                    header.push(0x45);
+                    header.push(0);
+                    header.extend_from_slice(&((total as u16).to_be_bytes()));
+                    header.extend_from_slice(&id.to_be_bytes());
+                    header.extend_from_slice(&[0x40, 0]);
+                    header.push(ttl);
+                    header.push(proto);
+                    header.extend_from_slice(&[0, 0]);
+                    header.extend_from_slice(&ip_str_to_u32(src)?.to_be_bytes());
+                    header.extend_from_slice(&ip_str_to_u32(dst)?.to_be_bytes());
+                    let csum = internet_checksum(&header);
+                    header[10] = (csum >> 8) as u8;
+                    header[11] = (csum & 0xff) as u8;
+                    header.extend_from_slice(&payload);
+                    Ok(header)
+                }
+                Some(Value::String(t)) if t == "UDP" => {
+                    let sport: u16 = match layer.get("sport") {
+                        Some(Value::Number(n)) => *n as u16,
+                        _ => 0,
+                    };
+                    let dport: u16 = match layer.get("dport") {
+                        Some(Value::Number(n)) => *n as u16,
+                        _ => return Err("UDP layer needs dport".into()),
+                    };
+                    let len = 8 + payload.len();
+                    let mut seg = Vec::with_capacity(8 + payload.len());
+                    seg.extend_from_slice(&sport.to_be_bytes());
+                    seg.extend_from_slice(&dport.to_be_bytes());
+                    seg.extend_from_slice(&(len as u16).to_be_bytes());
+                    seg.extend_from_slice(&[0, 0]);
+                    seg.extend_from_slice(&payload);
+                    // pseudo-header checksum (optional field; 0 if not computed)
+                    if let (Some(Value::String(src)), Some(Value::String(dst))) =
+                        (layer.get("src"), layer.get("dst"))
+                    {
+                        let mut pseudo = Vec::new();
+                        pseudo.extend_from_slice(&ip_str_to_u32(src)?.to_be_bytes());
+                        pseudo.extend_from_slice(&ip_str_to_u32(dst)?.to_be_bytes());
+                        pseudo.extend_from_slice(&[0, 17]);
+                        pseudo.extend_from_slice(&(len as u16).to_be_bytes());
+                        pseudo.extend_from_slice(&seg);
+                        let csum = internet_checksum(&pseudo);
+                        seg[6] = (csum >> 8) as u8;
+                        seg[7] = (csum & 0xff) as u8;
+                    }
+                    Ok(seg)
+                }
+                Some(Value::String(t)) if t == "TCP" => {
+                    let sport: u16 = match layer.get("sport") {
+                        Some(Value::Number(n)) => *n as u16,
+                        _ => 0,
+                    };
+                    let dport: u16 = match layer.get("dport") {
+                        Some(Value::Number(n)) => *n as u16,
+                        _ => return Err("TCP layer needs dport".into()),
+                    };
+                    let seq: u32 = match layer.get("seq") {
+                        Some(Value::Number(n)) => *n as u32,
+                        _ => 0,
+                    };
+                    let ack: u32 = match layer.get("ack") {
+                        Some(Value::Number(n)) => *n as u32,
+                        _ => 0,
+                    };
+                    let flags: u8 = match layer.get("flags") {
+                        Some(Value::Number(n)) => *n as u8,
+                        Some(Value::String(s)) => {
+                            let mut f = 0u8;
+                            if s.contains('S') {
+                                f |= 0x02;
+                            }
+                            if s.contains('A') {
+                                f |= 0x10;
+                            }
+                            if s.contains('F') {
+                                f |= 0x01;
+                            }
+                            if s.contains('R') {
+                                f |= 0x04;
+                            }
+                            if s.contains('P') {
+                                f |= 0x08;
+                            }
+                            f
+                        }
+                        _ => 0x02,
+                    };
+                    let window: u16 = match layer.get("window") {
+                        Some(Value::Number(n)) => *n as u16,
+                        _ => 65535,
+                    };
+                    let mut seg = Vec::with_capacity(20 + payload.len());
+                    seg.extend_from_slice(&sport.to_be_bytes());
+                    seg.extend_from_slice(&dport.to_be_bytes());
+                    seg.extend_from_slice(&seq.to_be_bytes());
+                    seg.extend_from_slice(&ack.to_be_bytes());
+                    seg.extend_from_slice(&[0x50, flags]);
+                    seg.extend_from_slice(&window.to_be_bytes());
+                    seg.extend_from_slice(&[0, 0]);
+                    seg.extend_from_slice(&[0, 0]);
+                    seg.extend_from_slice(&payload);
+                    if let (Some(Value::String(src)), Some(Value::String(dst))) =
+                        (layer.get("src"), layer.get("dst"))
+                    {
+                        let mut pseudo = Vec::new();
+                        pseudo.extend_from_slice(&ip_str_to_u32(src)?.to_be_bytes());
+                        pseudo.extend_from_slice(&ip_str_to_u32(dst)?.to_be_bytes());
+                        pseudo.extend_from_slice(&[0, 6]);
+                        pseudo.extend_from_slice(&((20 + payload.len()) as u16).to_be_bytes());
+                        pseudo.extend_from_slice(&seg);
+                        let csum = internet_checksum(&pseudo);
+                        seg[16] = (csum >> 8) as u8;
+                        seg[17] = (csum & 0xff) as u8;
+                    }
+                    Ok(seg)
+                }
+                Some(Value::String(t)) if t == "ICMP" => {
+                    let icmp_type: u8 = match layer.get("icmp_type") {
+                        Some(Value::Number(n)) => *n as u8,
+                        _ => 8,
+                    };
+                    let icmp_code: u8 = match layer.get("icmp_code") {
+                        Some(Value::Number(n)) => *n as u8,
+                        _ => 0,
+                    };
+                    let mut seg = Vec::with_capacity(4 + payload.len());
+                    seg.push(icmp_type);
+                    seg.push(icmp_code);
+                    seg.extend_from_slice(&[0, 0]);
+                    seg.extend_from_slice(&payload);
+                    let csum = internet_checksum(&seg);
+                    seg[2] = (csum >> 8) as u8;
+                    seg[3] = (csum & 0xff) as u8;
+                    Ok(seg)
+                }
+                other => Err(format!("unknown packet layer type: {other:?}")),
+            }
+        }
+    }
+}
+
+fn raw_socket_send(data: &[u8]) -> Result<(), String> {
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW) };
+    if fd < 0 {
+        return Err("scapy.send: could not open raw socket (requires root / CAP_NET_RAW): check the OS error".into());
+    }
+    let on: libc::c_int = 1;
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::IPPROTO_IP,
+            libc::IP_HDRINCL,
+            &on as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+    let dst = match data.get(16..20) {
+        Some(b) => IpAddr::from([b[0], b[1], b[2], b[3]]),
+        None => return Err("scapy.send: packet too short".into()),
+    };
+    let sa = SocketAddr::new(dst, 0);
+    let result = unsafe {
+        libc::sendto(
+            fd,
+            data.as_ptr() as *const libc::c_void,
+            data.len(),
+            0,
+            &sa as *const SocketAddr as *const libc::sockaddr,
+            std::mem::size_of::<SocketAddr>() as libc::socklen_t,
+        )
+    };
+    let err = std::io::Error::last_os_error();
+    unsafe { libc::close(fd) };
+    if result < 0 {
+        return Err(format!("scapy.send failed: {err}"));
+    }
+    Ok(())
+}
+
+fn struct_size_of(fmt: &str) -> Result<usize, String> {
+    let mut size = 0usize;
+    let mut count = 0usize;
+    for c in fmt.chars() {
+        match c {
+            '<' | '>' | '=' | '!' | '@' => continue,
+            '0'..='9' => {
+                count = count * 10 + (c as usize - '0' as usize);
+            }
+            _ => {
+                let n = if count == 0 { 1 } else { count };
+                count = 0;
+                let sz = match c {
+                    'x' | 'b' | 'B' | '?' => 1,
+                    'h' | 'H' => 2,
+                    'i' | 'I' | 'l' | 'L' | 'f' => 4,
+                    'q' | 'Q' | 'd' => 8,
+                    's' | 'p' => return Err("struct: s/p need an explicit size like 4s".into()),
+                    _ => return Err(format!("struct: unknown format char '{c}'")),
+                };
+                size += sz * n;
+            }
+        }
+    }
+    Ok(size)
+}
+
+fn struct_parse_format(fmt: &str) -> Result<(bool, Vec<(char, usize)>), String> {
+    let big_endian = match fmt.chars().next() {
+        Some('>') | Some('!') => true,
+        _ => false,
+    };
+    let mut codes = Vec::new();
+    let mut count = 0usize;
+    let mut prev: Option<char> = None;
+    let mut size_checked = false;
+    for c in fmt.chars() {
+        if c.is_ascii_digit() {
+            count = count * 10 + (c as usize - '0' as usize);
+            continue;
+        }
+        match c {
+            '>' | '!' | '<' | '=' | '@' => continue,
+            _ => {}
+        }
+        if let Some(p) = prev.take() {
+            let n = if count == 0 { 1 } else { count };
+            if p == 's' || p == 'p' {
+                size_checked = true;
+            }
+            codes.push((p, n));
+            count = 0;
+        }
+        if c == 's' || c == 'p' {
+            let n = if count == 0 { 1 } else { count };
+            codes.push((c, n));
+            count = 0;
+        } else {
+            prev = Some(c);
+        }
+    }
+    if let Some(p) = prev {
+        let n = if count == 0 { 1 } else { count };
+        codes.push((p, n));
+    }
+    let _ = size_checked;
+    Ok((big_endian, codes))
+}
+
+fn hexlify(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len() * 2);
+    for b in data {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+fn dns_type_name(t: u16) -> &'static str {
+    match t {
+        1 => "A",
+        2 => "NS",
+        5 => "CNAME",
+        15 => "MX",
+        16 => "TXT",
+        28 => "AAAA",
+        _ => "OTHER",
+    }
+}
+
+fn default_dns_server() -> String {
+    if let Ok(content) = fs::read_to_string("/etc/resolv.conf") {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("nameserver") {
+                let server = rest.trim();
+                if server.split('.').count() == 4 {
+                    return server.to_string();
+                }
+            }
+        }
+    }
+    "8.8.8.8".into()
+}
+
+fn dns_query_impl(name: &str, rtype: &str) -> Result<Vec<Value>, String> {
+    let qtype: u16 = match rtype.to_uppercase().as_str() {
+        "A" => 1,
+        "NS" => 2,
+        "CNAME" => 5,
+        "MX" => 15,
+        "TXT" => 16,
+        "AAAA" => 28,
+        _ => return Err(format!("dns: unsupported type {rtype}")),
+    };
+    let server = default_dns_server();
+    let mut query = Vec::new();
+    let id: u16 = rand::random();
+    query.extend_from_slice(&id.to_be_bytes());
+    query.extend_from_slice(&0x0100u16.to_be_bytes());
+    query.extend_from_slice(&1u16.to_be_bytes());
+    query.extend_from_slice(&0u16.to_be_bytes());
+    query.extend_from_slice(&0u16.to_be_bytes());
+    query.extend_from_slice(&0u16.to_be_bytes());
+    query.extend_from_slice(&dns_name_to_bytes(name));
+    query.extend_from_slice(&qtype.to_be_bytes());
+    query.extend_from_slice(&1u16.to_be_bytes());
+    let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("dns: bind: {e}"))?;
+    sock.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    sock.send_to(&query, (server.as_str(), 53))
+        .map_err(|e| format!("dns: send to {server}: {e}"))?;
+    let mut buf = [0u8; 4096];
+    let (n, _) = sock
+        .recv_from(&mut buf)
+        .map_err(|e| format!("dns: no response from {server}: {e}"))?;
+    let resp = &buf[..n];
+    if resp.len() < 12 {
+        return Ok(Vec::new());
+    }
+    let ancount = u16::from_be_bytes([resp[6], resp[7]]) as usize;
+    let mut pos = 12usize;
+    let (_, npos) = dns_read_name(resp, pos);
+    pos = npos + 4;
+    let mut results = Vec::new();
+    for _ in 0..ancount {
+        if pos >= resp.len() {
+            break;
+        }
+        let (rname, npos) = dns_read_name(resp, pos);
+        pos = npos;
+        if pos + 10 > resp.len() {
+            break;
+        }
+        let rtype = u16::from_be_bytes([resp[pos], resp[pos + 1]]);
+        let ttl = u32::from_be_bytes([resp[pos + 4], resp[pos + 5], resp[pos + 6], resp[pos + 7]]);
+        let rdlen = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
+        pos += 10;
+        if pos + rdlen > resp.len() {
+            break;
+        }
+        let rdata = &resp[pos..pos + rdlen];
+        let data = match rtype {
+            1 if rdlen == 4 => u32_to_ip(u32::from_be_bytes([
+                rdata[0], rdata[1], rdata[2], rdata[3],
+            ])),
+            28 if rdlen == 16 => {
+                let mut parts = Vec::new();
+                for i in (0..16).step_by(2) {
+                    parts.push(format!("{:02x}{:02x}", rdata[i], rdata[i + 1]));
+                }
+                parts.join(":")
+            }
+            15 if rdlen >= 3 => {
+                let pref = u16::from_be_bytes([rdata[0], rdata[1]]);
+                let (hostname, _) = dns_read_name(resp, pos + 2);
+                format!("{pref} {hostname}")
+            }
+            16 => String::from_utf8_lossy(rdata).into_owned(),
+            2 | 5 => {
+                let (hostname, _) = dns_read_name(resp, pos);
+                hostname
+            }
+            _ => hexlify(rdata),
+        };
+        pos += rdlen;
+        let mut rec = BTreeMap::new();
+        rec.insert("name".into(), Value::String(rname));
+        rec.insert("type".into(), Value::String(dns_type_name(rtype).into()));
+        rec.insert("ttl".into(), Value::Number(ttl as f64));
+        rec.insert("data".into(), Value::String(data));
+        results.push(Value::Dict(rec));
+    }
+    Ok(results)
+}
+
+fn parse_packet(data: &[u8]) -> Value {
+    if data.len() < 20 || (data[0] >> 4) != 4 {
+        return Value::Null;
+    }
+    let ihl = ((data[0] & 0x0f) as usize) * 4;
+    if data.len() < ihl {
+        return Value::Null;
+    }
+    let src = u32_to_ip(u32::from_be_bytes([data[12], data[13], data[14], data[15]]));
+    let dst = u32_to_ip(u32::from_be_bytes([data[16], data[17], data[18], data[19]]));
+    let proto = data[9];
+    let payload = &data[ihl..];
+    let mut ip_layer = BTreeMap::new();
+    ip_layer.insert("type".into(), Value::String("IP".into()));
+    ip_layer.insert("src".into(), Value::String(src));
+    ip_layer.insert("dst".into(), Value::String(dst));
+    let inner = match proto {
+        6 => {
+            ip_layer.insert("proto".into(), Value::String("TCP".into()));
+            if payload.len() < 20 {
+                Value::Null
+            } else {
+                let sport = u16::from_be_bytes([payload[0], payload[1]]) as f64;
+                let dport = u16::from_be_bytes([payload[2], payload[3]]) as f64;
+                let seq = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as f64;
+                let ack = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]) as f64;
+                let flags = payload[13];
+                let data_offset = ((payload[12] >> 4) as usize) * 4;
+                let mut tcp_layer = BTreeMap::new();
+                tcp_layer.insert("type".into(), Value::String("TCP".into()));
+                tcp_layer.insert("sport".into(), Value::Number(sport));
+                tcp_layer.insert("dport".into(), Value::Number(dport));
+                tcp_layer.insert("seq".into(), Value::Number(seq));
+                tcp_layer.insert("ack".into(), Value::Number(ack));
+                tcp_layer.insert("flags".into(), Value::Number(flags as f64));
+                if payload.len() > data_offset {
+                    tcp_layer.insert(
+                        "payload".into(),
+                        Value::String(String::from_utf8_lossy(&payload[data_offset..]).into_owned()),
+                    );
+                }
+                Value::Dict(tcp_layer)
+            }
+        }
+        17 => {
+            ip_layer.insert("proto".into(), Value::String("UDP".into()));
+            if payload.len() < 8 {
+                Value::Null
+            } else {
+                let sport = u16::from_be_bytes([payload[0], payload[1]]) as f64;
+                let dport = u16::from_be_bytes([payload[2], payload[3]]) as f64;
+                let mut udp_layer = BTreeMap::new();
+                udp_layer.insert("type".into(), Value::String("UDP".into()));
+                udp_layer.insert("sport".into(), Value::Number(sport));
+                udp_layer.insert("dport".into(), Value::Number(dport));
+                if payload.len() > 8 {
+                    udp_layer.insert(
+                        "payload".into(),
+                        Value::String(String::from_utf8_lossy(&payload[8..]).into_owned()),
+                    );
+                }
+                Value::Dict(udp_layer)
+            }
+        }
+        1 => {
+            ip_layer.insert("proto".into(), Value::String("ICMP".into()));
+            if payload.is_empty() {
+                Value::Null
+            } else {
+                let mut icmp_layer = BTreeMap::new();
+                icmp_layer.insert("type".into(), Value::String("ICMP".into()));
+                icmp_layer.insert("icmp_type".into(), Value::Number(payload[0] as f64));
+                icmp_layer.insert("icmp_code".into(), Value::Number(payload[1] as f64));
+                if payload.len() > 4 {
+                    icmp_layer.insert(
+                        "payload".into(),
+                        Value::String(String::from_utf8_lossy(&payload[4..]).into_owned()),
+                    );
+                }
+                Value::Dict(icmp_layer)
+            }
+        }
+        _ => {
+            ip_layer.insert("proto".into(), Value::Number(proto as f64));
+            if !payload.is_empty() {
+                let mut raw = BTreeMap::new();
+                raw.insert("type".into(), Value::String("Raw".into()));
+                raw.insert("data".into(), Value::String(hexlify(payload)));
+                Value::Dict(raw)
+            } else {
+                Value::Null
+            }
+        }
+    };
+    if !matches!(inner, Value::Null) {
+        ip_layer.insert("payload".into(), inner);
+    }
+    Value::Dict(ip_layer)
+}
+
+fn sniff_packets(count: u32, timeout_secs: u64) -> Result<Value, String> {
+    let fd = unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW, 0) };
+    if fd < 0 {
+        return Err(
+            "scapy.sniff: could not open AF_PACKET raw socket (requires root / CAP_NET_RAW)".into(),
+        );
+    }
+    let tv = libc::timeval {
+        tv_sec: timeout_secs as libc::time_t,
+        tv_usec: 0,
+    };
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &tv as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+    }
+    let mut packets = Vec::new();
+    let deadline = SystemTime::now() + Duration::from_secs(timeout_secs);
+    let mut buf = [0u8; 65535];
+    while packets.len() < count as usize && SystemTime::now() < deadline {
+        let n = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+        if n < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::WouldBlock
+                || err.kind() == std::io::ErrorKind::TimedOut
+            {
+                break;
+            }
+            unsafe { libc::close(fd) };
+            return Err(format!("scapy.sniff: recv failed: {err}"));
+        }
+        let frame = &buf[..n as usize];
+        if frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00 {
+            let ip = parse_packet(&frame[14..]);
+            if !matches!(ip, Value::Null) {
+                packets.push(ip);
+            }
+        }
+    }
+    unsafe { libc::close(fd) };
+    Ok(Value::List(packets))
+}
+
+fn pack_value(values: &[Value], vi: &mut usize) -> Result<f64, String> {
+    match values.get(*vi) {
+        Some(Value::Number(n)) => {
+            *vi += 1;
+            Ok(*n)
+        }
+        Some(Value::String(s)) => {
+            *vi += 1;
+            s.parse::<f64>()
+                .map_err(|_| format!("struct.pack: '{s}' is not a number"))
+        }
+        _ => Err("struct.pack: not enough values for format".into()),
+    }
+}
+
+fn be_bytes(v: u64, n: usize) -> Vec<u8> {
+    v.to_be_bytes()[8 - n..].to_vec()
+}
+
+fn le_bytes(v: u64, n: usize) -> Vec<u8> {
+    v.to_le_bytes()[..n].to_vec()
+}
+
+fn pack_impl(fmt: &str, values: &[Value]) -> Result<Value, String> {
+    let (big, codes) = struct_parse_format(fmt)?;
+    let mut out: Vec<u8> = Vec::new();
+    let mut vi = 0usize;
+    for (code, count) in codes {
+        match code {
+            'x' => out.extend(std::iter::repeat(0u8).take(count)),
+            's' | 'p' => {
+                let s = match values.get(vi) {
+                    Some(Value::String(s)) => {
+                        vi += 1;
+                        s.clone()
+                    }
+                    _ => return Err("struct.pack: 's' needs a string value".into()),
+                };
+                let bytes = s.as_bytes();
+                let n = count.min(bytes.len());
+                out.extend_from_slice(&bytes[..n]);
+                out.extend(std::iter::repeat(0u8).take(count - n));
+            }
+            _ => {
+                let size = match code {
+                    'b' | 'B' | '?' => 1,
+                    'h' | 'H' => 2,
+                    'i' | 'I' | 'l' | 'L' | 'f' => 4,
+                    'q' | 'Q' | 'd' => 8,
+                    _ => return Err(format!("struct.pack: unsupported format char '{code}'")),
+                };
+                for _ in 0..count {
+                    let v = pack_value(values, &mut vi)?;
+                    let raw: u64 = match code {
+                        'b' => {
+                            out.push((v as i8) as u8);
+                            continue;
+                        }
+                        'B' | '?' => {
+                            out.push(v as u8);
+                            continue;
+                        }
+                        'h' => (v as i16) as u16 as u64,
+                        'H' => v as u16 as u64,
+                        'i' | 'l' => (v as i32) as u32 as u64,
+                        'I' | 'L' => v as u32 as u64,
+                        'q' => v as i64 as u64,
+                        'Q' => v as u64,
+                        'f' => (v as f32).to_bits() as u64,
+                        'd' => v.to_bits(),
+                        _ => 0,
+                    };
+                    let bytes = if big { be_bytes(raw, size) } else { le_bytes(raw, size) };
+                    out.extend_from_slice(&bytes);
+                }
+            }
+        }
+    }
+    Ok(Value::String(String::from_utf8_lossy(&out).into_owned()))
+}
+
+fn unpack_impl(fmt: &str, data: &[u8]) -> Result<Value, String> {
+    let (big, codes) = struct_parse_format(fmt)?;
+    let mut out: Vec<Value> = Vec::new();
+    let mut pos = 0usize;
+    for (code, count) in codes {
+        match code {
+            'x' => pos += count,
+            's' | 'p' => {
+                if pos + count > data.len() {
+                    return Err("struct.unpack: data too short".into());
+                }
+                out.push(Value::String(
+                    String::from_utf8_lossy(&data[pos..pos + count]).into_owned(),
+                ));
+                pos += count;
+            }
+            _ => {
+                let size = match code {
+                    'b' | 'B' | '?' => 1,
+                    'h' | 'H' => 2,
+                    'i' | 'I' | 'l' | 'L' | 'f' => 4,
+                    'q' | 'Q' | 'd' => 8,
+                    _ => return Err(format!("struct.unpack: unsupported format char '{code}'")),
+                };
+                for _ in 0..count {
+                    if pos + size > data.len() {
+                        return Err("struct.unpack: data too short".into());
+                    }
+                    let mut raw = [0u8; 8];
+                    if big {
+                        raw[8 - size..].copy_from_slice(&data[pos..pos + size]);
+                    } else {
+                        raw[..size].copy_from_slice(&data[pos..pos + size]);
+                    }
+                    let v = match code {
+                        'b' => {
+                            out.push(Value::Number(data[pos] as i8 as f64));
+                            pos += 1;
+                            continue;
+                        }
+                        'B' | '?' => {
+                            out.push(Value::Number(data[pos] as f64));
+                            pos += 1;
+                            continue;
+                        }
+                        'h' => u64::from_be_bytes(raw) as i16 as f64,
+                        'H' => u64::from_be_bytes(raw) as u16 as f64,
+                        'i' | 'l' => u64::from_be_bytes(raw) as i32 as f64,
+                        'I' | 'L' => u64::from_be_bytes(raw) as u32 as f64,
+                        'q' => u64::from_be_bytes(raw) as i64 as f64,
+                        'Q' => u64::from_be_bytes(raw) as f64,
+                        'f' => f32::from_bits(u64::from_be_bytes(raw) as u32) as f64,
+                        'd' => f64::from_bits(u64::from_be_bytes(raw)),
+                        _ => 0.0,
+                    };
+                    out.push(Value::Number(v));
+                    pos += size;
+                }
+            }
+        }
+    }
+    Ok(Value::List(out))
+}
+
+fn crypto_digest(data: &str, algo: &str) -> String {
+    use sha2::Digest;
+    let bytes = data.as_bytes();
+    let digest = match algo {
+        "md5" => {
+            let mut h = md5::Md5::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "sha1" => {
+            let mut h = sha1::Sha1::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "sha224" => {
+            let mut h = sha2::Sha224::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "sha256" => {
+            let mut h = sha2::Sha256::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "sha384" => {
+            let mut h = sha2::Sha384::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "sha512" => {
+            let mut h = sha2::Sha512::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "sha3_256" => {
+            let mut h = sha3::Sha3_256::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "sha3_512" => {
+            let mut h = sha3::Sha3_512::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "blake2b" => {
+            let mut h = blake2::Blake2b512::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        "blake2s" => {
+            let mut h = blake2::Blake2s256::default();
+            h.update(bytes);
+            h.finalize().to_vec()
+        }
+        _ => Vec::new(),
+    };
+    hexlify(&digest)
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            fs::copy(&from, &to).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn flatten_list(list: &[Value], out: &mut Vec<Value>) {
+    for item in list {
+        if let Value::List(inner) = item {
+            flatten_list(inner, out);
+        } else {
+            out.push(item.clone());
+        }
+    }
+}
+
+fn permutations(
+    list: &[Value],
+    r: usize,
+    current: &mut Vec<Value>,
+    used: &mut Vec<bool>,
+    out: &mut Vec<Value>,
+) {
+    if current.len() == r {
+        out.push(Value::List(current.clone()));
+        return;
+    }
+    for i in 0..list.len() {
+        if used[i] {
+            continue;
+        }
+        used[i] = true;
+        current.push(list[i].clone());
+        permutations(list, r, current, used, out);
+        current.pop();
+        used[i] = false;
+    }
+}
+
+fn combinations(list: &[Value], r: usize, start: usize, current: &mut Vec<Value>, out: &mut Vec<Value>) {
+    if current.len() == r {
+        out.push(Value::List(current.clone()));
+        return;
+    }
+    for i in start..list.len() {
+        current.push(list[i].clone());
+        combinations(list, r, i + 1, current, out);
+        current.pop();
+    }
+}
+
+fn url_quote(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char);
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn url_unquote(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                    out.push(v);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn native_for(name: &str) -> NativeFunc {
     match name {
         "math_sin" => |args| {
@@ -5802,6 +7380,1794 @@ fn native_for(name: &str) -> NativeFunc {
         "browser_query" => |args| crate::state::browser_query(&args),
         "browser_wait_for" => |args| crate::state::browser_wait_for(&args),
         "browser_close" => |_| crate::state::browser_close(),
+        "socket_close" => |args| {
+            let socket = match args.first() {
+                Some(Value::Socket(s)) => s,
+                _ => return Err("socket.close expects a Socket".into()),
+            };
+            socket
+                .lock()
+                .unwrap()
+                .shutdown(std::net::Shutdown::Both)
+                .ok();
+            Ok(Value::Bool(true))
+        },
+        "ftp_connect" => |args| {
+            let host = arg_string(&args, 0)?;
+            let port = match args.get(1) {
+                Some(Value::Number(n)) => *n as u16,
+                _ => 21,
+            };
+            let stream = TcpStream::connect((host.as_str(), port))
+                .map_err(|e| format!("ftp connect {host}:{port}: {e}"))?;
+            stream
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .ok();
+            let mut stream = stream;
+            let (code, reply) = ftp_read_reply(&mut stream)?;
+            if code != 220 {
+                return Err(format!("ftp: server refused connection ({code}): {reply}"));
+            }
+            let mut session = BTreeMap::new();
+            session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
+            session.insert("host".into(), Value::String(host));
+            Ok(Value::Dict(session))
+        },
+        "ftp_login" => |args| {
+            let stream = session_socket(&args[0])?;
+            let user = arg_string(&args, 1)?;
+            let pass = match args.get(2) {
+                Some(Value::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("USER {user}\r\n").as_bytes())?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code == 331 {
+                stream_write_all(&mut s, format!("PASS {pass}\r\n").as_bytes())?;
+                let (code, reply) = ftp_read_reply(&mut s)?;
+                if code != 230 {
+                    return Err(format!("ftp login failed ({code}): {reply}"));
+                }
+            } else if code != 230 {
+                return Err(format!("ftp login failed ({code}): {reply}"));
+            }
+            stream_write_all(&mut s, b"TYPE I\r\n")?;
+            ftp_read_reply(&mut s)?;
+            Ok(Value::Bool(true))
+        },
+        "ftp_pwd" => |args| {
+            let stream = session_socket(&args[0])?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, b"PWD\r\n")?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code != 257 {
+                return Err(format!("ftp pwd failed ({code}): {reply}"));
+            }
+            let start = reply.find('"');
+            let rest = start.map(|i| &reply[i + 1..]).unwrap_or("");
+            let end = rest.find('"');
+            Ok(Value::String(end.map(|i| rest[..i].to_string()).unwrap_or_default()))
+        },
+        "ftp_list" => |args| {
+            let stream = session_socket(&args[0])?;
+            let path = match args.get(1) {
+                Some(Value::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let mut s = stream.lock().unwrap();
+            let data = ftp_data_connect(&mut s)?;
+            stream_write_all(&mut s, format!("LIST {path}\r\n").as_bytes())?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if !(code == 150 || code == 125) {
+                return Err(format!("ftp list failed ({code}): {reply}"));
+            }
+            let mut data = data;
+            let mut content = Vec::new();
+            data.read_to_end(&mut content)
+                .map_err(|e| format!("ftp data read failed: {e}"))?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code != 226 {
+                return Err(format!("ftp list transfer failed ({code}): {reply}"));
+            }
+            Ok(Value::String(String::from_utf8_lossy(&content).into_owned()))
+        },
+        "ftp_nlist" => |args| {
+            let stream = session_socket(&args[0])?;
+            let path = match args.get(1) {
+                Some(Value::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let mut s = stream.lock().unwrap();
+            let data = ftp_data_connect(&mut s)?;
+            stream_write_all(&mut s, format!("NLST {path}\r\n").as_bytes())?;
+            let (code, _) = ftp_read_reply(&mut s)?;
+            if !(code == 150 || code == 125) {
+                return Err(format!("ftp nlist failed ({code})"));
+            }
+            let mut data = data;
+            let mut content = String::new();
+            data.read_to_string(&mut content)
+                .map_err(|e| format!("ftp data read failed: {e}"))?;
+            ftp_read_reply(&mut s)?;
+            let names: Vec<Value> = content
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| Value::String(l.to_string()))
+                .collect();
+            Ok(Value::List(names))
+        },
+        "ftp_cwd" => |args| {
+            let stream = session_socket(&args[0])?;
+            let dir = arg_string(&args, 1)?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("CWD {dir}\r\n").as_bytes())?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code != 250 {
+                return Err(format!("ftp cwd failed ({code}): {reply}"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "ftp_retr" => |args| {
+            let stream = session_socket(&args[0])?;
+            let remote = arg_string(&args, 1)?;
+            let mut s = stream.lock().unwrap();
+            let data = ftp_data_connect(&mut s)?;
+            stream_write_all(&mut s, format!("RETR {remote}\r\n").as_bytes())?;
+            let (code, _) = ftp_read_reply(&mut s)?;
+            if !(code == 150 || code == 125) {
+                return Err(format!("ftp retr failed ({code})"));
+            }
+            let mut data = data;
+            let mut content = Vec::new();
+            data.read_to_end(&mut content)
+                .map_err(|e| format!("ftp data read failed: {e}"))?;
+            ftp_read_reply(&mut s)?;
+            Ok(Value::String(String::from_utf8_lossy(&content).into_owned()))
+        },
+        "ftp_stor" => |args| {
+            let stream = session_socket(&args[0])?;
+            let remote = arg_string(&args, 1)?;
+            let data = arg_string(&args, 2)?;
+            let mut s = stream.lock().unwrap();
+            let mut data_conn = ftp_data_connect(&mut s)?;
+            stream_write_all(&mut s, format!("STOR {remote}\r\n").as_bytes())?;
+            let (code, _) = ftp_read_reply(&mut s)?;
+            if !(code == 150 || code == 125) {
+                return Err(format!("ftp stor failed ({code})"));
+            }
+            data_conn
+                .write_all(data.as_bytes())
+                .map_err(|e| format!("ftp data write failed: {e}"))?;
+            data_conn
+                .shutdown(std::net::Shutdown::Both)
+                .ok();
+            let (code, _) = ftp_read_reply(&mut s)?;
+            if code != 226 {
+                return Err(format!("ftp stor failed ({code})"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "ftp_dele" => |args| {
+            let stream = session_socket(&args[0])?;
+            let remote = arg_string(&args, 1)?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("DELE {remote}\r\n").as_bytes())?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code != 250 {
+                return Err(format!("ftp dele failed ({code}): {reply}"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "ftp_mkdir" => |args| {
+            let stream = session_socket(&args[0])?;
+            let dir = arg_string(&args, 1)?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("MKD {dir}\r\n").as_bytes())?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code != 257 {
+                return Err(format!("ftp mkdir failed ({code}): {reply}"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "ftp_rmdir" => |args| {
+            let stream = session_socket(&args[0])?;
+            let dir = arg_string(&args, 1)?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("RMD {dir}\r\n").as_bytes())?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code != 250 {
+                return Err(format!("ftp rmdir failed ({code}): {reply}"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "ftp_rename" => |args| {
+            let stream = session_socket(&args[0])?;
+            let from = arg_string(&args, 1)?;
+            let to = arg_string(&args, 2)?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("RNFR {from}\r\n").as_bytes())?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code != 350 {
+                return Err(format!("ftp rename failed ({code}): {reply}"));
+            }
+            stream_write_all(&mut s, format!("RNTO {to}\r\n").as_bytes())?;
+            let (code, reply) = ftp_read_reply(&mut s)?;
+            if code != 250 {
+                return Err(format!("ftp rename failed ({code}): {reply}"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "ftp_quit" => |args| {
+            let stream = session_socket(&args[0])?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, b"QUIT\r\n")?;
+            ftp_read_reply(&mut s)?;
+            s.shutdown(std::net::Shutdown::Both).ok();
+            Ok(Value::Bool(true))
+        },
+        "smtp_connect" => |args| {
+            let host = arg_string(&args, 0)?;
+            let port = match args.get(1) {
+                Some(Value::Number(n)) => *n as u16,
+                _ => 25,
+            };
+            let stream = TcpStream::connect((host.as_str(), port))
+                .map_err(|e| format!("smtp connect {host}:{port}: {e}"))?;
+            let mut stream = stream;
+            let (code, reply) = smtp_read_reply(&mut stream)?;
+            if code != 220 {
+                return Err(format!("smtp: server refused ({code}): {reply}"));
+            }
+            stream_write_all(&mut stream, b"EHLO localhost\r\n")?;
+            let (code, reply) = smtp_read_reply(&mut stream)?;
+            if code != 250 {
+                return Err(format!("smtp ehlo failed ({code}): {reply}"));
+            }
+            let mut session = BTreeMap::new();
+            session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
+            session.insert("host".into(), Value::String(host));
+            Ok(Value::Dict(session))
+        },
+        "smtp_login" => |args| {
+            let stream = session_socket(&args[0])?;
+            let user = arg_string(&args, 1)?;
+            let pass = arg_string(&args, 2)?;
+            use base64::Engine;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, b"AUTH LOGIN\r\n")?;
+            let (code, reply) = smtp_read_reply(&mut s)?;
+            if code != 334 {
+                return Err(format!("smtp auth failed ({code}): {reply}"));
+            }
+            let enc = |d: &str| base64::engine::general_purpose::STANDARD.encode(d.as_bytes());
+            stream_write_all(&mut s, format!("{}\r\n", enc(&user)).as_bytes())?;
+            let (code, reply) = smtp_read_reply(&mut s)?;
+            if code != 334 {
+                return Err(format!("smtp auth failed ({code}): {reply}"));
+            }
+            stream_write_all(&mut s, format!("{}\r\n", enc(&pass)).as_bytes())?;
+            let (code, reply) = smtp_read_reply(&mut s)?;
+            if code != 235 {
+                return Err(format!("smtp auth rejected ({code}): {reply}"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "smtp_sendmail" => |args| {
+            let stream = session_socket(&args[0])?;
+            let from = arg_string(&args, 1)?;
+            let to = arg_string(&args, 2)?;
+            let msg = arg_string(&args, 3)?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("MAIL FROM:<{from}>\r\n").as_bytes())?;
+            let (code, reply) = smtp_read_reply(&mut s)?;
+            if code != 250 {
+                return Err(format!("smtp mail-from failed ({code}): {reply}"));
+            }
+            stream_write_all(&mut s, format!("RCPT TO:<{to}>\r\n").as_bytes())?;
+            let (code, reply) = smtp_read_reply(&mut s)?;
+            if code != 250 {
+                return Err(format!("smtp rcpt-to failed ({code}): {reply}"));
+            }
+            stream_write_all(&mut s, b"DATA\r\n")?;
+            let (code, reply) = smtp_read_reply(&mut s)?;
+            if code != 354 {
+                return Err(format!("smtp data failed ({code}): {reply}"));
+            }
+            let mut payload = msg.replace("\r\n.\r\n", "\r\n..\r\n");
+            if !payload.ends_with("\r\n") {
+                payload.push_str("\r\n");
+            }
+            if !payload.ends_with(".\r\n") {
+                payload.push_str(".\r\n");
+            }
+            stream_write_all(&mut s, payload.as_bytes())?;
+            let (code, reply) = smtp_read_reply(&mut s)?;
+            if code != 250 {
+                return Err(format!("smtp send failed ({code}): {reply}"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "smtp_quit" => |args| {
+            let stream = session_socket(&args[0])?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, b"QUIT\r\n")?;
+            smtp_read_reply(&mut s)?;
+            s.shutdown(std::net::Shutdown::Both).ok();
+            Ok(Value::Bool(true))
+        },
+        "smtp_message" => |args| {
+            let from = arg_string(&args, 0)?;
+            let to = arg_string(&args, 1)?;
+            let subject = arg_string(&args, 2)?;
+            let body = arg_string(&args, 3)?;
+            let mut msg = String::new();
+            msg.push_str(&format!("From: {from}\r\n"));
+            msg.push_str(&format!("To: {to}\r\n"));
+            msg.push_str(&format!("Subject: {subject}\r\n"));
+            msg.push_str("MIME-Version: 1.0\r\n");
+            msg.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+            msg.push_str("\r\n");
+            msg.push_str(&body);
+            Ok(Value::String(msg))
+        },
+        "pop3_connect" => |args| {
+            let host = arg_string(&args, 0)?;
+            let user = arg_string(&args, 1)?;
+            let pass = arg_string(&args, 2)?;
+            let port = match args.get(3) {
+                Some(Value::Number(n)) => *n as u16,
+                _ => 110,
+            };
+            let stream = TcpStream::connect((host.as_str(), port))
+                .map_err(|e| format!("pop3 connect {host}:{port}: {e}"))?;
+            let mut stream = stream;
+            let mut greeting = read_line(&mut stream)?;
+            if !greeting.starts_with("+OK") {
+                return Err(format!("pop3 greeting failed: {greeting}"));
+            }
+            stream_write_all(&mut stream, format!("USER {user}\r\n").as_bytes())?;
+            greeting = read_line(&mut stream)?;
+            if !greeting.starts_with("+OK") {
+                return Err(format!("pop3 user failed: {greeting}"));
+            }
+            stream_write_all(&mut stream, format!("PASS {pass}\r\n").as_bytes())?;
+            greeting = read_line(&mut stream)?;
+            if !greeting.starts_with("+OK") {
+                return Err(format!("pop3 login failed: {greeting}"));
+            }
+            let mut session = BTreeMap::new();
+            session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
+            session.insert("host".into(), Value::String(host));
+            Ok(Value::Dict(session))
+        },
+        "pop3_stat" => |args| {
+            let stream = session_socket(&args[0])?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, b"STAT\r\n")?;
+            let reply = read_line(&mut s)?;
+            if !reply.starts_with("+OK") {
+                return Err(format!("pop3 stat failed: {reply}"));
+            }
+            let parts: Vec<&str> = reply.split_whitespace().collect();
+            let count = parts.get(1).and_then(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
+            let size = parts.get(2).and_then(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
+            let mut out = BTreeMap::new();
+            out.insert("count".into(), Value::Number(count));
+            out.insert("size".into(), Value::Number(size));
+            Ok(Value::Dict(out))
+        },
+        "pop3_list" => |args| {
+            let stream = session_socket(&args[0])?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, b"LIST\r\n")?;
+            let mut items = Vec::new();
+            loop {
+                let line = read_line(&mut s)?;
+                if line == "." {
+                    break;
+                }
+                if !line.starts_with("+OK") {
+                    return Err(format!("pop3 list failed: {line}"));
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 && parts[0] != "+OK" {
+                    let id = parts[0].parse::<f64>().unwrap_or(0.0);
+                    let size = parts.get(1).and_then(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
+                    items.push(Value::List(vec![Value::Number(id), Value::Number(size)]));
+                }
+            }
+            Ok(Value::List(items))
+        },
+        "pop3_retr" => |args| {
+            let stream = session_socket(&args[0])?;
+            let n = arg_number(&args, 1)? as u64;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("RETR {n}\r\n").as_bytes())?;
+            let mut content = String::new();
+            loop {
+                let line = read_line(&mut s)?;
+                if line == "." {
+                    break;
+                }
+                if line.starts_with("-ERR") {
+                    return Err(format!("pop3 retr failed: {line}"));
+                }
+                if content.is_empty() && line.starts_with("+OK") {
+                    continue;
+                }
+                content.push_str(&line);
+                content.push('\n');
+            }
+            Ok(Value::String(content))
+        },
+        "pop3_dele" => |args| {
+            let stream = session_socket(&args[0])?;
+            let n = arg_number(&args, 1)? as u64;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, format!("DELE {n}\r\n").as_bytes())?;
+            let reply = read_line(&mut s)?;
+            if !reply.starts_with("+OK") {
+                return Err(format!("pop3 dele failed: {reply}"));
+            }
+            Ok(Value::Bool(true))
+        },
+        "pop3_quit" => |args| {
+            let stream = session_socket(&args[0])?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, b"QUIT\r\n")?;
+            read_line(&mut s)?;
+            s.shutdown(std::net::Shutdown::Both).ok();
+            Ok(Value::Bool(true))
+        },
+        "imap_connect" => |args| {
+            let host = arg_string(&args, 0)?;
+            let user = arg_string(&args, 1)?;
+            let pass = arg_string(&args, 2)?;
+            let port = match args.get(3) {
+                Some(Value::Number(n)) => *n as u16,
+                _ => 143,
+            };
+            let stream = TcpStream::connect((host.as_str(), port))
+                .map_err(|e| format!("imap connect {host}:{port}: {e}"))?;
+            let mut stream = stream;
+            let line = read_line(&mut stream)?;
+            if !line.contains("OK") {
+                return Err(format!("imap greeting failed: {line}"));
+            }
+            let mut tag = 1u32;
+            let resp = imap_command(&mut stream, &format!("a{tag}"), &format!("LOGIN {user} {pass}"))?;
+            let _ = resp;
+            tag += 1;
+            let mut session = BTreeMap::new();
+            session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
+            session.insert("host".into(), Value::String(host));
+            session.insert("tag".into(), Value::Number(tag as f64));
+            Ok(Value::Dict(session))
+        },
+        "imap_select" => |args| {
+            let stream = session_socket(&args[0])?;
+            let mailbox = arg_string(&args, 1)?;
+            let tag = match &args[0] {
+                Value::Dict(d) => match d.get("tag") {
+                    Some(Value::Number(n)) => *n as u32,
+                    _ => 2,
+                },
+                _ => 2,
+            };
+            let mut s = stream.lock().unwrap();
+            let tag_str = format!("a{tag}");
+            imap_command(&mut s, &tag_str, &format!("SELECT {mailbox}"))?;
+            Ok(Value::Bool(true))
+        },
+        "imap_search" => |args| {
+            let stream = session_socket(&args[0])?;
+            let criteria = match args.get(1) {
+                Some(Value::String(s)) => s.clone(),
+                _ => "ALL".into(),
+            };
+            let tag = match &args[0] {
+                Value::Dict(d) => match d.get("tag") {
+                    Some(Value::Number(n)) => *n as u32,
+                    _ => 3,
+                },
+                _ => 3,
+            };
+            let mut s = stream.lock().unwrap();
+            let tag_str = format!("a{tag}");
+            let resp = imap_command(&mut s, &tag_str, &format!("SEARCH {criteria}"))?;
+            let mut ids = Vec::new();
+            for line in resp.lines() {
+                if let Some(rest) = line.strip_prefix("* SEARCH") {
+                    for tok in rest.split_whitespace() {
+                        if let Ok(n) = tok.parse::<f64>() {
+                            ids.push(Value::Number(n));
+                        }
+                    }
+                }
+            }
+            Ok(Value::List(ids))
+        },
+        "imap_fetch" => |args| {
+            let stream = session_socket(&args[0])?;
+            let id = arg_number(&args, 1)? as u64;
+            let tag = match &args[0] {
+                Value::Dict(d) => match d.get("tag") {
+                    Some(Value::Number(n)) => *n as u32,
+                    _ => 4,
+                },
+                _ => 4,
+            };
+            let mut s = stream.lock().unwrap();
+            let tag_str = format!("a{tag}");
+            let resp = imap_command(&mut s, &tag_str, &format!("FETCH {id} (FLAGS BODY[])"))?;
+            let mut flags = Vec::new();
+            let body = String::new();
+            for line in resp.lines() {
+                if let Some(rest) = line.strip_prefix("*") {
+                    if rest.contains("FLAGS") {
+                        let start = rest.find("FLAGS").map(|i| i + 5).unwrap_or(0);
+                        let trimmed = rest[start..].trim_start_matches(|c: char| c == '(' || c == ' ' || c == ')');
+                        for f in trimmed.split_whitespace() {
+                            flags.push(Value::String(f.to_string()));
+                        }
+                    }
+                }
+            }
+            let mut out = BTreeMap::new();
+            out.insert("flags".into(), Value::List(flags));
+            out.insert("body".into(), Value::String(body));
+            Ok(Value::Dict(out))
+        },
+        "imap_list" => |args| {
+            let stream = session_socket(&args[0])?;
+            let tag = match &args[0] {
+                Value::Dict(d) => match d.get("tag") {
+                    Some(Value::Number(n)) => *n as u32,
+                    _ => 5,
+                },
+                _ => 5,
+            };
+            let mut s = stream.lock().unwrap();
+            let tag_str = format!("a{tag}");
+            let resp = imap_command(&mut s, &tag_str, "LIST \"\" *")?;
+            let mut boxes = Vec::new();
+            for line in resp.lines() {
+                if let Some(pos) = line.find("\"") {
+                    if let Some(q2) = line[pos + 1..].find("\"") {
+                        let name = line[pos + 1 + q2 + 1..].trim();
+                        let name = name.trim_matches('"');
+                        if !name.is_empty() {
+                            boxes.push(Value::String(name.to_string()));
+                        }
+                    }
+                }
+            }
+            Ok(Value::List(boxes))
+        },
+        "imap_logout" => |args| {
+            let stream = session_socket(&args[0])?;
+            let tag = match &args[0] {
+                Value::Dict(d) => match d.get("tag") {
+                    Some(Value::Number(n)) => *n as u32,
+                    _ => 6,
+                },
+                _ => 6,
+            };
+            let mut s = stream.lock().unwrap();
+            let tag_str = format!("a{tag}");
+            stream_write_all(&mut s, format!("{tag_str} LOGOUT\r\n").as_bytes())?;
+            let mut line = read_line(&mut s)?;
+            while !line.contains("BYE") && !line.is_empty() {
+                line = read_line(&mut s)?;
+            }
+            s.shutdown(std::net::Shutdown::Both).ok();
+            Ok(Value::Bool(true))
+        },
+        "telnet_connect" => |args| {
+            let host = arg_string(&args, 0)?;
+            let port = match args.get(1) {
+                Some(Value::Number(n)) => *n as u16,
+                _ => 23,
+            };
+            let stream = TcpStream::connect((host.as_str(), port))
+                .map_err(|e| format!("telnet connect {host}:{port}: {e}"))?;
+            let mut session = BTreeMap::new();
+            session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
+            session.insert("host".into(), Value::String(host));
+            Ok(Value::Dict(session))
+        },
+        "telnet_write" => |args| {
+            let stream = session_socket(&args[0])?;
+            let data = arg_string(&args, 1)?;
+            let mut s = stream.lock().unwrap();
+            stream_write_all(&mut s, data.as_bytes())?;
+            Ok(Value::Bool(true))
+        },
+        "telnet_read" => |args| {
+            let stream = session_socket(&args[0])?;
+            let size = match args.get(1) {
+                Some(Value::Number(n)) => *n as usize,
+                _ => 1024,
+            };
+            let mut s = stream.lock().unwrap();
+            let mut buf = vec![0u8; size];
+            let n = s.read(&mut buf).map_err(|e| format!("telnet read failed: {e}"))?;
+            let clean = strip_telnet_iac(&buf[..n]);
+            Ok(Value::String(String::from_utf8_lossy(&clean).into_owned()))
+        },
+        "telnet_read_until" => |args| {
+            let stream = session_socket(&args[0])?;
+            let marker = arg_string(&args, 1)?;
+            let mut s = stream.lock().unwrap();
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !String::from_utf8_lossy(&buf).ends_with(&marker) && buf.len() < 65536 {
+                if s.read(&mut byte).map_err(|e| format!("telnet read failed: {e}"))? == 0 {
+                    break;
+                }
+                buf.push(byte[0]);
+            }
+            let clean = strip_telnet_iac(&buf);
+            Ok(Value::String(String::from_utf8_lossy(&clean).into_owned()))
+        },
+        "telnet_close" => |args| {
+            let stream = session_socket(&args[0])?;
+            let s = stream.lock().unwrap();
+            s.shutdown(std::net::Shutdown::Both).ok();
+            Ok(Value::Bool(true))
+        },
+        "dns_resolve" => |args| {
+            let name = arg_string(&args, 0)?;
+            let records = dns_query_impl(&name, "A")?;
+            let mut ips = Vec::new();
+            for rec in records {
+                if let Value::Dict(d) = &rec {
+                    if let Some(Value::String(data)) = d.get("data") {
+                        if data.contains('.') {
+                            ips.push(Value::String(data.clone()));
+                        }
+                    }
+                }
+            }
+            Ok(Value::List(ips))
+        },
+        "dns_query" => |args| {
+            let name = arg_string(&args, 0)?;
+            let rtype = match args.get(1) {
+                Some(Value::String(s)) => s.clone(),
+                _ => "A".into(),
+            };
+            Ok(Value::List(dns_query_impl(&name, &rtype)?))
+        },
+        "ssh_run" => |args| {
+            let opts = arg_dict(&args, 0)?;
+            let command = arg_string(&args, 1)?;
+            let mut cmd = Command::new("ssh");
+            if let Some(Value::Number(p)) = opts.get("port") {
+                cmd.arg("-p").arg(format!("{}", *p as u64));
+            }
+            if let Some(Value::String(k)) = opts.get("key") {
+                cmd.arg("-i").arg(k);
+            }
+            if let Some(Value::String(o)) = opts.get("options") {
+                cmd.arg(o);
+            }
+            let user = match opts.get("user") {
+                Some(Value::String(u)) => u.clone(),
+                _ => "root".into(),
+            };
+            let host = match opts.get("host") {
+                Some(Value::String(h)) => h,
+                _ => return Err("ssh.run: opts needs host".into()),
+            };
+            cmd.arg(format!("{user}@{host}")).arg(&command);
+            if let Some(Value::Number(t)) = opts.get("timeout") {
+                cmd.env("CONNECT_TIMEOUT", format!("{}", *t as u64));
+            }
+            let output = cmd
+                .output()
+                .map_err(|e| format!("ssh: {e} (is the ssh binary installed?)"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "ssh command failed: {}\n{}",
+                    String::from_utf8_lossy(&output.stderr),
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+            }
+            Ok(Value::String(String::from_utf8_lossy(&output.stdout).into_owned()))
+        },
+        "ssh_upload" => |args| {
+            let opts = arg_dict(&args, 0)?;
+            let local = arg_string(&args, 1)?;
+            let remote = arg_string(&args, 2)?;
+            let mut cmd = Command::new("scp");
+            if let Some(Value::Number(p)) = opts.get("port") {
+                cmd.arg("-P").arg(format!("{}", *p as u64));
+            }
+            if let Some(Value::String(k)) = opts.get("key") {
+                cmd.arg("-i").arg(k);
+            }
+            let user = match opts.get("user") {
+                Some(Value::String(u)) => u.clone(),
+                _ => "root".into(),
+            };
+            let host = match opts.get("host") {
+                Some(Value::String(h)) => h,
+                _ => return Err("ssh.upload: opts needs host".into()),
+            };
+            cmd.arg(&local).arg(format!("{user}@{host}:{remote}"));
+            let output = cmd
+                .output()
+                .map_err(|e| format!("scp: {e} (is the scp binary installed?)"))?;
+            if !output.status.success() {
+                return Err(format!("scp failed: {}", String::from_utf8_lossy(&output.stderr)));
+            }
+            Ok(Value::Bool(true))
+        },
+        "ssh_download" => |args| {
+            let opts = arg_dict(&args, 0)?;
+            let remote = arg_string(&args, 1)?;
+            let local = arg_string(&args, 2)?;
+            let mut cmd = Command::new("scp");
+            if let Some(Value::Number(p)) = opts.get("port") {
+                cmd.arg("-P").arg(format!("{}", *p as u64));
+            }
+            if let Some(Value::String(k)) = opts.get("key") {
+                cmd.arg("-i").arg(k);
+            }
+            let user = match opts.get("user") {
+                Some(Value::String(u)) => u.clone(),
+                _ => "root".into(),
+            };
+            let host = match opts.get("host") {
+                Some(Value::String(h)) => h,
+                _ => return Err("ssh.download: opts needs host".into()),
+            };
+            cmd.arg(format!("{user}@{host}:{remote}")).arg(&local);
+            let output = cmd
+                .output()
+                .map_err(|e| format!("scp: {e} (is the scp binary installed?)"))?;
+            if !output.status.success() {
+                return Err(format!("scp failed: {}", String::from_utf8_lossy(&output.stderr)));
+            }
+            Ok(Value::Bool(true))
+        },
+        "ssh_available" => |_| {
+            let found = Command::new("ssh").arg("-V").output().is_ok();
+            Ok(Value::Bool(found))
+        },
+        "scapy_checksum" => |args| {
+            let data = arg_string(&args, 0)?;
+            Ok(Value::Number(internet_checksum(data.as_bytes()) as f64))
+        },
+        "scapy_ip" => |args| {
+            let mut layer = BTreeMap::new();
+            layer.insert("type".into(), Value::String("IP".into()));
+            if let Some(Value::String(s)) = args.first() {
+                layer.insert("src".into(), Value::String(s.clone()));
+            }
+            if let Some(Value::String(d)) = args.get(1) {
+                layer.insert("dst".into(), Value::String(d.clone()));
+            }
+            if let Some(Value::String(p)) = args.get(2) {
+                layer.insert("proto".into(), Value::String(p.clone()));
+            }
+            if let Some(Value::Dict(p)) = args.get(3) {
+                layer.insert("payload".into(), Value::Dict(p.clone()));
+            }
+            Ok(Value::Dict(layer))
+        },
+        "scapy_tcp" => |args| {
+            let mut layer = BTreeMap::new();
+            layer.insert("type".into(), Value::String("TCP".into()));
+            if let Some(Value::Number(s)) = args.get(0) {
+                layer.insert("sport".into(), Value::Number(*s));
+            }
+            if let Some(Value::Number(d)) = args.get(1) {
+                layer.insert("dport".into(), Value::Number(*d));
+            }
+            if let Some(Value::Dict(p)) = args.get(2) {
+                layer.insert("payload".into(), Value::Dict(p.clone()));
+            }
+            Ok(Value::Dict(layer))
+        },
+        "scapy_udp" => |args| {
+            let mut layer = BTreeMap::new();
+            layer.insert("type".into(), Value::String("UDP".into()));
+            if let Some(Value::Number(s)) = args.get(0) {
+                layer.insert("sport".into(), Value::Number(*s));
+            }
+            if let Some(Value::Number(d)) = args.get(1) {
+                layer.insert("dport".into(), Value::Number(*d));
+            }
+            if let Some(Value::Dict(p)) = args.get(2) {
+                layer.insert("payload".into(), Value::Dict(p.clone()));
+            }
+            Ok(Value::Dict(layer))
+        },
+        "scapy_icmp" => |args| {
+            let mut layer = BTreeMap::new();
+            layer.insert("type".into(), Value::String("ICMP".into()));
+            if let Some(Value::Number(t)) = args.get(0) {
+                layer.insert("icmp_type".into(), Value::Number(*t));
+            }
+            if let Some(Value::Number(c)) = args.get(1) {
+                layer.insert("icmp_code".into(), Value::Number(*c));
+            }
+            if let Some(Value::Dict(p)) = args.get(2) {
+                layer.insert("payload".into(), Value::Dict(p.clone()));
+            }
+            Ok(Value::Dict(layer))
+        },
+        "scapy_raw" => |args| {
+            let data = arg_string(&args, 0)?;
+            let mut layer = BTreeMap::new();
+            layer.insert("type".into(), Value::String("Raw".into()));
+            layer.insert("data".into(), Value::String(data));
+            Ok(Value::Dict(layer))
+        },
+        "scapy_build" => |args| {
+            let layer = arg_dict(&args, 0)?;
+            let bytes = layer_bytes(&layer)?;
+            Ok(Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+        },
+        "scapy_parse" => |args| {
+            let data = arg_string(&args, 0)?;
+            Ok(parse_packet(data.as_bytes()))
+        },
+        "scapy_send" => |args| {
+            let layer = arg_dict(&args, 0)?;
+            let bytes = layer_bytes(&layer)?;
+            raw_socket_send(&bytes)?;
+            Ok(Value::Bool(true))
+        },
+        "scapy_sniff" => |args| {
+            let count = match args.get(0) {
+                Some(Value::Number(n)) => *n as u32,
+                _ => 1,
+            };
+            let timeout = match args.get(1) {
+                Some(Value::Number(n)) => *n as u64,
+                _ => 5,
+            };
+            sniff_packets(count, timeout)
+        },
+        "scapy_ip_to_int" => |args| {
+            let ip = arg_string(&args, 0)?;
+            Ok(Value::Number(ip_str_to_u32(&ip)? as f64))
+        },
+        "scapy_int_to_ip" => |args| {
+            let n = arg_number(&args, 0)? as u32;
+            Ok(Value::String(u32_to_ip(n)))
+        },
+        "str_upper" => |args| Ok(Value::String(arg_string(&args, 0)?.to_uppercase())),
+        "str_lower" => |args| Ok(Value::String(arg_string(&args, 0)?.to_lowercase())),
+        "str_title" => |args| {
+            let s = arg_string(&args, 0)?;
+            let mut out = String::with_capacity(s.len());
+            let mut prev = ' ';
+            for c in s.chars() {
+                if prev.is_whitespace() {
+                    out.extend(c.to_uppercase());
+                } else {
+                    out.extend(c.to_lowercase());
+                }
+                prev = c;
+            }
+            Ok(Value::String(out))
+        },
+        "str_capitalize" => |args| {
+            let s = arg_string(&args, 0)?;
+            let mut out = String::with_capacity(s.len());
+            for (i, c) in s.chars().enumerate() {
+                if i == 0 {
+                    out.extend(c.to_uppercase());
+                } else {
+                    out.extend(c.to_lowercase());
+                }
+            }
+            Ok(Value::String(out))
+        },
+        "str_swapcase" => |args| {
+            let s = arg_string(&args, 0)?;
+            let mut out = String::with_capacity(s.len());
+            for c in s.chars() {
+                if c.is_uppercase() {
+                    out.extend(c.to_lowercase());
+                } else if c.is_lowercase() {
+                    out.extend(c.to_uppercase());
+                } else {
+                    out.push(c);
+                }
+            }
+            Ok(Value::String(out))
+        },
+        "str_strip" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::String(s.trim().to_string()))
+        },
+        "str_lstrip" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::String(s.trim_start().to_string()))
+        },
+        "str_rstrip" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::String(s.trim_end().to_string()))
+        },
+        "str_split" => |args| {
+            let s = arg_string(&args, 0)?;
+            let sep = match args.get(1) {
+                Some(Value::String(sep)) => sep.clone(),
+                _ => " ".into(),
+            };
+            let parts: Vec<Value> = if sep.is_empty() {
+                s.chars().map(|c| Value::String(c.to_string())).collect()
+            } else {
+                s.split(&sep).map(|p| Value::String(p.to_string())).collect()
+            };
+            Ok(Value::List(parts))
+        },
+        "str_splitlines" => |args| {
+            let s = arg_string(&args, 0)?;
+            let parts: Vec<Value> = s
+                .lines()
+                .map(|l| Value::String(l.to_string()))
+                .collect();
+            Ok(Value::List(parts))
+        },
+        "str_join" => |args| {
+            let sep = arg_string(&args, 0)?;
+            let list = arg_list(&args, 1)?;
+            let parts: Vec<String> = list
+                .iter()
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .collect();
+            Ok(Value::String(parts.join(&sep)))
+        },
+        "str_replace" => |args| {
+            let s = arg_string(&args, 0)?;
+            let old = arg_string(&args, 1)?;
+            let new = arg_string(&args, 2)?;
+            Ok(Value::String(s.replace(&old, &new)))
+        },
+        "str_count" => |args| {
+            let s = arg_string(&args, 0)?;
+            let sub = arg_string(&args, 1)?;
+            let mut count = 0usize;
+            let mut rest = s.as_str();
+            while let Some(pos) = rest.find(&sub) {
+                count += 1;
+                rest = &rest[pos + sub.len()..];
+            }
+            Ok(Value::Number(count as f64))
+        },
+        "str_find" => |args| {
+            let s = arg_string(&args, 0)?;
+            let sub = arg_string(&args, 1)?;
+            match s.find(&sub) {
+                Some(i) => Ok(Value::Number(i as f64)),
+                None => Ok(Value::Number(-1.0)),
+            }
+        },
+        "str_rfind" => |args| {
+            let s = arg_string(&args, 0)?;
+            let sub = arg_string(&args, 1)?;
+            match s.rfind(&sub) {
+                Some(i) => Ok(Value::Number(i as f64)),
+                None => Ok(Value::Number(-1.0)),
+            }
+        },
+        "str_startswith" => |args| {
+            let s = arg_string(&args, 0)?;
+            let prefix = arg_string(&args, 1)?;
+            Ok(Value::Bool(s.starts_with(&prefix)))
+        },
+        "str_endswith" => |args| {
+            let s = arg_string(&args, 0)?;
+            let suffix = arg_string(&args, 1)?;
+            Ok(Value::Bool(s.ends_with(&suffix)))
+        },
+        "str_contains" => |args| {
+            let s = arg_string(&args, 0)?;
+            let sub = arg_string(&args, 1)?;
+            Ok(Value::Bool(s.contains(&sub)))
+        },
+        "str_ljust" => |args| {
+            let s = arg_string(&args, 0)?;
+            let width = arg_number(&args, 1)? as usize;
+            let fill = match args.get(2) {
+                Some(Value::String(f)) if !f.is_empty() => f.chars().next().unwrap(),
+                _ => ' ',
+            };
+            let mut out = s.clone();
+            while out.len() < width {
+                out.push(fill);
+            }
+            Ok(Value::String(out))
+        },
+        "str_rjust" => |args| {
+            let s = arg_string(&args, 0)?;
+            let width = arg_number(&args, 1)? as usize;
+            let fill = match args.get(2) {
+                Some(Value::String(f)) if !f.is_empty() => f.chars().next().unwrap(),
+                _ => ' ',
+            };
+            let mut out = String::new();
+            while out.len() + s.len() < width {
+                out.push(fill);
+            }
+            out.push_str(&s);
+            Ok(Value::String(out))
+        },
+        "str_center" => |args| {
+            let s = arg_string(&args, 0)?;
+            let width = arg_number(&args, 1)? as usize;
+            let fill = match args.get(2) {
+                Some(Value::String(f)) if !f.is_empty() => f.chars().next().unwrap(),
+                _ => ' ',
+            };
+            if s.len() >= width {
+                return Ok(Value::String(s));
+            }
+            let total = width - s.len();
+            let left = total / 2;
+            let right = total - left;
+            let mut out = String::new();
+            for _ in 0..left {
+                out.push(fill);
+            }
+            out.push_str(&s);
+            for _ in 0..right {
+                out.push(fill);
+            }
+            Ok(Value::String(out))
+        },
+        "str_zfill" => |args| {
+            let s = arg_string(&args, 0)?;
+            let width = arg_number(&args, 1)? as usize;
+            let sign = if s.starts_with('-') || s.starts_with('+') {
+                Some(s.as_bytes()[0] as char)
+            } else {
+                None
+            };
+            let body = if sign.is_some() { &s[1..] } else { &s[..] };
+            let mut out = String::new();
+            if let Some(sig) = sign {
+                out.push(sig);
+            }
+            while out.len() + body.len() < width {
+                out.push('0');
+            }
+            out.push_str(body);
+            Ok(Value::String(out))
+        },
+        "str_repeat" => |args| {
+            let s = arg_string(&args, 0)?;
+            let n = arg_number(&args, 1)? as usize;
+            Ok(Value::String(s.repeat(n)))
+        },
+        "str_isdigit" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit())))
+        },
+        "str_isalpha" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphabetic())))
+        },
+        "str_isalnum" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphanumeric())))
+        },
+        "str_isspace" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_whitespace())))
+        },
+        "str_islower" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::Bool(
+                !s.is_empty() && s.chars().any(|c| c.is_lowercase()) && !s.chars().any(|c| c.is_uppercase()),
+            ))
+        },
+        "str_isupper" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::Bool(
+                !s.is_empty() && s.chars().any(|c| c.is_uppercase()) && !s.chars().any(|c| c.is_lowercase()),
+            ))
+        },
+        "subprocess_run" => |args| {
+            let cmd_arg = args.first().cloned().ok_or("subprocess.run: missing command")?;
+            let (cmd, argv) = match &cmd_arg {
+                Value::String(s) => (s.clone(), None),
+                Value::List(l) => {
+                    let mut parts = Vec::new();
+                    for v in l {
+                        parts.push(match v {
+                            Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        });
+                    }
+                    if parts.is_empty() {
+                        return Err("subprocess.run: empty command list".into());
+                    }
+                    (parts.remove(0), Some(parts))
+                }
+                _ => return Err("subprocess.run: command must be a string or list".into()),
+            };
+            let mut command = Command::new(&cmd);
+            if let Some(argv) = &argv {
+                command.args(argv);
+            }
+            if let Some(cwd) = args.get(1).and_then(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                Value::Dict(d) => match d.get("cwd") {
+                    Some(Value::String(s)) => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }) {
+                command.current_dir(cwd);
+            }
+            let output = command
+                .output()
+                .map_err(|e| format!("subprocess.run {cmd}: {e}"))?;
+            let mut result = BTreeMap::new();
+            result.insert("ok".into(), Value::Bool(output.status.success()));
+            result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
+            result.insert(
+                "stdout".into(),
+                Value::String(String::from_utf8_lossy(&output.stdout).into_owned()),
+            );
+            result.insert(
+                "stderr".into(),
+                Value::String(String::from_utf8_lossy(&output.stderr).into_owned()),
+            );
+            Ok(Value::Dict(result))
+        },
+        "subprocess_call" => |args| {
+            let cmd_arg = args.first().cloned().ok_or("subprocess.call: missing command")?;
+            let (cmd, argv) = match &cmd_arg {
+                Value::String(s) => (s.clone(), None),
+                Value::List(l) => {
+                    let mut parts: Vec<String> = l
+                        .iter()
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        })
+                        .collect();
+                    if parts.is_empty() {
+                        return Err("subprocess.call: empty command list".into());
+                    }
+                    (parts.remove(0), Some(parts))
+                }
+                _ => return Err("subprocess.call: command must be a string or list".into()),
+            };
+            let mut command = Command::new(&cmd);
+            if let Some(argv) = &argv {
+                command.args(argv);
+            }
+            let status = command
+                .status()
+                .map_err(|e| format!("subprocess.call {cmd}: {e}"))?;
+            Ok(Value::Number(status.code().unwrap_or(-1) as f64))
+        },
+        "subprocess_check_output" => |args| {
+            let cmd_arg = args.first().cloned().ok_or("subprocess.check_output: missing command")?;
+            let (cmd, argv) = match &cmd_arg {
+                Value::String(s) => (s.clone(), None),
+                Value::List(l) => {
+                    let mut parts: Vec<String> = l
+                        .iter()
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        })
+                        .collect();
+                    if parts.is_empty() {
+                        return Err("subprocess.check_output: empty command list".into());
+                    }
+                    (parts.remove(0), Some(parts))
+                }
+                _ => return Err("subprocess.check_output: command must be a string or list".into()),
+            };
+            let mut command = Command::new(&cmd);
+            if let Some(argv) = &argv {
+                command.args(argv);
+            }
+            let output = command
+                .output()
+                .map_err(|e| format!("subprocess.check_output {cmd}: {e}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "subprocess.check_output: {cmd} failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            Ok(Value::String(String::from_utf8_lossy(&output.stdout).into_owned()))
+        },
+        "struct_pack" => |args| {
+            let fmt = arg_string(&args, 0)?;
+            let values = &args[1..];
+            pack_impl(&fmt, values)
+        },
+        "struct_unpack" => |args| {
+            let fmt = arg_string(&args, 0)?;
+            let data = arg_string(&args, 1)?;
+            unpack_impl(&fmt, data.as_bytes())
+        },
+        "struct_calcsize" => |args| {
+            let fmt = arg_string(&args, 0)?;
+            Ok(Value::Number(struct_size_of(&fmt)? as f64))
+        },
+        "hashlib_new" => |args| {
+            let algo = arg_string(&args, 0)?.to_lowercase();
+            let data = match args.get(1) {
+                Some(Value::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let digest = match algo.as_str() {
+                "md5" => crypto_digest(&data, "md5"),
+                "sha1" => crypto_digest(&data, "sha1"),
+                "sha224" => crypto_digest(&data, "sha224"),
+                "sha256" => crypto_digest(&data, "sha256"),
+                "sha384" => crypto_digest(&data, "sha384"),
+                "sha512" => crypto_digest(&data, "sha512"),
+                "sha3_256" => crypto_digest(&data, "sha3_256"),
+                "sha3_512" => crypto_digest(&data, "sha3_512"),
+                "blake2b" => crypto_digest(&data, "blake2b"),
+                "blake2s" => crypto_digest(&data, "blake2s"),
+                _ => return Err(format!("hashlib.new: unknown algorithm {algo}")),
+            };
+            Ok(Value::Dict(BTreeMap::from([
+                ("hexdigest".into(), Value::String(digest)),
+                ("name".into(), Value::String(algo)),
+            ])))
+        },
+        "shutil_copy" => |args| {
+            let src = arg_string(&args, 0)?;
+            let dst = arg_string(&args, 1)?;
+            fs::copy(&src, &dst).map_err(|e| format!("shutil.copy: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "shutil_copy2" => |args| {
+            let src = arg_string(&args, 0)?;
+            let dst = arg_string(&args, 1)?;
+            fs::copy(&src, &dst).map_err(|e| format!("shutil.copy2: {e}"))?;
+            let metadata = fs::metadata(&src).map_err(|e| format!("shutil.copy2: {e}"))?;
+            fs::set_permissions(&dst, metadata.permissions())
+                .map_err(|e| format!("shutil.copy2: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "shutil_move" => |args| {
+            let src = arg_string(&args, 0)?;
+            let dst = arg_string(&args, 1)?;
+            fs::rename(&src, &dst).or_else(|_| {
+                fs::copy(&src, &dst)?;
+                fs::remove_file(&src)
+            })
+            .map_err(|e| format!("shutil.move: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "shutil_rmtree" => |args| {
+            let path = arg_string(&args, 0)?;
+            if fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) {
+                fs::remove_dir_all(&path).map_err(|e| format!("shutil.rmtree: {e}"))?;
+            } else if fs::metadata(&path).is_ok() {
+                fs::remove_file(&path).map_err(|e| format!("shutil.rmtree: {e}"))?;
+            }
+            Ok(Value::Bool(true))
+        },
+        "shutil_copytree" => |args| {
+            let src = arg_string(&args, 0)?;
+            let dst = arg_string(&args, 1)?;
+            fs::create_dir_all(&dst).map_err(|e| format!("shutil.copytree: {e}"))?;
+            copy_dir_recursive(Path::new(&src), Path::new(&dst))
+                .map_err(|e| format!("shutil.copytree: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "shutil_which" => |args| {
+            let name = arg_string(&args, 0)?;
+            let path_env = env::var("PATH").unwrap_or_default();
+            for dir in env::split_paths(&path_env) {
+                let candidate = dir.join(&name);
+                if candidate.is_file() {
+                    return Ok(Value::String(candidate.to_string_lossy().into_owned()));
+                }
+            }
+            Ok(Value::Null)
+        },
+        "shutil_disk_usage" => |args| {
+            let path = arg_string(&args, 0)?;
+            #[cfg(unix)]
+            {
+                use std::mem::MaybeUninit;
+                let mut stat = MaybeUninit::<libc::statvfs>::uninit();
+                let c_path = std::ffi::CString::new(path.clone())
+                    .map_err(|_| "shutil.disk_usage: invalid path".to_string())?;
+                if unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+                    return Err(format!(
+                        "shutil.disk_usage: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                let stat = unsafe { stat.assume_init() };
+                let bsize = stat.f_frsize as f64;
+                let total = stat.f_blocks as f64 * bsize;
+                let free = stat.f_bfree as f64 * bsize;
+                let used = total - stat.f_bfree as f64 * bsize;
+                let mut out = BTreeMap::new();
+                out.insert("total".into(), Value::Number(total));
+                out.insert("used".into(), Value::Number(used));
+                out.insert("free".into(), Value::Number(free));
+                return Ok(Value::Dict(out));
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = path;
+                Err("shutil.disk_usage: not supported on this platform".into())
+            }
+        },
+        "pathlib_join" => |args| {
+            let mut path = PathBuf::new();
+            for v in args {
+                match v {
+                    Value::String(s) => path.push(s),
+                    _ => return Err("pathlib.join: arguments must be strings".into()),
+                }
+            }
+            Ok(Value::String(path.to_string_lossy().into_owned()))
+        },
+        "pathlib_name" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            Ok(Value::String(
+                p.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ))
+        },
+        "pathlib_parent" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            Ok(Value::String(
+                p.parent()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ))
+        },
+        "pathlib_stem" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            Ok(Value::String(
+                p.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ))
+        },
+        "pathlib_suffix" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            Ok(Value::String(
+                p.extension()
+                    .map(|s| format!(".{}", s.to_string_lossy()))
+                    .unwrap_or_default(),
+            ))
+        },
+        "pathlib_suffixes" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            let name = p
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let mut suffixes = Vec::new();
+            let mut rest = name.as_str();
+            while let Some(pos) = rest.rfind('.') {
+                if pos == 0 {
+                    break;
+                }
+                suffixes.insert(0, Value::String(rest[pos..].to_string()));
+                rest = &rest[..pos];
+            }
+            Ok(Value::List(suffixes))
+        },
+        "pathlib_is_absolute" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            Ok(Value::Bool(p.is_absolute()))
+        },
+        "pathlib_resolve" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            let resolved = fs::canonicalize(p).map_err(|e| format!("pathlib.resolve: {e}"))?;
+            Ok(Value::String(resolved.to_string_lossy().into_owned()))
+        },
+        "pathlib_absolute" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            let abs = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                env::current_dir()
+                    .map_err(|e| format!("pathlib.absolute: {e}"))?
+                    .join(p)
+            };
+            Ok(Value::String(abs.to_string_lossy().into_owned()))
+        },
+        "pathlib_exists" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            Ok(Value::Bool(p.exists()))
+        },
+        "pathlib_is_file" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            Ok(Value::Bool(p.is_file()))
+        },
+        "pathlib_is_dir" => |args| {
+            let s = arg_string(&args, 0)?;
+            let p = Path::new(&s);
+            Ok(Value::Bool(p.is_dir()))
+        },
+        "pathlib_glob" => |args| {
+            let pattern = arg_string(&args, 0)?;
+            let path = Path::new(&pattern);
+            let dir = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
+            let name = path.file_name().and_then(|f| f.to_str()).unwrap_or("*");
+            let mut results = Vec::new();
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name().to_string_lossy().into_owned();
+                    if simple_glob(name, &file_name) {
+                        results.push(Value::String(
+                            if dir == "." {
+                                file_name
+                            } else {
+                                format!("{dir}/{file_name}")
+                            },
+                        ));
+                    }
+                }
+            }
+            Ok(Value::List(results))
+        },
+        "pathlib_touch" => |args| {
+            let path = arg_string(&args, 0)?;
+            let now = SystemTime::now();
+            match fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&path)
+                .and_then(|f| f.set_modified(now))
+            {
+                Ok(_) => Ok(Value::Bool(true)),
+                Err(e) => Err(format!("pathlib.touch: {e}")),
+            }
+        },
+        "pathlib_mkdir" => |args| {
+            let path = arg_string(&args, 0)?;
+            let parents = matches!(args.get(1), Some(Value::Bool(true)));
+            if parents {
+                fs::create_dir_all(&path).map_err(|e| format!("pathlib.mkdir: {e}"))?;
+            } else {
+                fs::create_dir(&path).map_err(|e| format!("pathlib.mkdir: {e}"))?;
+            }
+            Ok(Value::Bool(true))
+        },
+        "pathlib_rmdir" => |args| {
+            let path = arg_string(&args, 0)?;
+            fs::remove_dir(&path).map_err(|e| format!("pathlib.rmdir: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "pathlib_unlink" => |args| {
+            let path = arg_string(&args, 0)?;
+            fs::remove_file(&path).map_err(|e| format!("pathlib.unlink: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "pathlib_rename" => |args| {
+            let src = arg_string(&args, 0)?;
+            let dst = arg_string(&args, 1)?;
+            fs::rename(&src, &dst).map_err(|e| format!("pathlib.rename: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "pathlib_read_text" => |args| {
+            let path = arg_string(&args, 0)?;
+            fs::read_to_string(&path).map(Value::String).map_err(|e| format!("pathlib.read_text: {e}"))
+        },
+        "pathlib_write_text" => |args| {
+            let path = arg_string(&args, 0)?;
+            let content = arg_string(&args, 1)?;
+            fs::write(&path, content).map_err(|e| format!("pathlib.write_text: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "urllib_urlopen" => |args| {
+            let url = arg_string(&args, 0)?;
+            let resp = http_request_impl(&[Value::String(url)], "GET")?;
+            Ok(resp)
+        },
+        "urllib_quote" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::String(url_quote(&s)))
+        },
+        "urllib_unquote" => |args| {
+            let s = arg_string(&args, 0)?;
+            Ok(Value::String(url_unquote(&s)))
+        },
+        "urllib_urlencode" => |args| {
+            let d = arg_dict(&args, 0)?;
+            let mut parts = Vec::new();
+            for (k, v) in d {
+                parts.push(format!("{}={}", url_quote(&k), url_quote(&v.to_string())));
+            }
+            Ok(Value::String(parts.join("&")))
+        },
+        "urllib_parse" => |args| {
+            let url = arg_string(&args, 0)?;
+            let mut out = BTreeMap::new();
+            let rest = match url.find("://") {
+                Some(i) => {
+                    out.insert("scheme".into(), Value::String(url[..i].to_string()));
+                    &url[i + 3..]
+                }
+                None => url.as_str(),
+            };
+            let (host_part, path_part) = match rest.find('/') {
+                Some(i) => (&rest[..i], &rest[i..]),
+                None => (rest, ""),
+            };
+            let (host, port) = match host_part.rfind(':') {
+                Some(i) if host_part[i + 1..].chars().all(|c| c.is_ascii_digit()) => (
+                    host_part[..i].to_string(),
+                    host_part[i + 1..].parse::<f64>().unwrap_or(0.0),
+                ),
+                _ => (host_part.to_string(), 0.0),
+            };
+            out.insert("host".into(), Value::String(host));
+            if port > 0.0 {
+                out.insert("port".into(), Value::Number(port));
+            }
+            let (path, query) = match path_part.find('?') {
+                Some(i) => (&path_part[..i], &path_part[i + 1..]),
+                None => (path_part, ""),
+            };
+            out.insert("path".into(), Value::String(path.to_string()));
+            if !query.is_empty() {
+                out.insert("query".into(), Value::String(query.to_string()));
+            }
+            Ok(Value::Dict(out))
+        },
+        "urllib_parse_qs" => |args| {
+            let query = arg_string(&args, 0)?;
+            let mut out = BTreeMap::new();
+            for pair in query.split('&') {
+                if pair.is_empty() {
+                    continue;
+                }
+                let (k, v) = match pair.find('=') {
+                    Some(i) => (&pair[..i], &pair[i + 1..]),
+                    None => (pair, ""),
+                };
+                out.entry(url_unquote(k))
+                    .and_modify(|e| {
+                        if let Value::List(l) = e {
+                            l.push(Value::String(url_unquote(v)));
+                        }
+                    })
+                    .or_insert_with(|| {
+                        Value::List(vec![Value::String(url_unquote(v))])
+                    });
+            }
+            Ok(Value::Dict(out))
+        },
+        "collections_counter" => |args| {
+            let items = arg_list(&args, 0)?;
+            let mut counts = BTreeMap::new();
+            for item in items {
+                let key = item.to_string();
+                let entry = counts.entry(key).or_insert(0.0);
+                *entry += 1.0;
+            }
+            let mut out = BTreeMap::new();
+            for (k, v) in counts {
+                out.insert(k, Value::Number(v));
+            }
+            Ok(Value::Dict(out))
+        },
+        "collections_chain" => |args| {
+            let mut out = Vec::new();
+            for arg in args {
+                if let Value::List(l) = arg {
+                    out.extend(l.iter().cloned());
+                } else {
+                    out.push(arg.clone());
+                }
+            }
+            Ok(Value::List(out))
+        },
+        "collections_flatten" => |args| {
+            let list = arg_list(&args, 0)?;
+            let mut out = Vec::new();
+            flatten_list(&list, &mut out);
+            Ok(Value::List(out))
+        },
+        "itertools_enumerate" => |args| {
+            let list = arg_list(&args, 0)?;
+            let mut out = Vec::new();
+            for (i, item) in list.into_iter().enumerate() {
+                out.push(Value::List(vec![Value::Number(i as f64), item]));
+            }
+            Ok(Value::List(out))
+        },
+        "itertools_zip" => |args| {
+            let a = arg_list(&args, 0)?;
+            let b = arg_list(&args, 1)?;
+            let mut out = Vec::new();
+            let n = a.len().min(b.len());
+            for i in 0..n {
+                out.push(Value::List(vec![a[i].clone(), b[i].clone()]));
+            }
+            Ok(Value::List(out))
+        },
+        "itertools_chain" => |args| {
+            let mut out = Vec::new();
+            for arg in args {
+                if let Value::List(l) = arg {
+                    out.extend(l.iter().cloned());
+                }
+            }
+            Ok(Value::List(out))
+        },
+        "itertools_repeat" => |args| {
+            let value = args.first().cloned().ok_or("itertools.repeat: missing value")?;
+            let n = match args.get(1) {
+                Some(Value::Number(x)) => *x as usize,
+                _ => return Err("itertools.repeat: needs a count".into()),
+            };
+            Ok(Value::List(vec![value; n]))
+        },
+        "itertools_product" => |args| {
+            let a = arg_list(&args, 0)?;
+            let b = arg_list(&args, 1)?;
+            let mut out = Vec::new();
+            for x in &a {
+                for y in &b {
+                    out.push(Value::List(vec![x.clone(), y.clone()]));
+                }
+            }
+            Ok(Value::List(out))
+        },
+        "itertools_permutations" => |args| {
+            let list = arg_list(&args, 0)?;
+            let r = match args.get(1) {
+                Some(Value::Number(n)) => *n as usize,
+                _ => list.len(),
+            };
+            let mut out = Vec::new();
+            permutations(&list, r, &mut vec![], &mut vec![false; list.len()], &mut out);
+            Ok(Value::List(out))
+        },
+        "itertools_combinations" => |args| {
+            let list = arg_list(&args, 0)?;
+            let r = arg_number(&args, 1)? as usize;
+            let mut out = Vec::new();
+            combinations(&list, r, 0, &mut vec![], &mut out);
+            Ok(Value::List(out))
+        },
+        "itertools_accumulate" => |args| {
+            let list = arg_list(&args, 0)?;
+            let mut out = Vec::new();
+            let mut acc = 0.0;
+            for item in &list {
+                match item {
+                    Value::Number(n) => acc += n,
+                    other => {
+                        if let Value::String(s) = other {
+                            if let Ok(n) = s.parse::<f64>() {
+                                acc += n;
+                            }
+                        }
+                    }
+                }
+                out.push(Value::Number(acc));
+            }
+            Ok(Value::List(out))
+        },
+        "itertools_take" => |args| {
+            let n = arg_number(&args, 0)? as usize;
+            let list = arg_list(&args, 1)?;
+            Ok(Value::List(list.into_iter().take(n).collect()))
+        },
+        "itertools_drop" => |args| {
+            let n = arg_number(&args, 0)? as usize;
+            let list = arg_list(&args, 1)?;
+            Ok(Value::List(list.into_iter().skip(n).collect()))
+        },
+        "itertools_range" => |args| {
+            let start = match args.first() {
+                Some(Value::Number(n)) => *n,
+                _ => 0.0,
+            };
+            let stop = match args.get(1) {
+                Some(Value::Number(n)) => *n,
+                _ => start,
+            };
+            let step = match args.get(2) {
+                Some(Value::Number(n)) => *n,
+                _ => 1.0,
+            };
+            if step == 0.0 {
+                return Err("itertools.range: step cannot be 0".into());
+            }
+            let real_start = if args.len() >= 2 { start } else { 0.0 };
+            let real_stop = if args.len() >= 2 { stop } else { start };
+            let mut out = Vec::new();
+            let mut i = real_start;
+            if step > 0.0 {
+                while i < real_stop {
+                    out.push(Value::Number(i));
+                    i += step;
+                }
+            } else {
+                while i > real_stop {
+                    out.push(Value::Number(i));
+                    i += step;
+                }
+            }
+            Ok(Value::List(out))
+        },
+        "tempfile_dir" => |_| {
+            Ok(Value::String(env::temp_dir().to_string_lossy().into_owned()))
+        },
+        "tempfile_mkdtemp" => |args| {
+            let prefix = match args.first() {
+                Some(Value::String(s)) => s.clone(),
+                _ => "zen".into(),
+            };
+            let dir = env::temp_dir().join(format!("{prefix}{}", rand::random::<u64>()));
+            fs::create_dir_all(&dir).map_err(|e| format!("tempfile.mkdtemp: {e}"))?;
+            Ok(Value::String(dir.to_string_lossy().into_owned()))
+        },
+        "tempfile_mkstemp" => |args| {
+            let prefix = match args.first() {
+                Some(Value::String(s)) => s.clone(),
+                _ => "zen".into(),
+            };
+            let path = env::temp_dir().join(format!("{prefix}{}", rand::random::<u64>()));
+            fs::write(&path, "").map_err(|e| format!("tempfile.mkstemp: {e}"))?;
+            Ok(Value::String(path.to_string_lossy().into_owned()))
+        },
+        "binascii_hexlify" => |args| Ok(Value::String(hexlify(arg_string(&args, 0)?.as_bytes()))),
+        "binascii_unhexlify" => |args| {
+            let hex = arg_string(&args, 0)?;
+            if hex.len() % 2 != 0 {
+                return Err("binascii.unhexlify: odd-length string".into());
+            }
+            let mut out = Vec::with_capacity(hex.len() / 2);
+            for i in (0..hex.len()).step_by(2) {
+                let b = u8::from_str_radix(&hex[i..i + 2], 16)
+                    .map_err(|_| "binascii.unhexlify: non-hex character".to_string())?;
+                out.push(b);
+            }
+            Ok(Value::String(String::from_utf8_lossy(&out).into_owned()))
+        },
+        "binascii_a2b_base64" => |args| {
+            use base64::Engine;
+            let s = arg_string(&args, 0)?;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(s.trim())
+                .map_err(|e| format!("binascii.a2b_base64: {e}"))?;
+            Ok(Value::String(String::from_utf8_lossy(&decoded).into_owned()))
+        },
+        "binascii_b2a_base64" => |args| {
+            use base64::Engine;
+            let s = arg_string(&args, 0)?;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
+            Ok(Value::String(encoded))
+        },
         _ => |_| Ok(Value::String("Native Call".into())),
     }
 }

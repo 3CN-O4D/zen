@@ -971,6 +971,255 @@ Average: 70.33333333333333
 
 ---
 
+## Standard Modules
+
+Zen ships with a comprehensive set of built-in modules — no `import` needed for most, they're available directly as globals.
+
+### string — text helpers and constants
+
+```zen
+print string.upper("hello")        // HELLO
+print string.split("a,b,c", ",")   // [a, b, c]
+print string.join(" ", ["one", "two"])  // one two
+print string.replace("foo bar", "foo", "baz")  // baz bar
+print string.count("banana", "na")  // 2
+print string.startswith("hello", "hel")  // true
+print string.zfill("42", 8)         // 00000042
+print string.center("hi", 10, "-")  // ----hi----
+print string.isdigit("123")         // true
+print string.ascii_letters          // abcdef...
+print string.punctuation            // !"#$%...
+```
+
+### subprocess — run external commands
+
+```zen
+let r = subprocess.run(["ls", "-la"], null)
+print "exit code:", r.code
+print "stdout:", r.stdout
+
+let r2 = subprocess.run("echo hello", null)
+print r2.stdout
+
+let code = subprocess.call(["grep", "-r", "fn", "."])
+```
+
+### hashlib — cryptographic hashing
+
+```zen
+print hashlib.sha256("hello")
+print hashlib.md5("test data")
+print hashlib.create("sha256", "data").hexdigest
+print hashlib.algorithms_available
+```
+
+### struct — binary data packing/unpacking
+
+```zen
+let packed = struct.pack(">HHL", 1, 2, 3)
+let [a, b, c] = struct.unpack(">HHL", packed)
+print struct.calcsize(">HHL")  // 12
+
+let packed2 = struct.pack(">4sI", "test", 42)
+let [name, id] = struct.unpack(">4sI", packed2)
+```
+
+### collections — data structures
+
+```zen
+print collections.Counter(["a", "b", "a", "c", "a"])  // {a: 3, b: 1, c: 1}
+print collections.chain([1, 2], [3, 4])  // [1, 2, 3, 4]
+print collections.flatten([[1, 2], [3, [4, 5]]])  // [1, 2, 3, 4, 5]
+```
+
+### itertools — iterators
+
+```zen
+print itertools.range(5)                    // [0, 1, 2, 3, 4]
+print itertools.range(10, 0, -2)           // [10, 8, 6, 4, 2]
+print itertools.enumerate(["a", "b"])       // [[0, a], [1, b]]
+print itertools.zip([1, 2], ["a", "b"])     // [[1, a], [2, b]]
+print itertools.product([1, 2], ["a", "b"]) // [[1,a],[1,b],[2,a],[2,b]]
+print itertools.combinations([1,2,3,4], 2)  // [[1,2],[1,3],...,[3,4]]
+print itertools.permutations([1,2,3], 2)
+print itertools.accumulate([1,2,3,4])       // [1, 3, 6, 10]
+print itertools.take(3, itertools.range(10)) // [0, 1, 2]
+print itertools.drop(7, itertools.range(10)) // [7, 8, 9]
+print itertools.repeat("x", 4)              // [x, x, x, x]
+```
+
+### pathlib — file path helpers
+
+```zen
+print pathlib.name("/home/user/file.txt")    // file.txt
+print pathlib.parent("/home/user/file.txt")  // /home/user
+print pathlib.stem("/home/user/file.tar.gz") // file.tar
+print pathlib.suffix("/home/user/file.tar.gz") // .gz
+print pathlib.join("/home", "user", "file.txt")
+print pathlib.is_absolute("/home/user")      // true
+print pathlib.exists("/etc/hostname")        // true
+print pathlib.resolve("relative/path")
+```
+
+### shutil — high-level file operations
+
+```zen
+shutil.copy("src.txt", "dst.txt")
+shutil.move("old.txt", "new.txt")
+shutil.rmtree("/tmp/mydir")
+print shutil.which("ls")  // /usr/bin/ls
+let du = shutil.disk_usage("/")
+print "total:", du.total, "free:", du.free
+```
+
+### urllib — URL handling
+
+```zen
+print urllib.parse("https://example.com:8080/path?q=1")
+print urllib.quote("hello world&foo=bar")
+print urllib.unquote("hello%20world")
+print urllib.urlencode({"name": "zen", "ver": "1"})
+print urllib.parse_qs("a=1&b=2&a=3")  // {a: [1, 3], b: [2]}
+
+let resp = urllib.urlopen("https://example.com")
+print resp.status, resp.json()
+```
+
+### tempfile — temporary files/dirs
+
+```zen
+print tempfile.dir()                        // /tmp
+let d = tempfile.mkdtemp("zen_")           // /tmp/zen_123456
+let f = tempfile.mkstemp("test_")          // /tmp/test_789012
+```
+
+### binascii — binary/ASCII encoding
+
+```zen
+print binascii.hexlify("hello")           // 68656c6c6f
+print binascii.unhexlify("68656c6c6f")   // hello
+print binascii.b2a_base64("hello")       // aGVsbG8=
+print binascii.a2b_base64("aGVsbG8=")    // hello
+```
+
+### glob — file pattern matching
+
+```zen
+let files = glob.glob("*.z")
+print files
+```
+
+---
+
+## Network Protocol Modules
+
+### ftp — pure-Rust FTP client
+
+```zen
+let session = ftp.connect("ftp.example.com", 21)
+ftp.login(session, "user", "pass")
+let pwd = ftp.pwd(session)
+let files = ftp.nlist(session)
+ftp.cwd(session, "/pub")
+let data = ftp.retr(session, "README.txt")
+ftp.stor(session, "upload.txt", "file content")
+ftp.dele(session, "old.txt")
+ftp.mkdir(session, "newdir")
+ftp.rename(session, "old.txt", "new.txt")
+ftp.quit(session)
+```
+
+### smtp — pure-Rust SMTP client
+
+```zen
+let session = smtp.connect("smtp.example.com", 25)
+smtp.login(session, "user@example.com", "password")
+let msg = smtp.message("sender@example.com", "dest@example.com", "Subject", "Body text")
+smtp.sendmail(session, "sender@example.com", "dest@example.com", msg)
+smtp.quit(session)
+```
+
+### pop3 — pure-Rust POP3 client
+
+```zen
+let session = pop3.connect("pop.example.com", "user", "pass")
+let stat = pop3.stat(session)
+print stat.count, stat.size
+let messages = pop3.list(session)
+let body = pop3.retr(session, 1)
+pop3.dele(session, 1)
+pop3.quit(session)
+```
+
+### imap — pure-Rust IMAP client
+
+```zen
+let session = imap.connect("imap.example.com", "user", "pass")
+imap.select(session, "INBOX")
+let ids = imap.search(session, "ALL")
+let msg = imap.fetch(session, 1)
+print msg.flags, msg.body
+imap.logout(session)
+```
+
+### telnet — pure-Rust telnet client
+
+```zen
+let session = telnet.connect("example.com", 23)
+telnet.write(session, "ls\n")
+let output = telnet.read_until(session, "prompt>")
+telnet.close(session)
+```
+
+### dns — DNS resolver
+
+```zen
+let ips = dns.resolve("example.com")
+print ips
+
+let records = dns.query("example.com", "MX")
+for rec in records {
+    print rec.type, rec.data, rec.ttl
+}
+```
+
+### ssh — system SSH/SCP wrapper
+
+```zen
+print ssh.available()  // true/false
+
+let opts = {"host": "192.168.1.1", "user": "root", "port": 22}
+let output = ssh.run(opts, "uname -a")
+print output
+
+ssh.upload(opts, "/local/file.txt", "/remote/file.txt")
+ssh.download(opts, "/remote/file.txt", "/local/file.txt")
+```
+
+### scapy — packet crafting and sniffing
+
+```zen
+// Build a TCP SYN packet
+let pkt = scapy.ip("10.0.0.1", "10.0.0.2", "TCP", scapy.tcp(12345, 80, 0x02))
+let bytes = scapy.build(pkt)
+print "packet length:", bytes.length
+
+// Parse raw bytes
+let parsed = scapy.parse(raw_bytes)
+print parsed.src, parsed.dst
+
+// Utilities
+print scapy.ip_to_int("192.168.1.1")  // 3232235777
+print scapy.int_to_ip(3232235777)     // 192.168.1.1
+print scapy.checksum("test data")     // checksum value
+
+// Send (requires root)
+// scapy.send(pkt)
+// let pkts = scapy.sniff(5, 10)  // count, timeout
+```
+
+---
+
 ## Where to go next
 
 - [reference.md](./reference.md) — the complete, compact language reference.
