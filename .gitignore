@@ -1,28 +1,31 @@
+# Build artifacts
+/target/
+dist/
+build/
+*.pyz
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python (legacy)
 venv/
 __pycache__/
 *.pyc
 *.pyo
-zen.egg-info/
-*.egg-info/
-dist/
-build/
-zen.pyz
-.vote/
+
+# Local data
 *.log
-zen/lib/node_modules/
-zen/lib/package-lock.json
-*.pdf
-*.csv
-*.json
-*.png
-*.jpg
-*.bin
-*.txt
-zen/target/
 wa_auth/
 betika_data/
 test_img_dir/
 test_zen_dir/
 moi_pdfs/
 monalisa_images/
-zen/dist/

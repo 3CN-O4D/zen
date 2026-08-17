@@ -1,6 +1,24 @@
-# WhatsApp (wa)
+# WhatsApp (wa) Module
 
-The `wa` module provides a full WhatsApp client using the [Baileys](https://github.com/WhiskeySockets/Baileys) library (unofficial WhatsApp Web API). Requires **Node.js** to run the bridge process.
+Complete reference for WhatsApp integration using the Baileys library (unofficial WhatsApp Web API). Requires **Node.js** for the bridge process.
+
+## Quick Start
+
+```
+// Connect and send a message
+load wa
+conn = wa.connect()
+
+// QR code prints in terminal — scan with WhatsApp
+// (Linked Devices → Link a Device)
+
+conn.on_connected = function(data) {
+    print "Connected as: " + data.jid
+    conn.send("1234567890@s.whatsapp.net", "Hello from Zen!")
+}
+```
+
+---
 
 ## Loading
 
@@ -10,45 +28,35 @@ load wa
 
 This adds `wa.connect` (function) and `wa.Connection` (class) to your scope.
 
-## Quick Start
-
-```
-load wa
-conn = wa.connect("wa_auth")
-
-// QR code will print as ASCII art in the terminal
-// Scan it with WhatsApp (Linked Devices → Link a Device)
-
-conn.on_connected = function(data) {
-    print "Connected as: " + data.jid
-}
-
-conn.on_message = function(msg) {
-    print "From: " + msg.from
-    print "Text: " + msg.text
-}
-```
+---
 
 ## Authentication
 
-Credentials are saved to the `wa_auth/` directory (or the path you pass to `wa.connect()`). On subsequent connections, the saved session is reused automatically — no QR scan needed.
+### QR Code Login (default)
 
-### QR Display
+Credentials are saved to the `wa_auth/` directory (or path you pass to `wa.connect()`). On subsequent connections, the saved session is reused automatically — no QR scan needed.
 
-The QR code prints as ASCII art directly to your terminal when a new login is required. You can also handle it programmatically:
+```
+conn = wa.connect("wa_auth")
+// QR code prints in terminal
+// Scan with WhatsApp (Linked Devices → Link a Device)
+```
+
+### Handle QR Programmatically
 
 ```
 conn = wa.connect()
+
 conn.on_qr = function(data) {
-    print "QR data: " + data.qr   // base64 string
+    print "QR data: " + data.qr    // base64 string
 }
 ```
 
 Even if you set `on_qr` after connecting, the last QR is replayed to your callback. Use `conn.get_last_qr()` to retrieve it at any time, and `conn.clear_last_qr()` to clear the stored QR.
 
-### Pairing Code Auth
+### Pairing Code Auth (no QR)
 
-Instead of a QR code, you can authenticate by entering your phone number:
+Instead of a QR code, authenticate by entering your phone number:
 
 ```
 conn = wa.connect()
@@ -56,7 +64,7 @@ let code = conn.request_pairing_code("254712345678")
 print "Enter this code in WhatsApp: " + code
 ```
 
-Open WhatsApp → Linked Devices → Link a Device → Pair with code.
+Then open WhatsApp → Linked Devices → Link a Device → Pair with code.
 
 ### Encrypted Session Export
 
@@ -76,26 +84,41 @@ conn.import_auth("my-password", "wa_auth", fs.read("wa_session.enc"))
 ### Logging Out
 
 ```
-conn.logout()        // invalidate saved credentials
+conn.logout()    // invalidates saved credentials
 ```
 
 After logout (or if credentials expire), a new QR will be printed on the next connection.
 
-## Connection
+---
+
+## Connection Management
 
 | Method | Description |
 |--------|-------------|
-| `wa.connect(auth_dir?)` | Start connection, returns a Connection object |
+| `wa.connect(auth_dir?)` | Start connection, returns Connection object |
 | `conn.disconnect()` | Disconnect and kill the bridge process |
 | `conn.logout()` | Log out (invalidates saved credentials) |
-| `conn.get_last_qr()` | Get the last QR code (base64 string or null) |
+| `conn.get_last_qr()` | Get last QR code (base64 string or null) |
 | `conn.clear_last_qr()` | Clear stored QR |
-| `conn.request_pairing_code(phone)` | Get pairing code for phone number auth |
+| `conn.request_pairing_code(phone)` | Get pairing code for phone auth |
 | `conn.connection_state()` | Get state: `idle`, `connecting`, `awaiting_qr`, `connected`, `disconnected`, `dead` |
 | `conn.export_auth(password?, auth_dir?)` | Export encrypted auth blob |
 | `conn.import_auth(password?, auth_dir?, payload)` | Restore auth from encrypted blob |
 
-## Messaging
+### Check connection state
+
+```
+let state = conn.connection_state()
+print state    // "connected"
+
+if state != "connected" {
+    print "Not connected yet"
+}
+```
+
+---
+
+## Sending Messages
 
 JIDs are WhatsApp identifiers: `{number}@s.whatsapp.net` for users, `{id}@g.us` for groups.
 
@@ -118,7 +141,59 @@ JIDs are WhatsApp identifiers: `{number}@s.whatsapp.net` for users, `{id}@g.us` 
 | `conn.star_message(jid, msg_id, starred?)` | Star/unstar a message |
 | `conn.load_messages(jid, count?, cursor?, msg_id?)` | Fetch message history |
 
-## Groups
+### Basic text message
+
+```
+conn.send("1234567890@s.whatsapp.net", "Hello!")
+```
+
+### Send image with caption
+
+```
+conn.send_image("1234567890@s.whatsapp.net", "/path/to/photo.jpg", "Check this out!")
+```
+
+### Send poll
+
+```
+let options = ["Option A", "Option B", "Option C"]
+conn.send_poll("1234567890@s.whatsapp.net", "Vote for your favorite:", options)
+```
+
+### Reply to a message
+
+```
+conn.on_message = function(msg) {
+    if msg.text == "help" {
+        conn.send_reply(msg.from, "Sure! How can I help?", msg.id)
+    }
+}
+```
+
+### React to a message
+
+```
+conn.send_reaction(msg.from, msg.id, "👍")
+```
+
+### Forward a message
+
+```
+conn.forward_message("0987654321@s.whatsapp.net", msg.from, msg.id)
+```
+
+### Load message history
+
+```
+let msgs = conn.load_messages("1234567890@s.whatsapp.net", 20)
+for msg in msgs {
+    print "[" + msg.key.remoteJid + "] " + (msg.message?.conversation || "[media]")
+}
+```
+
+---
+
+## Group Management
 
 All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 
@@ -130,7 +205,7 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.group_promote(group, participant)` | Promote to admin |
 | `conn.group_demote(group, participant)` | Demote from admin |
 | `conn.group_leave(group)` | Leave group |
-| `conn.group_info(group)` | Get metadata (name, desc, participants, etc.) |
+| `conn.group_info(group)` | Get metadata (name, desc, participants) |
 | `conn.group_invite_code(group)` | Get invite link code |
 | `conn.group_revoke_invite(group)` | Revoke invite link |
 | `conn.group_accept_invite(code)` | Join via invite code |
@@ -148,6 +223,45 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.group_toggle_ephemeral(group, duration?)` | Set disappearing messages (seconds, 0=off) |
 | `conn.group_fetch_all()` | List all joined groups |
 
+### Create a group
+
+```
+let participants = [
+    "1234567890@s.whatsapp.net",
+    "0987654321@s.whatsapp.net"
+]
+let group = conn.group_create("Study Group", participants)
+print "Group created: " + group
+```
+
+### Manage group settings
+
+```
+conn.group_set_description(group, "Welcome to the study group!")
+conn.group_set_subject(group, "New Group Name")
+conn.group_lock(group)    // only admins can send
+```
+
+### List all groups
+
+```
+let groups = conn.group_fetch_all()
+for g in groups {
+    print g.subject + " (" + g.id + ")"
+}
+```
+
+### Get group info
+
+```
+let info = conn.group_info(group)
+print "Name: " + info.subject
+print "Description: " + info.desc
+print "Participants: " + str(info.participants.len)
+```
+
+---
+
 ## Status / Stories
 
 | Method | Description |
@@ -156,6 +270,13 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.send_status_image(path, caption?)` | Post image status |
 | `conn.send_status_video(path, caption?)` | Post video status |
 | `conn.fetch_status(*jids)` | Fetch statuses of contacts |
+
+```
+conn.send_status_text("Good morning! ☀️")
+conn.send_status_image("/path/to/photo.jpg", "Beautiful sunset")
+```
+
+---
 
 ## Contacts
 
@@ -169,6 +290,28 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.add_contact(jid, name?)` | Add/save a contact |
 | `conn.remove_contact(jid)` | Remove a contact |
 
+### Check if number is on WhatsApp
+
+```
+let result = conn.on_whatsapp("1234567890")
+if result.exists {
+    print "Number is on WhatsApp"
+} else {
+    print "Number not found"
+}
+```
+
+### List contacts
+
+```
+let contacts = conn.contacts()
+for c in contacts {
+    print c.name + ": " + c.jid
+}
+```
+
+---
+
 ## Profile
 
 | Method | Description |
@@ -178,6 +321,14 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.set_profile_picture(jid, path)` | Set profile/group picture |
 | `conn.remove_profile_picture(jid?)` | Remove profile picture |
 | `conn.profile_picture(jid, type?)` | Get profile picture URL |
+
+```
+conn.set_name("My Zen Bot")
+conn.set_status("Powered by Zen 🚀")
+conn.set_profile_picture("1234567890@s.whatsapp.net", "/path/to/pic.jpg")
+```
+
+---
 
 ## Chat Operations
 
@@ -194,6 +345,14 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.chat_clear(jid)` | Clear chat messages |
 | `conn.chat_delete(jid)` | Delete chat |
 
+```
+conn.chat_mute("1234567890@s.whatsapp.net")
+conn.chat_pin("1234567890@s.whatsapp.net")
+conn.chat_mark_read("1234567890@s.whatsapp.net")
+```
+
+---
+
 ## Presence
 
 | Method | Description |
@@ -201,6 +360,14 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.presence(status?)` | Set online status (`available` / `unavailable`) |
 | `conn.typing(jid)` | Show typing indicator in chat |
 | `conn.recording(jid)` | Show recording indicator in chat |
+
+```
+conn.typing("1234567890@s.whatsapp.net")
+// ... compose message ...
+conn.send("1234567890@s.whatsapp.net", "Here's my reply!")
+```
+
+---
 
 ## Privacy
 
@@ -216,6 +383,14 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.set_messages_privacy(value)` | Same values |
 | `conn.set_call_privacy(value)` | Same values |
 | `conn.set_link_previews(enabled?)` | Enable/disable link previews |
+
+```
+conn.set_last_seen_privacy("contacts")
+conn.set_read_receipts_privacy("none")
+conn.set_online_privacy("contacts")
+```
+
+---
 
 ## Newsletters (Channels)
 
@@ -241,35 +416,59 @@ All group methods take a group JID (e.g. `1234567890-123456@g.us`).
 | `conn.newsletter_update(jid, updates)` | Update channel settings |
 | `conn.newsletter_subscribe_updates(jids)` | Subscribe to newsletter updates |
 
+### Create and manage a channel
+
+```
+let channel = conn.newsletter_create("My Channel", "News and updates")
+conn.newsletter_follow(channel)
+
+let metadata = conn.newsletter_metadata(channel)
+print "Subscribers: " + str(metadata.subscribers_count)
+```
+
+---
+
 ## Callbacks
 
 Set callbacks to react to events:
 
 ```
 conn.on_qr = function(data) {
-    // data.qr — base64 QR string
+    print "QR: " + data.qr
 }
+
 conn.on_connected = function(data) {
-    // data.jid — own phone JID
+    print "Connected: " + data.jid
 }
+
 conn.on_disconnected = function(data) {
-    // data.reason — disconnect reason code
+    print "Disconnected: " + str(data.reason)
 }
+
 conn.on_message = function(msg) {
-    // msg.from — sender JID
-    // msg.id — message ID
-    // msg.text — message text
-    // msg.sender — participant (groups)
-    // msg.type — content type
+    print "From: " + msg.from
+    print "Text: " + msg.text
+    print "Type: " + msg.type
 }
+
 conn.on_presence = function(data) {
-    // data.jid — contact JID
-    // data.status — "online" / "offline" / "composing"
+    print data.jid + " is " + data.status
 }
 ```
 
-You can also use `conn.on("event_name", callback)` or shorthand dot-assignment:
-`conn.on_qr = callback` is equivalent to `conn.on("qr", callback)`.
+You can also use `conn.on("event_name", callback)` or shorthand dot-assignment: `conn.on_qr = callback` is equivalent to `conn.on("qr", callback)`.
+
+### Available events
+
+| Event | Data Fields |
+|-------|-------------|
+| `qr` | `qr` (base64 string) |
+| `connected` | `jid` (own phone JID) |
+| `disconnected` | `reason` (disconnect reason code) |
+| `message` | `from`, `id`, `text`, `sender`, `type`, `message` |
+| `presence` | `jid`, `status` (`online`/`offline`/`composing`) |
+
+---
 
 ## Business
 
@@ -277,6 +476,8 @@ You can also use `conn.on("event_name", callback)` or shorthand dot-assignment:
 |--------|-------------|
 | `conn.business_profile(jid)` | Get business profile info |
 | `conn.user()` | Get own user info |
+
+---
 
 ## Error Handling
 
@@ -289,6 +490,8 @@ try {
     print "Send failed: " + err
 }
 ```
+
+---
 
 ## Examples
 
@@ -312,10 +515,12 @@ print "Bot running. Press Ctrl+C to stop."
 ```
 load wa
 conn = wa.connect("wa_auth")
+
 let group = conn.group_create("Study Group", ["254712345678@s.whatsapp.net"])
 print "Group created: " + group
+
 conn.group_set_description(group, "Welcome to the study group!")
-conn.group_lock(group)  // only admins can send
+conn.group_lock(group)    // only admins can send
 ```
 
 ### Broadcast Status Update
@@ -323,17 +528,99 @@ conn.group_lock(group)  // only admins can send
 ```
 load wa
 conn = wa.connect()
+
 conn.send_status_text("Good morning, Zen community! ☀️")
 conn.send_status_image("/path/to/photo.jpg", "Beautiful sunrise today")
 ```
 
-### Fetch Message History
+### Message Logger
 
 ```
 load wa
 conn = wa.connect()
-let msgs = conn.load_messages("254712345678@s.whatsapp.net", 20)
-for msg in msgs {
-    print "[" + msg.key.remoteJid + "] " + (msg.message?.conversation || "[media]")
+
+conn.on_message = function(msg) {
+    let entry = datetime.now() + " | " + msg.from + " | " + msg.text
+    fs.append("whatsapp_log.txt", entry + "\n")
+}
+
+print "Logging messages..."
+```
+
+### Auto-Responder with Keywords
+
+```
+load wa
+conn = wa.connect()
+
+conn.on_message = function(msg) {
+    let text = msg.text.lower()
+
+    if text == "help" {
+        conn.send(msg.from, "Available commands: help, status, time")
+    } else if text == "status" {
+        conn.send(msg.from, "All systems operational ✅")
+    } else if text == "time" {
+        conn.send(msg.from, "Current time: " + datetime.now())
+    }
 }
 ```
+
+---
+
+## Pro Tips
+
+1. **Use pairing code for headless setups.** No QR scanning needed on remote servers.
+2. **Export encrypted sessions.** `export_auth()` saves credentials securely.
+3. **Handle reconnection.** Set `on_disconnected` to reconnect automatically.
+4. **Use `try/catch` for send operations.** Network errors are common.
+5. **Don't spam messages.** WhatsApp may ban your number for excessive sending.
+
+---
+
+## Common Mistakes
+
+### Wrong JID format
+
+```
+// WRONG — missing @s.whatsapp.net
+conn.send("1234567890", "Hello")
+
+// CORRECT
+conn.send("1234567890@s.whatsapp.net", "Hello")
+```
+
+### Not waiting for connection
+
+```
+// WRONG — connection might not be ready
+conn.send("1234567890@s.whatsapp.net", "Hello")
+
+// CORRECT — wait for connected event
+conn.on_connected = function(data) {
+    conn.send("1234567890@s.whatsapp.net", "Hello")
+}
+```
+
+### Sending too fast
+
+```
+// BAD — may trigger rate limits
+for i in 1 -> 100 {
+    conn.send("1234567890@s.whatsapp.net", "Message " + str(i))
+}
+
+// GOOD — add delays
+for i in 1 -> 100 {
+    conn.send("1234567890@s.whatsapp.net", "Message " + str(i))
+    sleep(1)    // 1 second between messages
+}
+```
+
+---
+
+## See Also
+
+- [Module Overview](overview.md) — All available modules
+- [HTTP Module](http.md) — Web requests
+- [os Module](overview.md) — Process and environment info

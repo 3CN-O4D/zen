@@ -1,44 +1,68 @@
-# Zen - Native Rust Runtime
+# Zen
 
-A ground-up Rust rewrite of the Zen scripting language, providing a native runtime with **zero Python dependency**.
+A native scripting language with a Rust runtime. Zero Python dependency.
 
 ## Quick Start
 
-Install the native Zen binary:
+```bash
+# Clone
+git clone https://github.com/3CN-O4D/zen
+cd zen
 
-# Quick auto-installer (recommended)
-curl -fsSL https://raw.githubusercontent.com/3CN-O4D/zen/main/install.sh | bash
+# Build and install
+./scripts/install.sh
 
-# Or manually download from the Releases page
-
-Verify the installation:
-```
+# Verify
 zen --version
-```
-
-Run your first script:
-```
 zen -e 'print "Hello, Zen World!"'
 ```
 
-## Documentation Structure
-
-- [Tutorial - Learn Zen from Zero](zen/docs/language/tutorial.md) - Wordy, example-packed guide to how Zen works
-- [Language Reference](zen/docs/language/reference.md) - Syntax, variables, types, control flow, functions, classes
-- [CLI Reference](zen/docs/cli.md) - Commands (`run`, `check`, `lint`, `repl`, `pm`, `-h`/`--help`)
-- [Modules](zen/docs/) - File system (`fs`), Data (JSON, CSV, regex, random, math), System (OS, time, datetime, crypto, HTTP, browser)
-- [Installation Guide](zen/docs/install.md) - Quick installer, pre-compiled binaries, from source
-
-## Build From Source
+## Manual Build
 
 ```bash
-# Clone the repository
-git clone https://github.com/3CN-O4D/zen
-cd zen/zen
-
-# Build an optimized release executable
 cargo build --release
-
-# Run verification
 ./target/release/zen --help
 ```
+
+## Cross-Compile
+
+```bash
+./scripts/build.sh --target aarch64-unknown-linux-gnu
+```
+
+## Editor Setup
+
+Auto-detects installed editors and configures Zen syntax:
+
+```bash
+./scripts/setup-editors.sh
+```
+
+Supported: Vim, Neovim, VS Code, Helix, Sublime Text, Emacs, Nano, Micro, Kate, Gedit, plus Bash/Zsh completions.
+
+## Documentation
+
+| Section | Description |
+|---------|-------------|
+| [Tutorial](zen/docs/language/tutorial.md) | Learn Zen from zero |
+| [Language Reference](zen/docs/language/reference.md) | Syntax, types, control flow |
+| [CLI Reference](zen/docs/cli.md) | Commands and options |
+| [Modules](docs/modules/overview.md) | Built-in module API |
+| [Installation](zen/docs/install.md) | All install methods |
+
+## Project Structure
+
+```
+zen/
+  Cargo.toml          Rust crate configuration
+  src/                Runtime source (Rust)
+  std/                Standard library (.z files)
+  editors/            Syntax files for all editors
+  scripts/            Build, install, and setup scripts
+  docs/               Documentation (MkDocs)
+  examples/           Example scripts
+```
+
+## License
+
+MIT

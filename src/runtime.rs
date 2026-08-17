@@ -61,6 +61,49 @@ fn annotate_line(src_line: &str, col: usize, line_num: usize) -> String {
     out
 }
 
+/// Render a multi-line error snippet with Rust-style formatting.
+/// Shows `context_lines` of source around the error line, with a colored
+/// underline pointing at `col`.
+fn render_context(
+    source_lines: &[String],
+    error_line: usize,
+    col: usize,
+    context_lines: usize,
+) -> String {
+    let mut out = String::new();
+    if source_lines.is_empty() || error_line == 0 {
+        return out;
+    }
+    let err_idx = error_line.saturating_sub(1);
+    let total = source_lines.len();
+    let start = err_idx.saturating_sub(context_lines);
+    let end = (err_idx + context_lines + 1).min(total);
+    let width = format!("{}", end).len();
+    let gutter = |n: usize| -> String { format!("{:>width$} |", n + 1, width = width) };
+
+    for i in start..end {
+        let src_line = source_lines[i].trim_end();
+        if src_line.is_empty() {
+            continue;
+        }
+        if i == err_idx {
+            out.push_str(&format!(" {} {}\n", gutter(i), src_line));
+            let trimmed_len = src_line.chars().count();
+            let arrow_col = col.saturating_sub(1).min(trimmed_len);
+            let underline = "\x1b[1;31m".to_string() + &"~".repeat(1.max(trimmed_len - arrow_col)) + "\x1b[0m";
+            out.push_str(&format!(
+                " {} {}\x1b[1;31m{}\x1b[0m\n",
+                " ".repeat(width),
+                " ".repeat(arrow_col),
+                format!("^{}", "~".repeat((trimmed_len - arrow_col).saturating_sub(1).max(0)))
+            ));
+        } else {
+            out.push_str(&format!(" {} {}\n", gutter(i), src_line));
+        }
+    }
+    out
+}
+
 type InstanceRef = Arc<Mutex<Instance>>;
 
 use hmac::Mac as HmacMac;
@@ -358,7 +401,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             }
             if !closed {
                 return Err(format!(
-                    "{}:{}: unterminated block comment",
+                    "{}:{}: unterminated block comment\n  \x1b[1;33m= help:\x1b[0m add `*/` to close the comment block",
                     start.0, start.1
                 ));
             }
@@ -436,9 +479,10 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         expr_col += 1;
                     }
                     if depth != 0 {
-                        return Err(format!(
-                            "{expr_line}:{expr_col}: unterminated interpolation expression"
-                        ));
+                return Err(format!(
+                    "{}:{}: unterminated interpolation expression\n  \x1b[1;33m= help:\x1b[0m add a closing `}}` to complete the interpolation\n  \x1b[1;33m= note:\x1b[0m  interpolation syntax: `\"${{expr}}\"` or `\"${{name + 1}}\"`",
+                    expr_line, expr_col
+                ));
                     }
                     let expr_source = source[expr_start..i].to_string();
                     parts.push(InterpPart::Expr(expr_source));
@@ -456,7 +500,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 }
             }
             if !closed {
-                return Err(format!("{}:{}: unterminated string", start.0, start.1));
+                return Err(format!("{}:{}: unterminated string literal\n  \x1b[1;33m= help:\x1b[0m add a matching quote to close the string", start.0, start.1));
             }
             if !parts.is_empty() {
                 if !text.is_empty() {
@@ -770,7 +814,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 '|' => Kind::Pipe,
                 '^' => Kind::Caret,
                 '~' => Kind::Tilde,
-                _ => return Err(format!("{}:{}: unexpected character {c:?}", line, col)),
+                _ => return Err(format!("{}:{}: unexpected character {c:?}\n  \x1b[1;33m= help:\x1b[0m Zen does not recognize `{c}` in this context\n  \x1b[1;33m= note:\x1b[0m  if you meant to use this in a string, wrap it in quotes", line, col)),
             },
         };
         out.push(Token { kind, line, col });
@@ -897,12 +941,29 @@ impl Parser {
         if self.take(kind.clone()) {
             Ok(())
         } else {
-            Err(format!(
-                "{}:{}: expected {:?}",
-                self.current().line,
-                self.current().col,
-                kind
-            ))
+            let found = format!("{:?}", self.current().kind);
+            let expected = format!("{:?}", kind);
+            let hint = match &kind {
+                Kind::LBrace => "add `{` to start a block",
+                Kind::RBrace => "add `}` to close the block",
+                Kind::LParen => "add `(` to start arguments",
+                Kind::RParen => "add `)` to close the parentheses",
+                Kind::LBracket => "add `[` to start indexing",
+                Kind::RBracket => "add `]` to close the bracket",
+                Kind::Colon => "add `:` here",
+                Kind::Comma => "add `,` to separate items",
+                Kind::In => "add `in` keyword here",
+                Kind::Assign => "use `=` for assignment",
+                _ => "",
+            };
+            let mut msg = format!(
+                "{}:{}: expected {}, found {}",
+                self.current().line, self.current().col, expected, found
+            );
+            if !hint.is_empty() {
+                msg.push_str(&format!("\n  \x1b[1;33m= help:\x1b[0m {}", hint));
+            }
+            Err(msg)
         }
     }
     fn separators(&mut self) {
@@ -1859,12 +1920,22 @@ impl Parser {
                     }
                     Ok(Expr::Dict(entries))
                 }
-            other => Err(format!(
-                "{}:{}: expected expression, found {:?}",
-                self.current().line,
-                self.current().col,
-                other
-            )),
+            other => {
+                let found = format!("{:?}", other);
+                let mut msg = format!(
+                    "{}:{}: expected expression, found {}",
+                    self.current().line, self.current().col, found
+                );
+                match other {
+                    Kind::RBrace => msg.push_str("\n  \x1b[1;33m= help:\x1b[0m the block is already closed; remove the extra `}`"),
+                    Kind::RParen => msg.push_str("\n  \x1b[1;33m= help:\x1b[0m the parentheses are already closed; remove the extra `)`"),
+                    Kind::RBracket => msg.push_str("\n  \x1b[1;33m= help:\x1b[0m the bracket is already closed; remove the extra `]`"),
+                    Kind::Eof => msg.push_str("\n  \x1b[1;33m= help:\x1b[0m the file ended unexpectedly; check for missing closing braces or parentheses"),
+                    Kind::Newline => msg.push_str("\n  \x1b[1;33m= help:\x1b[0m expressions cannot span multiple lines without a continuation"),
+                    _ => {}
+                }
+                Err(msg)
+            }
         }
     }
 }
@@ -3202,9 +3273,9 @@ self.vars.insert("re".into(), re);
                     let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
                     candidates.extend(self.functions.keys().map(|s| s.as_str()));
                     let hint = suggest_name(n, &candidates, 3)
-                        .map(|s| format!("\nnote: did you mean `{}`?", s))
-                        .unwrap_or_default();
-                    format!("undefined variable: `{}`{}", n, hint)
+                        .map(|s| format!("\n  \x1b[1;33m= help:\x1b[0m a variable named `{}` is in scope\n  \x1b[1;33m= help:\x1b[0m did you mean `{}` instead of `{}`?", s, s, n))
+                        .unwrap_or_else(|| format!("\n  \x1b[1;33m= note:\x1b[0m  `{n}` has not been defined yet. Use `let {n} = ...` to declare it."));
+                    format!("undefined variable: `{n}`{hint}")
                 }),
             Expr::List(items) => {
                 let mut list = Vec::new();
@@ -3320,9 +3391,9 @@ self.vars.insert("re".into(), re);
                         let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
                         candidates.extend(self.functions.keys().map(|s| s.as_str()));
                         let hint = suggest_name(name, &candidates, 3)
-                            .map(|s| format!("\nnote: did you mean `{}`?", s))
-                            .unwrap_or_default();
-                        format!("undefined variable: `{}`{}", name, hint)
+                            .map(|s| format!("\n  \x1b[1;33m= help:\x1b[0m did you mean `{s}` instead of `{name}`?"))
+                            .unwrap_or_else(|| format!("\n  \x1b[1;33m= note:\x1b[0m  `{name}` has not been defined yet"));
+                        format!("undefined variable: `{name}`{hint}")
                     })?
                 else {
                     return Err("increment/decrement requires a number".into());
@@ -3473,7 +3544,7 @@ self.vars.insert("re".into(), re);
             }
             Expr::New(class_name, args) => {
                 if !self.classes.contains_key(class_name) {
-                    return Err(format!("undefined class: {class_name}"));
+                    return Err(format!("undefined class: {class_name}\n  \x1b[1;33m= help:\x1b[0m check that the class is defined before using `new`\n  \x1b[1;33m= help:\x1b[0m class definitions must appear before the `new` statement"));
                 }
                 let values = args
                     .iter()
@@ -3942,9 +4013,9 @@ self.vars.insert("re".into(), re);
                     let at = a.type_name();
                     let bt = b.type_name();
                     let hint = if (at == "string" || bt == "string") && matches!(op, Kind::Minus | Kind::Slash | Kind::Percent) {
-                        "\nnote: to concatenate strings, use `+` instead"
+                        "\n  \x1b[1;33m= help:\x1b[0m to concatenate strings, use `+` instead"
                     } else if matches!(op, Kind::Slash) && matches!(b, Value::Number(n) if n == 0.0) {
-                        "\nnote: cannot divide by zero"
+                        "\n  \x1b[1;33m= help:\x1b[0m cannot divide by zero — check if the divisor is zero before dividing"
                     } else {
                         ""
                     };
@@ -3954,13 +4025,13 @@ self.vars.insert("re".into(), re);
                     Kind::Minus => Ok(Value::Number(x - y)),
                     Kind::Slash => {
                         if y == 0.0 {
-                            return Err("division by zero\nnote: check if the divisor is zero before dividing".into());
+                            return Err("division by zero\n  \x1b[1;33m= help:\x1b[0m check if the divisor is zero before dividing".into());
                         }
                         Ok(Value::Number(x / y))
                     },
                     Kind::Percent => {
                         if y == 0.0 {
-                            return Err("modulo by zero\nnote: check if the divisor is zero before modulo".into());
+                            return Err("modulo by zero\n  \x1b[1;33m= help:\x1b[0m check if the divisor is zero before modulo".into());
                         }
                         Ok(Value::Number(x % y))
                     },
@@ -4047,7 +4118,7 @@ self.vars.insert("re".into(), re);
                     return Ok(c.clone());
                 }
             }
-            return Err(format!("module not found: {name}"));
+            return Err(format!("module not found: {name}\n  \x1b[1;33m= note:\x1b[0m  searched for `{name}.z` and `{name}/main.z` in the current directory and std/"));
         }
         // Dotted names: pkg.sub.mod -> pkg/sub/mod.z, pkg/sub/main.z, etc.
         let parts: Vec<&str> = name.split('.').collect();
@@ -4290,7 +4361,7 @@ self.vars.insert("re".into(), re);
                     match target {
                         LetTarget::Var(name) => {
                             if *is_const && self.locked.contains(name) {
-                                return Err(format!("cannot redefine constant: {name}"));
+                                return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
                             }
                             self.vars.insert(name.clone(), v);
                             names.push(name.clone());
@@ -4299,7 +4370,7 @@ self.vars.insert("re".into(), re);
                             Value::List(items) => {
                                 for (i, name) in patterns.iter().enumerate() {
                                     if *is_const && self.locked.contains(name) {
-                                        return Err(format!("cannot redefine constant: {name}"));
+                                        return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
                                     }
                                     let item = items.get(i).cloned().unwrap_or(Value::Null);
                                     self.vars.insert(name.clone(), item);
@@ -4312,7 +4383,7 @@ self.vars.insert("re".into(), re);
                             Value::Dict(map) => {
                                 for name in patterns {
                                     if *is_const && self.locked.contains(name) {
-                                        return Err(format!("cannot redefine constant: {name}"));
+                                        return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
                                     }
                                     let item = map.get(name).cloned().unwrap_or(Value::Null);
                                     self.vars.insert(name.clone(), item);
@@ -4335,7 +4406,7 @@ self.vars.insert("re".into(), re);
                 }
                 StmtKind::Assign(n, op, e) => {
                     if self.locked.contains(n) {
-                        return Err(format!("cannot assign to constant: {n}"));
+                        return Err(format!("cannot assign to constant: {n}\n  \x1b[1;33m= note:\x1b[0m  `{n}` was declared with `const` and cannot be reassigned\n  \x1b[1;33m= help:\x1b[0m use `let` instead of `const` if you need a mutable variable"));
                     }
                     let rhs = self.eval(e)?;
                     let v = if matches!(op, Kind::Assign) {
@@ -4593,7 +4664,7 @@ self.vars.insert("re".into(), re);
                                     Value::Dict(sub_vars.into_iter().collect())
                                 }
                                 Err(_) => {
-                                    return Err(format!("item '{}' not found in module '{}'", item, module));
+                                    return Err(format!("item '{}' not found in module '{}'\n  \x1b[1;33m= help:\x1b[0m check the module's available exports with `from {} import *`", item, module, module));
                                 }
                             }
                         };
@@ -4659,7 +4730,7 @@ self.vars.insert("re".into(), re);
                 StmtKind::Class(name, parent, body) => {
                     if let Some(parent) = parent {
                         if !self.classes.contains_key(parent) {
-                            return Err(format!("unknown parent class: {parent}"));
+                            return Err(format!("unknown parent class: {parent}\n  \x1b[1;33m= help:\x1b[0m make sure the parent class is defined before the child class"));
                         }
                     }
                     let mut methods = HashMap::new();
@@ -4743,39 +4814,32 @@ self.vars.insert("re".into(), re);
             let inner = &message;
             // Extract just the innermost error type + message for the header
             let inner_summary = inner.lines()
-                .find(|l| l.starts_with("  \x1b[1;31m= "))
-                .map(|l| l.trim_start().trim_start_matches("\x1b[1;31m= ").trim_end_matches("\x1b[0m"))
-                .unwrap_or("error");
+                .find(|l| l.starts_with("  \x1b[1;31m= ") || l.starts_with("\x1b[1;31merror\x1b[0m"))
+                .map(|l| {
+                    let cleaned = l.trim_start()
+                        .trim_start_matches("\x1b[1;31m= ")
+                        .trim_start_matches("\x1b[1;31merror\x1b[0m\x1b[1m[")
+                        .trim_end_matches("\x1b[0m")
+                        .trim_end_matches("]");
+                    cleaned.split('\n').next().unwrap_or(cleaned).to_string()
+                })
+                .unwrap_or_else(|| "error".into());
             let mut out = format!(
                 "\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n",
-                inner_summary.split('\n').next().unwrap_or(inner_summary)
+                inner_summary
             );
             out.push_str(&format!(
                 " \x1b[1;34m-->\x1b[0m {}:{}:{}\n",
                 self.file, line, col
             ));
             out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
-            if let Some(src_line) = self.lines.get(line.wrapping_sub(1)) {
-                let trimmed = src_line.trim_end();
-                if !trimmed.is_empty() {
-                    let width = format!("{}", line).len();
-                    out.push_str(&format!(
-                        " \x1b[1;34m{} |\x1b[0m {}\n",
-                        line, trimmed
-                    ));
-                    let arrow_col = col.saturating_sub(1).min(trimmed.chars().count());
-                    out.push_str(&format!(
-                        " \x1b[1;34m{} |\x1b[0m {}\x1b[1;31m{}\x1b[0m\n",
-                        " ".repeat(width),
-                        " ".repeat(arrow_col),
-                        "^"
-                    ));
-                }
+            if line > 0 && !self.lines.is_empty() {
+                out.push_str(&render_context(&self.lines, line, col, 2));
             }
             out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
             // Append inner traceback indented
-            for line in inner.lines() {
-                out.push_str(&format!("  {}\n", line));
+            for ln in inner.lines() {
+                out.push_str(&format!("  {}\n", ln));
             }
             return out;
         }
@@ -4788,22 +4852,8 @@ self.vars.insert("re".into(), re);
             self.file, line, col
         ));
         out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
-        if let Some(src_line) = self.lines.get(line.wrapping_sub(1)) {
-            let trimmed = src_line.trim_end();
-            if !trimmed.is_empty() {
-                let width = format!("{}", line).len();
-                out.push_str(&format!(
-                    " \x1b[1;34m{} |\x1b[0m {}\n",
-                    line, trimmed
-                ));
-                let arrow_col = col.saturating_sub(1).min(trimmed.chars().count());
-                out.push_str(&format!(
-                    " \x1b[1;34m{} |\x1b[0m {}\x1b[1;31m{}\x1b[0m\n",
-                    " ".repeat(width),
-                    " ".repeat(arrow_col),
-                    "^"
-                ));
-            }
+        if line > 0 && !self.lines.is_empty() {
+            out.push_str(&render_context(&self.lines, line, col, 2));
         }
         out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
         // Split message into main + notes
@@ -9901,9 +9951,9 @@ pub fn run_named(source: &str, file: &str) -> Result<(), String> {
     let flow = vm.exec(&program)?;
     match flow {
         Flow::Normal => Ok(()),
-        Flow::Return(_) => Err("return used outside a function".into()),
-        Flow::Break => Err("break used outside a loop".into()),
-        Flow::Continue => Err("continue used outside a loop".into()),
+        Flow::Return(_) => Err("return used outside a function\n  \x1b[1;33m= help:\x1b[0m `return` can only be used inside a function body defined with `function` or `def`".into()),
+        Flow::Break => Err("break used outside a loop\n  \x1b[1;33m= help:\x1b[0m `break` can only be used inside a `while` or `for` loop".into()),
+        Flow::Continue => Err("continue used outside a loop\n  \x1b[1;33m= help:\x1b[0m `continue` can only be used inside a `while` or `for` loop".into()),
         Flow::Throw(value) => {
             let (ty, msg) = vm.error_info(&value);
             let (file, line, col) = error_location(&value);
@@ -9941,35 +9991,90 @@ fn format_unhandled(
     ty: &str,
     msg: &str,
 ) -> String {
-    let mut out = format!(
-        "\x1b[1;31merror\x1b[0m\x1b[1m[{}: {}]\x1b[0m\n",
+    let lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
+    let mut out = String::new();
+
+    // ── Header ───────────────────────────────────────────────────────────────
+    out.push_str(&format!(
+        "\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m: {}\n",
         ty, msg
-    );
+    ));
     out.push_str(&format!(
         " \x1b[1;34m-->\x1b[0m {}:{}:{}\n",
         file, line, col
     ));
+
+    // ── Source context ───────────────────────────────────────────────────────
     out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
-    if line > 0 {
-        if let Some(src_line) = source.lines().nth(line.wrapping_sub(1)) {
-            let trimmed = src_line.trim_end();
-            if !trimmed.is_empty() {
-                let width = format!("{}", line).len();
+    if line > 0 && !lines.is_empty() {
+        out.push_str(&render_context(&lines, line, col, 2));
+    }
+
+    // ── Annotation footer ────────────────────────────────────────────────────
+    out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+
+    // Suggestion for common error patterns
+    let lower_msg = msg.to_lowercase();
+    if lower_msg.contains("undefined") || lower_msg.contains("not defined") || lower_msg.contains("unknown variable") {
+        if let Some(name) = msg.split_whitespace().find(|w| w.chars().all(|c| c.is_alphanumeric() || c == '_')) {
+            let all_names: Vec<&str> = lines.iter()
+                .flat_map(|l| l.split_whitespace())
+                .filter(|w| w.chars().all(|c| c.is_alphanumeric() || c == '_') && w.len() > 1)
+                .collect();
+            if let Some(suggestion) = suggest_name(name, &all_names, 3) {
                 out.push_str(&format!(
-                    " \x1b[1;34m{} |\x1b[0m {}\n",
-                    line, trimmed
+                    "  \x1b[1;33m= help:\x1b[0m a variable named `{suggestion}` is in scope\n"
                 ));
-                let arrow_col = col.saturating_sub(1).min(trimmed.chars().count());
                 out.push_str(&format!(
-                    " \x1b[1;34m{} |\x1b[0m {}\x1b[1;31m{}\x1b[0m\n",
-                    " ".repeat(width),
-                    " ".repeat(arrow_col),
-                    "^"
+                    "  \x1b[1;34m|       \x1b[0m did you mean `{suggestion}` instead of `{name}`?\n"
                 ));
             }
         }
     }
-    out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+
+    // Type mismatch suggestions
+    if lower_msg.contains("cannot") && (lower_msg.contains("add") || lower_msg.contains("multiply") || lower_msg.contains("compare")) {
+        out.push_str(&format!(
+            "  \x1b[1;33m= help:\x1b[0m try converting the operands to a common type first\n"
+        ));
+        out.push_str(&format!(
+            "  \x1b[1;34m|       \x1b[0m e.g.  str(num) + \" items\"  or  int(str_val)\n"
+        ));
+    }
+
+    // Index/key error suggestions
+    if lower_msg.contains("index") || lower_msg.contains("key") {
+        out.push_str(&format!(
+            "  \x1b[1;33m= note:\x1b[0m  list indices start at 0, not 1\n"
+        ));
+        if lower_msg.contains("out of range") {
+            out.push_str(&format!(
+                "  \x1b[1;33m= help:\x1b[0m check the length with len(collection) before indexing\n"
+            ));
+        }
+    }
+
+    // Null/None dereference
+    if lower_msg.contains("null") || lower_msg.contains("none") {
+        out.push_str(&format!(
+            "  \x1b[1;33m= note:\x1b[0m  the value is null — check if a function returned null unexpectedly\n"
+        ));
+    }
+
+    // Division by zero
+    if lower_msg.contains("divide") || lower_msg.contains("division") || lower_msg.contains("zero") {
+        out.push_str(&format!(
+            "  \x1b[1;33m= help:\x1b[0m check that the divisor is not zero before dividing\n"
+        ));
+    }
+
+    // Type error for missing method
+    if lower_msg.contains("has no method") || lower_msg.contains("no attribute") {
+        out.push_str(&format!(
+            "  \x1b[1;33m= help:\x1b[0m verify the type with typeof(value) before calling methods\n"
+        ));
+    }
+
     out.push_str(&format!(
         "  \x1b[1;31m= {}: {}\x1b[0m\n",
         ty, msg

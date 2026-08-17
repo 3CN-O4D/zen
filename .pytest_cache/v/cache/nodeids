@@ -1,6 +1,0 @@
-[
-  "tests/test_zen.py::test_interpreter_basic",
-  "tests/test_zen.py::test_lexer_numbers",
-  "tests/test_zen.py::test_prose_fallback",
-  "tests/test_zen.py::test_soft_keyword_with"
-]

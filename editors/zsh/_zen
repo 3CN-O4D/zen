@@ -1,0 +1,104 @@
+#compdef zen
+
+# Zsh completion for the Zen language runtime
+# Install: place this file in a directory listed in $fpath
+#   mkdir -p ~/.zsh/completions
+#   cp editors/zsh/_zen ~/.zsh/completions/
+#   echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
+#   autoload -Uz compinit && compinit
+
+_zen() {
+    local -a commands pm_subcommands global_opts
+
+    commands=(
+        'run:Execute a Zen script file'
+        'check:Parse and validate a script without running it'
+        'lint:Report suspicious patterns and errors'
+        'repl:Start an interactive session'
+        'pm:Package manager commands'
+        'help:Show help information'
+        'version:Show version information'
+    )
+
+    pm_subcommands=(
+        'init:Initialize a new module (creates zen.json + main.z)'
+        'install:Install a package (owner/repo, url, .z file, or local directory)'
+        'list:List installed packages'
+        'freeze:Export installed packages to freeze file'
+        'remove:Remove an installed package'
+        'info:Show information about a package'
+        'verify:Check sha256 against source'
+        'pack:Build publishable tarball from a directory'
+        'publish:Publish a package to a git remote'
+    )
+
+    global_opts=(
+        '--version[Show zen version]'
+        '--help[Show help information]'
+        '-e[Evaluate inline code]:code'
+        '--eval[Evaluate inline code]:code'
+    )
+
+    _arguments -C \
+        '1:command:->command' \
+        '*::arg:->args' \
+        "${global_opts[@]}"
+
+    case $state in
+        command)
+            _describe 'command' commands
+            _describe 'package manager' pm_subcommands
+            ;;
+        args)
+            case ${words[1]} in
+                run|check|lint)
+                    _files -g '*.z(-.)'
+                    ;;
+                pm)
+                    case ${words[2]} in
+                        init)
+                            _arguments \
+                                '--name[Module name]:name' \
+                                '--desc[Module description]:description'
+                            ;;
+                        install)
+                            _arguments \
+                                '--force[Force reinstall]' \
+                                '-r[Install from freeze file]:freeze file:_files' \
+                                '--requirements[Install from freeze file]:freeze file:_files' \
+                                '1:package spec'
+                            ;;
+                        remove|uninstall|info|verify)
+                            _arguments '1:package name'
+                            ;;
+                        list|freeze)
+                            ;;
+                        pack)
+                            _directories
+                            ;;
+                        publish)
+                            _arguments \
+                                '1:directory:_directories' \
+                                '2:git remote:->remote'
+                            case $state in
+                                remote)
+                                    local -a remotes
+                                    remotes=(${(f)"$(command git remote 2>/dev/null)"})
+                                    _describe 'remote' remotes
+                                    ;;
+                            esac
+                            ;;
+                        *)
+                            _describe 'pm command' pm_subcommands
+                            ;;
+                    esac
+                    ;;
+                -e|--eval)
+                    # No completion for inline code
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_zen "$@"
