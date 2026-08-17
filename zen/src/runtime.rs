@@ -2202,7 +2202,7 @@ impl Vm {
             ("replace".into(), Value::NativeFunction("regex_replace".into())),
             ("sub".into(), Value::NativeFunction("regex_replace".into())),
         ]));
-        self.vars.insert("re".into(), re);
+self.vars.insert("re".into(), re);
 
         // random module
         let random = Value::Dict(BTreeMap::from([
@@ -3996,6 +3996,7 @@ impl Vm {
         let stmts = parse_file(path)?;
         let mut module_vm = Vm::new();
         module_vm.functions = self.functions.clone();
+        module_vm.native_functions = self.native_functions.clone();
         module_vm.classes = self.classes.clone();
         module_vm.file = path.into();
         if let Ok(source) = fs::read_to_string(path) {
@@ -11631,6 +11632,13 @@ fn find_std_file(name: &str) -> Option<String> {
                     return Some(path.to_string_lossy().into_owned());
                 }
             }
+        }
+    }
+    // Check std/ relative to the project root (where Cargo.toml lives)
+    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+        let project_std = std::path::Path::new(&manifest_dir).join("std").join(name);
+        if project_std.exists() {
+            return Some(project_std.to_string_lossy().into_owned());
         }
     }
     None

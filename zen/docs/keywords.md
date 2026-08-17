@@ -1,0 +1,23 @@
+# Zen Keywords Reference
+
+- `let` — mutable variable (`let x = 1`)
+- `const` — immutable (`const PI = 3.14`)
+- `global` — declare global
+- `func` / `function` / `fn` / `def` — define named function
+- `lambda` — anonymous function
+- `return` — return value
+- `class` — define class
+- `new` — create instance (`new ClassName()`)
+- `inherit` / `extends` — inheritance (`class Dog extends Animal`)
+- `this` — current instance reference
+- `if` / `elif` / `else` — branching
+- `while` — loop
+- `for` / `in` — iterate
+- `break` — exit loop
+- `continue` — skip iteration
+- `throw` / `raise` — raise error
+- `try` / `catch` / `except` / `finally` — error handling
+- `import` / `from` / `as` — import modules
+- `load` / `include` — synonyms for import
+- `null` — null value
+- `true` / `false` — booleans
