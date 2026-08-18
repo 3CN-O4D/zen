@@ -1,0 +1,128 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: zen-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            name: zen-linux-aarch64
+            cross: true
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            name: zen-linux-armv7
+            cross: true
+          - os: ubuntu-latest
+            target: arm-unknown-linux-gnueabihf
+            name: zen-linux-armv6
+            cross: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: zen-macos-aarch64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: zen-macos-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: zen-windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM)
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.name }}.tar.gz zen
+          cd ../../..
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/zen.exe" -DestinationPath "${{ matrix.name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.name }}.tar.gz
+            ${{ matrix.name }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Zen ${{ github.event.inputs.tag || github.ref_name }}
+          body: |
+            ## Zen Language ${{ github.event.inputs.tag || github.ref_name }}
+
+            ### Downloads
+            | File | Platform |
+            |------|----------|
+            | `zen-linux-x86_64.tar.gz` | Linux x86_64 |
+            | `zen-linux-aarch64.tar.gz` | Linux ARM64 |
+            | `zen-linux-armv7.tar.gz` | Linux ARMv7 |
+            | `zen-linux-armv6.tar.gz` | Linux ARMv6 |
+            | `zen-macos-aarch64.tar.gz` | macOS Apple Silicon |
+            | `zen-macos-x86_64.tar.gz` | macOS Intel |
+            | `zen-windows-x86_64.zip` | Windows x86_64 |
+
+            ### Install
+            ```bash
+            # Linux/macOS
+            tar xzf zen-linux-x86_64.tar.gz
+            sudo mv zen /usr/local/bin/
+
+            # Or use the installer
+            ./build.sh install
+            ```
+          files: artifacts/*
+          draft: false
+          prerelease: false
