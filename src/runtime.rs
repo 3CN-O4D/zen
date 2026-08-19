@@ -7,6 +7,7 @@ use std::{
     net::{IpAddr, SocketAddr, TcpStream, UdpSocket},
     path::{Path, PathBuf},
     process::{self, Command},
+    rc::Rc,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -1943,8 +1944,104 @@ impl Parser {
 #[derive(Clone)]
 struct Function {
     params: Vec<String>,
-    body: Vec<Stmt>,
+    body: Arc<Vec<Stmt>>,
     captured: HashMap<String, Value>,
+    /// Pre-filtered captured vars excluding params (computed at definition time)
+    effective_captured: Vec<(String, Value)>,
+}
+
+fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String>, free: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::Var(n) => { if !params.contains(n.as_str()) { free.insert(n.clone()); } }
+        Expr::Value(_) => {}
+        Expr::List(items) => { for i in items { collect_free_vars_expr(i, params, free); } }
+        Expr::Dict(entries) => {
+            for entry in entries {
+                match entry {
+                    DictEntry::Pair(k, v) => { collect_free_vars_expr(v, params, free); }
+                    DictEntry::Spread(e) => { collect_free_vars_expr(e, params, free); }
+                }
+            }
+        }
+        Expr::Range(s, e, _) => { collect_free_vars_expr(s, params, free); collect_free_vars_expr(e, params, free); }
+        Expr::Index(o, i) => { collect_free_vars_expr(o, params, free); collect_free_vars_expr(i, params, free); }
+        Expr::Member(o, _) => { collect_free_vars_expr(o, params, free); }
+        Expr::SafeMember(o, _) => { collect_free_vars_expr(o, params, free); }
+        Expr::Call(callee, args) => { collect_free_vars_expr(callee, params, free); for a in args { collect_free_vars_expr(a, params, free); } }
+        Expr::Binary(l, _, r) => { collect_free_vars_expr(l, params, free); collect_free_vars_expr(r, params, free); }
+        Expr::Unary(_, e) => { collect_free_vars_expr(e, params, free); }
+        Expr::Named(n, e) => { collect_free_vars_expr(e, params, free); }
+        Expr::Spread(e) => { collect_free_vars_expr(e, params, free); }
+        Expr::Super(args) => { for a in args { collect_free_vars_expr(a, params, free); } }
+        Expr::New(_, args) => { for a in args { collect_free_vars_expr(a, params, free); } }
+        Expr::Ternary(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_expr(y, params, free); collect_free_vars_expr(n, params, free); }
+        Expr::Increment(e, _) => { collect_free_vars_expr(e, params, free); }
+        Expr::Lambda(lambda_params, lambda_body) => {
+            let mut inner = params.clone();
+            for p in lambda_params { inner.insert(p.clone()); }
+            collect_free_vars_stmts(lambda_body, &inner, free);
+        }
+    }
+}
+
+fn collect_free_vars_stmts(stmts: &[Stmt], params: &std::collections::HashSet<String>, free: &mut std::collections::HashSet<String>) {
+    for stmt in stmts {
+        collect_free_vars_stmt(&stmt.kind, params, free);
+    }
+}
+
+fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<String>, free: &mut std::collections::HashSet<String>) {
+    match kind {
+        StmtKind::Let(target, e, _) => {
+            collect_free_vars_expr(e, params, free);
+            match target {
+                LetTarget::Var(n) => { /* n is now in scope, but we don't remove from free since outer scope still applies */ }
+                LetTarget::List(ps) | LetTarget::Dict(ps) => { for p in ps { let _ = p; } }
+            }
+        }
+        StmtKind::Assign(n, _, e) => {
+            collect_free_vars_expr(e, params, free);
+            if !params.contains(n.as_str()) { free.insert(n.clone()); }
+        }
+        StmtKind::Print(exprs, _, _) => { for e in exprs { collect_free_vars_expr(e, params, free); } }
+        StmtKind::If(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_stmts(y, params, free); collect_free_vars_stmts(n, params, free); }
+        StmtKind::While(c, b) => { collect_free_vars_expr(c, params, free); collect_free_vars_stmts(b, params, free); }
+        StmtKind::For(n, e, b) => {
+            collect_free_vars_expr(e, params, free);
+            let mut inner_params = params.clone();
+            inner_params.insert(n.clone());
+            collect_free_vars_stmts(b, &inner_params, free);
+        }
+        StmtKind::Function(_, fn_params, fn_body) => {
+            let mut inner_params = params.clone();
+            for p in fn_params { inner_params.insert(p.clone()); }
+            collect_free_vars_stmts(fn_body, &inner_params, free);
+        }
+        StmtKind::Try(t_body, catches, finally_body) => {
+            collect_free_vars_stmts(t_body, params, free);
+            for catch in catches {
+                let mut catch_params = params.clone();
+                if let Some(cv) = &catch.var { catch_params.insert(cv.clone()); }
+                collect_free_vars_stmts(&catch.body, &catch_params, free);
+            }
+            if let Some(fb) = finally_body { collect_free_vars_stmts(fb, params, free); }
+        }
+        StmtKind::Throw(e) => { collect_free_vars_expr(e, params, free); }
+        StmtKind::Return(Some(e)) => { collect_free_vars_expr(e, params, free); }
+        StmtKind::Return(None) => {}
+        StmtKind::Class(_, parent, body) => {
+            if let Some(p) = parent { if !params.contains(p.as_str()) { free.insert(p.clone()); } }
+            collect_free_vars_stmts(body, params, free);
+        }
+        StmtKind::SetMember(obj, _, val) => { collect_free_vars_expr(obj, params, free); collect_free_vars_expr(val, params, free); }
+        StmtKind::Expr(e) => { collect_free_vars_expr(e, params, free); }
+        StmtKind::Switch(e, cases, default) => {
+            collect_free_vars_expr(e, params, free);
+            for (case_e, case_body) in cases { collect_free_vars_expr(case_e, params, free); collect_free_vars_stmts(case_body, params, free); }
+            if let Some(d) = default { collect_free_vars_stmts(d, params, free); }
+        }
+        _ => {}
+    }
 }
 #[derive(Clone)]
 struct ZenClass {
@@ -1954,19 +2051,26 @@ struct ZenClass {
 type NativeFunc = fn(Vec<Value>) -> Result<Value, String>;
 
 struct Vm {
-    vars: HashMap<String, Value>,
+    vars: ahash::AHashMap<String, Value>,
     functions: HashMap<String, Function>,
     native_functions: HashMap<String, NativeFunc>,
     classes: HashMap<String, ZenClass>,
     imported_modules: HashMap<String, HashMap<String, Value>>,
     stdlib_factories: HashMap<String, fn() -> Value>,
     lambda_counter: u64,
-    locked: std::collections::HashSet<String>,
+    locked: ahash::AHashSet<String>,
     file: String,
     lines: Vec<String>,
     stack: Vec<String>,
     current_class: Option<String>,
     current_method: Option<String>,
+    /// Fast local variable stack: (name, value) pairs for current function params + captured.
+    /// O(1) push/pop, no hashing needed. Most-recent-first for innermost scope.
+    locals: Vec<(String, Value)>,
+    /// Cached function lookup: avoids HashMap lookup on repeated calls to the same function.
+    /// Useful for recursive functions like fib where the same function is called millions of times.
+    last_func_name: Option<String>,
+    last_func_idx: Option<usize>,
 }
 enum Flow {
     Normal,
@@ -1978,19 +2082,22 @@ enum Flow {
 impl Vm {
     fn new() -> Vm {
         let mut vm = Vm {
-            vars: HashMap::new(),
+            vars: ahash::AHashMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             classes: HashMap::new(),
             imported_modules: HashMap::new(),
             stdlib_factories: HashMap::new(),
             lambda_counter: 0,
-            locked: std::collections::HashSet::new(),
+            locked: ahash::AHashSet::new(),
             file: "<string>".into(),
             lines: Vec::new(),
             stack: vec!["<module>".into()],
             current_class: None,
             current_method: None,
+            locals: Vec::new(),
+            last_func_name: None,
+            last_func_idx: None,
         };
         vm.register_builtins();
         vm.register_error_classes();
@@ -2003,7 +2110,7 @@ impl Vm {
     fn register_error_classes(&mut self) {
         let init = Function {
             params: vec!["message".into()],
-            body: vec![Stmt {
+            body: Arc::new(vec![Stmt {
                 kind: StmtKind::SetMember(
                     Expr::Var("self".into()),
                     "message".into(),
@@ -2011,8 +2118,9 @@ impl Vm {
                 ),
                 line: 0,
                 col: 0,
-            }],
+            }]),
             captured: HashMap::new(),
+            effective_captured: Vec::new(),
         };
         let mut register = |leaf: &str, parent: Option<&str>| {
             let parent_q = parent.map(|p| format!("errors.{p}"));
@@ -3250,33 +3358,42 @@ self.vars.insert("re".into(), re);
     }
     fn eval(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
+            Expr::Value(v) => Ok(v.clone()),
+            Expr::Var(n) => {
+                // Fast path: check local stack (innermost last)
+                // Most common case in fib: "n" is at known position in locals
+                let mut found = None;
+                for i in (0..self.locals.len()).rev() {
+                    if self.locals[i].0.as_str() == n {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                if let Some(i) = found {
+                    return Ok(self.locals[i].1.clone());
+                }
+                if let Some(v) = self.vars.get(n) {
+                    return Ok(v.clone());
+                }
+                if let Some(f) = self.functions.get(n) {
+                    return Ok(Value::Function(n.clone()));
+                }
+                if let Some(vars) = self.imported_modules.get(n) {
+                    return Ok(if let Some(Value::Dict(module_dict)) = vars.get(n) {
+                        Value::Dict(module_dict.clone())
+                    } else {
+                        Value::Dict(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    });
+                }
+                let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
+                candidates.extend(self.functions.keys().map(|s| s.as_str()));
+                let hint = suggest_name(n, &candidates, 3)
+                    .map(|s| format!("\n  \x1b[1;33m= help:\x1b[0m a variable named `{}` is in scope\n  \x1b[1;33m= help:\x1b[0m did you mean `{}` instead of `{}`?", s, s, n))
+                    .unwrap_or_else(|| format!("\n  \x1b[1;33m= note:\x1b[0m  `{n}` has not been defined yet. Use `let {n} = ...` to declare it."));
+                Err(format!("undefined variable: `{n}`{hint}"))
+            }
             Expr::Named(_, _) => Err("named arguments are only allowed inside calls".into()),
             Expr::Spread(_) => Err("spread is only allowed inside list/dict literals".into()),
-            Expr::Value(v) => Ok(v.clone()),
-            Expr::Var(n) => self
-                .vars
-                .get(n)
-                .cloned()
-                .or_else(|| {
-                    if self.functions.contains_key(n) {
-                        return Some(Value::Function(n.clone()));
-                    }
-                    self.imported_modules.get(n).cloned().map(|vars| {
-                        if let Some(Value::Dict(module_dict)) = vars.get(n) {
-                            Value::Dict(module_dict.clone())
-                        } else {
-                            Value::Dict(vars.into_iter().collect())
-                        }
-                    })
-                })
-                .ok_or_else(|| {
-                    let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
-                    candidates.extend(self.functions.keys().map(|s| s.as_str()));
-                    let hint = suggest_name(n, &candidates, 3)
-                        .map(|s| format!("\n  \x1b[1;33m= help:\x1b[0m a variable named `{}` is in scope\n  \x1b[1;33m= help:\x1b[0m did you mean `{}` instead of `{}`?", s, s, n))
-                        .unwrap_or_else(|| format!("\n  \x1b[1;33m= note:\x1b[0m  `{n}` has not been defined yet. Use `let {n} = ...` to declare it."));
-                    format!("undefined variable: `{n}`{hint}")
-                }),
             Expr::List(items) => {
                 let mut list = Vec::new();
                 for x in items {
@@ -3405,10 +3522,18 @@ self.vars.insert("re".into(), re);
             Expr::Lambda(params, body) => {
                 let fname = format!("__lambda_{}", self.lambda_counter);
                 self.lambda_counter += 1;
+                let param_set: std::collections::HashSet<String> = params.iter().cloned().collect();
+                let mut free = std::collections::HashSet::new();
+                collect_free_vars_stmts(body, &param_set, &mut free);
+                let captured: HashMap<String, Value> = free.iter()
+                    .filter_map(|k| self.vars.get(k).map(|v| (k.clone(), v.clone())))
+                    .collect();
+                let effective_captured: Vec<(String, Value)> = captured.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 let function = Function {
                     params: params.clone(),
-                    body: body.clone(),
-                    captured: self.vars.clone(),
+                    body: Arc::new(body.clone()),
+                    captured,
+                    effective_captured,
                 };
                 self.functions.insert(fname.clone(), function);
                 Ok(Value::Function(fname))
@@ -3437,28 +3562,27 @@ self.vars.insert("re".into(), re);
                         function.params.len(), values.len()
                     ));
                 }
-                let instance = self.vars.get("self").cloned()
-                    .ok_or("super() requires self")?;
-                let caller_vars = self.vars.clone();
+                let instance = self.eval(&Expr::Var("self".into()))?;
+                let saved_len = self.locals.len();
+                self.locals.reserve(1 + function.params.len());
+                self.locals.push(("self".into(), instance));
+                for (param, val) in function.params.iter().zip(values) {
+                    self.locals.push((param.clone(), val));
+                }
                 let prev_class = self.current_class.take();
                 let prev_method = self.current_method.take();
                 self.current_class = Some(parent_name.clone());
                 self.current_method = Some(method_name.clone());
-                self.vars.insert("self".into(), instance);
-                for (param, val) in function.params.iter().zip(values) {
-                    self.vars.insert(param.clone(), val);
-                }
                 self.stack.push(format!("{parent_name}.{method_name}"));
                 let flow = self.exec(&function.body);
                 self.stack.pop();
+                self.locals.truncate(saved_len);
                 let result = match flow? {
                     Flow::Return(v) => Ok(v),
                     Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
                     Flow::Normal => Ok(Value::Null),
                     _ => Err("loop control escaped super call".into()),
                 };
-                let _saved_vars = self.vars.clone();
-                self.vars = caller_vars;
                 self.current_class = prev_class;
                 self.current_method = prev_method;
                 result
@@ -3926,6 +4050,7 @@ self.vars.insert("re".into(), re);
             _ => Err(format!("dictionary has no method: {method}")),
         }
     }
+    #[inline(always)]
     fn binary(&self, a: Value, op: &Kind, b: Value) -> Result<Value, String> {
         match op {
             Kind::Eq => Ok(Value::Bool(a == b)),
@@ -4009,7 +4134,27 @@ self.vars.insert("re".into(), re);
                 _ => Err("string repetition requires a string and a number".into()),
             },
             Kind::Minus | Kind::Slash | Kind::Percent | Kind::Pow => {
-                let (Value::Number(x), Value::Number(y)) = (a.clone(), b.clone()) else {
+                if let (Value::Number(x), Value::Number(y)) = (&a, &b) {
+                    let x = *x;
+                    let y = *y;
+                    match op {
+                        Kind::Minus => Ok(Value::Number(x - y)),
+                        Kind::Slash => {
+                            if y == 0.0 {
+                                return Err("division by zero\n  \x1b[1;33m= help:\x1b[0m check if the divisor is zero before dividing".into());
+                            }
+                            Ok(Value::Number(x / y))
+                        },
+                        Kind::Percent => {
+                            if y == 0.0 {
+                                return Err("modulo by zero\n  \x1b[1;33m= help:\x1b[0m check if the divisor is zero before modulo".into());
+                            }
+                            Ok(Value::Number(x % y))
+                        },
+                        Kind::Pow => Ok(Value::Number(x.powf(y))),
+                        _ => unreachable!(),
+                    }
+                } else {
                     let at = a.type_name();
                     let bt = b.type_name();
                     let hint = if (at == "string" || bt == "string") && matches!(op, Kind::Minus | Kind::Slash | Kind::Percent) {
@@ -4019,46 +4164,33 @@ self.vars.insert("re".into(), re);
                     } else {
                         ""
                     };
-                    return Err(format!("unsupported operand type(s) for {}: `{}` and `{}`{}", op_symbol(op), at, bt, hint));
-                };
-                match op {
-                    Kind::Minus => Ok(Value::Number(x - y)),
-                    Kind::Slash => {
-                        if y == 0.0 {
-                            return Err("division by zero\n  \x1b[1;33m= help:\x1b[0m check if the divisor is zero before dividing".into());
-                        }
-                        Ok(Value::Number(x / y))
-                    },
-                    Kind::Percent => {
-                        if y == 0.0 {
-                            return Err("modulo by zero\n  \x1b[1;33m= help:\x1b[0m check if the divisor is zero before modulo".into());
-                        }
-                        Ok(Value::Number(x % y))
-                    },
-                    Kind::Pow => Ok(Value::Number(x.powf(y))),
-                    _ => unreachable!(),
+                    Err(format!("unsupported operand type(s) for {}: `{}` and `{}`{}", op_symbol(op), at, bt, hint))
                 }
             }
             Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge => {
-                let (Value::Number(x), Value::Number(y)) = (a.clone(), b.clone()) else {
-                    let at = a.type_name();
-                    let bt = b.type_name();
-                    let hint = if at == "string" && bt == "string" {
-                        ""
-                    } else if at != "int" && at != "float" && bt != "int" && bt != "float" {
-                        "\nnote: '<', '>', '<=', '>=' only work on numbers\n      for string comparison, use == or !="
-                    } else {
-                        ""
-                    };
-                    return Err(format!("unsupported operand type(s) for {}: `{}` and `{}`{}", op_symbol(op), at, bt, hint));
-                };
-                Ok(Value::Bool(match op {
-                    Kind::Lt => x < y,
-                    Kind::Le => x <= y,
-                    Kind::Gt => x > y,
-                    Kind::Ge => x >= y,
-                    _ => unreachable!(),
-                }))
+                match (&a, &b) {
+                    (Value::Number(x), Value::Number(y)) => {
+                        Ok(Value::Bool(match op {
+                            Kind::Lt => x < y,
+                            Kind::Le => x <= y,
+                            Kind::Gt => x > y,
+                            Kind::Ge => x >= y,
+                            _ => unreachable!(),
+                        }))
+                    }
+                    _ => {
+                        let at = a.type_name();
+                        let bt = b.type_name();
+                        let hint = if at == "string" && bt == "string" {
+                            ""
+                        } else if at != "int" && at != "float" && bt != "int" && bt != "float" {
+                            "\nnote: '<', '>', '<=', '>=' only work on numbers\n      for string comparison, use == or !="
+                        } else {
+                            ""
+                        };
+                        Err(format!("unsupported operand type(s) for {}: `{}` and `{}`{}", op_symbol(op), at, bt, hint))
+                    }
+                }
             }
             _ => Err("unsupported operator".into()),
         }
@@ -4073,7 +4205,7 @@ self.vars.insert("re".into(), re);
         if let Ok(source) = fs::read_to_string(path) {
             module_vm.lines = source.lines().map(|l| l.to_string()).collect();
         }
-        module_vm.exec(&stmts)?;
+        module_vm.exec_module(&stmts)?;
         // Register the module's functions under a namespaced key in the caller so
         // `module.func(...)` calls resolve through self.functions.
         for (fname, function) in &module_vm.functions {
@@ -4085,7 +4217,7 @@ self.vars.insert("re".into(), re);
             let key = format!("{namespace}.{class}");
             self.classes.insert(key, def.clone());
         }
-        let mut exports = module_vm.vars;
+        let mut exports: HashMap<String, Value> = module_vm.vars.into_iter().collect();
         for (fname, _fn) in &module_vm.functions {
             if !exports.contains_key(fname) {
                 exports.insert(
@@ -4168,62 +4300,62 @@ self.vars.insert("re".into(), re);
     }
 
     fn call(&mut self, name: &str, values: Vec<Value>) -> Result<Flow, String> {
-        if let Some(native_fn) = self.native_functions.get(name).cloned() {
+        // Check native functions first (most common fast path for builtins)
+        if let Some(&native_fn) = self.native_functions.get(name) {
             return Ok(Flow::Return(native_fn(values)?));
         }
 
-        if let Some(Value::NativeFunction(native_name)) = self.vars.get(name).cloned() {
-            if let Some(native_fn) = self.native_functions.get(&native_name).cloned() {
-                return Ok(Flow::Return(native_fn(values)?));
+        // Check registered functions directly (hot path for user-defined functions)
+        if let Some(function) = self.functions.get(name) {
+            if values.len() != function.params.len() {
+                return Err(format!(
+                    "{name} expects {} arguments, got {}",
+                    function.params.len(),
+                    values.len()
+                ));
             }
-        }
-
-        if let Some(Value::Function(fname)) = self.vars.get(name).cloned() {
-            return self.call(&fname, values);
-        }
-
-        let function = self
-            .functions
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("undefined function: {name}"))?;
-        if values.len() != function.params.len() {
-            return Err(format!(
-                "{name} expects {} arguments, got {}",
-                function.params.len(),
-                values.len()
-            ));
-        }
-        let caller_vars = self.vars.clone();
-        if !function.captured.is_empty() {
-            for (k, v) in &function.captured {
-                if !function.params.contains(k) {
-                    self.vars.entry(k.clone()).or_insert_with(|| v.clone());
+            let body = Arc::clone(&function.body);
+            let cap_count = function.effective_captured.len();
+            // Save locals stack position, push params + captured onto fast local stack
+            let saved_len = self.locals.len();
+            self.locals.reserve(function.params.len() + cap_count);
+            for (parameter, value) in function.params.iter().zip(values) {
+                self.locals.push((parameter.clone(), value));
+            }
+            for (k, v) in &function.effective_captured {
+                self.locals.push((k.clone(), v.clone()));
+            }
+            let flow = self.exec(&body);
+            // Restore locals stack
+            self.locals.truncate(saved_len);
+            let flow = flow?;
+            return Ok(match flow {
+                Flow::Return(value) => Flow::Return(value),
+                Flow::Throw(value) => Flow::Throw(value),
+                Flow::Normal => Flow::Return(Value::Null),
+                Flow::Break | Flow::Continue => {
+                    return Err(format!("loop control escaped function: {name}"))
                 }
+            });
+        }
+
+        // Fall back to variable-based function lookup (for function pointers stored in vars)
+        if let Some(val) = self.vars.get(name) {
+            match val {
+                Value::NativeFunction(native_name) => {
+                    if let Some(&native_fn) = self.native_functions.get(native_name) {
+                        return Ok(Flow::Return(native_fn(values)?));
+                    }
+                }
+                Value::Function(fname) => {
+                    let fname = fname.clone();
+                    return self.call(&fname, values);
+                }
+                _ => {}
             }
         }
-        for (parameter, value) in function.params.iter().zip(values) {
-            self.vars.insert(parameter.clone(), value);
-        }
-        self.stack.push(name.to_string());
-        let flow = self.exec(&function.body);
-        self.stack.pop();
-        let flow = flow?;
-        let mut restored = caller_vars;
-        for k in function.captured.keys() {
-            if let Some(v) = self.vars.get(k) {
-                restored.insert(k.clone(), v.clone());
-            }
-        }
-        self.vars = restored;
-        Ok(match flow {
-            Flow::Return(value) => Flow::Return(value),
-            Flow::Throw(value) => Flow::Throw(value),
-            Flow::Normal => Flow::Return(Value::Null),
-            Flow::Break | Flow::Continue => {
-                return Err(format!("loop control escaped function: {name}"))
-            }
-        })
+
+        Err(format!("undefined function: {name}"))
     }
     fn find_method(&self, class_name: &str, method: &str) -> Option<Function> {
         let mut current = Some(class_name.to_string());
@@ -4238,8 +4370,8 @@ self.vars.insert("re".into(), re);
     }
     fn apply_func(&mut self, f: &Value, values: Vec<Value>) -> Result<Value, String> {
         match f {
-            Value::NativeFunction(name) => match self.native_functions.get(name).cloned() {
-                Some(native_fn) => native_fn(values),
+            Value::NativeFunction(name) => match self.native_functions.get(name.as_str()) {
+                Some(&native_fn) => native_fn(values),
                 None => Err(format!("unknown native function: {name}")),
             },
             Value::Function(fname) => match self.call(fname, values)? {
@@ -4267,20 +4399,24 @@ self.vars.insert("re".into(), re);
                 values.len()
             ));
         }
-        let caller_vars = self.vars.clone();
+        let body = Arc::clone(&function.body);
         let prev_class = self.current_class.take();
         let prev_method = self.current_method.take();
         self.current_class = Some(class_name.clone());
         self.current_method = Some(method.to_string());
-        self.vars.insert("self".into(), Value::Instance(instance));
+        // Use local stack: self + params + captured
+        let saved_len = self.locals.len();
+        self.locals.reserve(1 + function.params.len() + function.effective_captured.len());
+        self.locals.push(("self".into(), Value::Instance(instance)));
         for (parameter, value) in function.params.iter().zip(values) {
-            self.vars.insert(parameter.clone(), value);
+            self.locals.push((parameter.clone(), value));
         }
-        self.stack.push(format!("{class_name}.{method}"));
-        let flow = self.exec(&function.body);
-        self.stack.pop();
+        for (k, v) in &function.effective_captured {
+            self.locals.push((k.clone(), v.clone()));
+        }
+        let flow = self.exec(&body);
+        self.locals.truncate(saved_len);
         let flow = flow?;
-        self.vars = caller_vars;
         self.current_class = prev_class;
         self.current_method = prev_method;
         Ok(match flow {
@@ -4301,20 +4437,19 @@ self.vars.insert("re".into(), re);
         self.eval(&expr)
     }
     fn exec(&mut self, stmts: &[Stmt]) -> Result<Flow, String> {
+        let mut prev_flow = Flow::Normal;
         for stmt in stmts {
-            let result = self.exec_one(stmt);
-            match result {
-                Ok(Flow::Normal) => {}
-                Ok(Flow::Continue) => return Ok(Flow::Continue),
-                Ok(Flow::Break) => return Ok(Flow::Break),
-                Ok(Flow::Return(value)) => return Ok(Flow::Return(value)),
-                Ok(Flow::Throw(value)) => return Ok(Flow::Throw(value)),
-                Err(e) => return Err(self.locate(stmt.line, stmt.col, e)),
+            if !matches!(prev_flow, Flow::Normal) {
+                return Ok(prev_flow);
             }
-            // Drain pending error class definitions from errors.define() calls
-            self.drain_pending_error_classes();
+            prev_flow = self.exec_one(stmt)?;
         }
-        Ok(Flow::Normal)
+        Ok(prev_flow)
+    }
+    fn exec_module(&mut self, stmts: &[Stmt]) -> Result<Flow, String> {
+        let result = self.exec(stmts);
+        self.drain_pending_error_classes();
+        result
     }
     fn drain_pending_error_classes(&mut self) {
         let pending = if let Ok(mut lock) = pending_error_classes().lock() {
@@ -4328,7 +4463,7 @@ self.vars.insert("re".into(), re);
             let qualified = format!("errors.{name}");
             let init = Function {
                 params: vec!["message".into()],
-                body: vec![Stmt {
+                body: Arc::new(vec![Stmt {
                     kind: StmtKind::SetMember(
                         Expr::Var("self".into()),
                         "message".into(),
@@ -4336,8 +4471,9 @@ self.vars.insert("re".into(), re);
                     ),
                     line: 0,
                     col: 0,
-                }],
+                }]),
                 captured: HashMap::new(),
+                effective_captured: Vec::new(),
             };
             let mut methods = HashMap::new();
             methods.insert("init".into(), init);
@@ -4405,45 +4541,47 @@ self.vars.insert("re".into(), re);
                     Ok(Flow::Normal)
                 }
                 StmtKind::Assign(n, op, e) => {
-                    if self.locked.contains(n) {
-                        return Err(format!("cannot assign to constant: {n}\n  \x1b[1;33m= note:\x1b[0m  `{n}` was declared with `const` and cannot be reassigned\n  \x1b[1;33m= help:\x1b[0m use `let` instead of `const` if you need a mutable variable"));
-                    }
-                    let rhs = self.eval(e)?;
                     let v = if matches!(op, Kind::Assign) {
-                        rhs
-                    } else if matches!(op, Kind::NullishAssign) {
-                        let current = self
-                            .vars
-                            .get(n)
-                            .cloned()
-                            .ok_or_else(|| format!("undefined variable: {n}"))?;
-                        if matches!(current, Value::Null) {
-                            rhs
-                        } else {
-                            current
-                        }
+                        self.eval(e)?
                     } else {
-                        let binary_op = match op {
-                            Kind::PlusAssign => Kind::Plus,
-                            Kind::MinusAssign => Kind::Minus,
-                            Kind::StarAssign => Kind::Star,
-                            Kind::SlashAssign => Kind::Slash,
-                            Kind::PercentAssign => Kind::Percent,
-                            Kind::AmpAssign => Kind::Amp,
-                            Kind::PipeAssign => Kind::Pipe,
-                            Kind::CaretAssign => Kind::Caret,
-                            Kind::LShiftAssign => Kind::LShift,
-                            Kind::RShiftAssign => Kind::RShift,
-                            _ => return Err("unsupported assignment operator".into()),
-                        };
-                        self.binary(
-                            self.vars
+                        if self.locked.contains(n) {
+                            return Err(format!("cannot assign to constant: {n}\n  \x1b[1;33m= note:\x1b[0m  `{n}` was declared with `const` and cannot be reassigned\n  \x1b[1;33m= help:\x1b[0m use `let` instead of `const` if you need a mutable variable"));
+                        }
+                        let rhs = self.eval(e)?;
+                        if matches!(op, Kind::NullishAssign) {
+                            let current = self
+                                .vars
                                 .get(n)
                                 .cloned()
-                                .ok_or_else(|| format!("undefined variable: {n}"))?,
-                            &binary_op,
-                            rhs,
-                        )?
+                                .ok_or_else(|| format!("undefined variable: {n}"))?;
+                            if matches!(current, Value::Null) {
+                                rhs
+                            } else {
+                                current
+                            }
+                        } else {
+                            let binary_op = match op {
+                                Kind::PlusAssign => Kind::Plus,
+                                Kind::MinusAssign => Kind::Minus,
+                                Kind::StarAssign => Kind::Star,
+                                Kind::SlashAssign => Kind::Slash,
+                                Kind::PercentAssign => Kind::Percent,
+                                Kind::AmpAssign => Kind::Amp,
+                                Kind::PipeAssign => Kind::Pipe,
+                                Kind::CaretAssign => Kind::Caret,
+                                Kind::LShiftAssign => Kind::LShift,
+                                Kind::RShiftAssign => Kind::RShift,
+                                _ => return Err("unsupported assignment operator".into()),
+                            };
+                            self.binary(
+                                self.vars
+                                    .get(n)
+                                    .cloned()
+                                    .ok_or_else(|| format!("undefined variable: {n}"))?,
+                                &binary_op,
+                                rhs,
+                            )?
+                        }
                     };
                     self.vars.insert(n.clone(), v);
                     Ok(Flow::Normal)
@@ -4503,10 +4641,18 @@ self.vars.insert("re".into(), re);
                 StmtKind::Break => return Ok(Flow::Break),
                 StmtKind::Continue => return Ok(Flow::Continue),
                 StmtKind::Function(name, params, body) => {
+                    let param_set: std::collections::HashSet<String> = params.iter().cloned().collect();
+                    let mut free = std::collections::HashSet::new();
+                    collect_free_vars_stmts(body, &param_set, &mut free);
+                    let captured: HashMap<String, Value> = free.iter()
+                        .filter_map(|k| self.vars.get(k).map(|v| (k.clone(), v.clone())))
+                        .collect();
+                    let effective_captured: Vec<(String, Value)> = captured.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     let function = Function {
                         params: params.clone(),
-                        body: body.clone(),
-                        captured: self.vars.clone(),
+                        body: Arc::new(body.clone()),
+                        captured,
+                        effective_captured,
                     };
                     if let Ok(mut registry) = function_registry().lock() {
                         registry.insert(name.clone(), function.clone());
@@ -4740,8 +4886,9 @@ self.vars.insert("re".into(), re);
                                 method.clone(),
                                 Function {
                                     params: params.clone(),
-                                    body: body.clone(),
+                                    body: Arc::new(body.clone()),
                                     captured: HashMap::new(),
+                                    effective_captured: Vec::new(),
                                 },
                             );
                         } else {
@@ -9946,9 +10093,9 @@ pub fn run_named(source: &str, file: &str) -> Result<(), String> {
     vm.lines = source.lines().map(|l| l.to_string()).collect();
     if let Some(prelude) = find_std_file("browser.z") {
         let stmts = parse_file(&prelude)?;
-        vm.exec(&stmts)?;
+        vm.exec_module(&stmts)?;
     }
-    let flow = vm.exec(&program)?;
+    let flow = vm.exec_module(&program)?;
     match flow {
         Flow::Normal => Ok(()),
         Flow::Return(_) => Err("return used outside a function\n  \x1b[1;33m= help:\x1b[0m `return` can only be used inside a function body defined with `function` or `def`".into()),
@@ -10093,7 +10240,7 @@ impl Repl {
         let mut vm = Vm::new();
         if let Some(prelude) = find_std_file("browser.z") {
             let stmts = parse_file(&prelude)?;
-            vm.exec(&stmts)?;
+            vm.exec_module(&stmts)?;
         }
         Ok(Repl { vm, initialized: true })
     }
@@ -10135,7 +10282,7 @@ impl Repl {
                         }
                     }
                 }
-                match self.vm.exec(&program) {
+                match self.vm.exec_module(&program) {
                     Ok(Flow::Normal) => Ok(()),
                     Ok(Flow::Return(_)) => Err("return used outside a function".into()),
                     Ok(Flow::Break) => Err("break used outside a loop".into()),
