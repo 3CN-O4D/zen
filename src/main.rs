@@ -1,3 +1,4 @@
+mod bytecode;
 mod cdp;
 mod pm;
 mod runtime;
