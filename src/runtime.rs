@@ -2556,6 +2556,115 @@ impl Vm {
                 std::process::exit(code);
             },
         );
+        self.native_functions.insert(
+            "help".into(),
+            |args| {
+                match args.first() {
+                    None => {
+                        println!("Zen built-ins: print, input, len, str, int, float, bool, type,");
+                        println!(" range, dict, list, keys, values, items, has, push, pop,");
+                        println!(" slice, assert, throw, exit, sleep, wait, typeof, help,");
+                        println!(" min, max, abs, round, trunc, hex, chr, ord, cos, sin,");
+                        println!(" tan, sqrt, pow, floor, ceil, json, fs, os, time, random,");
+                        println!(" crypto, sys, re");
+                        println!("Operators: + - * / % ** & | ^ ~ << >> == != < > <= >= && || ??");
+                        println!("Keywords: let var const func return if elif else while for");
+                        println!(" break switch case => try catch as class extends super");
+                        println!(" new this self import from as default true false null");
+                        println!("Tip: type help(<value>) for info on any value.");
+                        Ok(Value::Null)
+                    }
+                    Some(val) => {
+                        match val {
+                            Value::Instance(inst) => {
+                                let i = inst.lock().unwrap();
+                                println!("instance of {}", i.class_name);
+                                if !i.fields.is_empty() {
+                                    println!("  fields:");
+                                    for (k, v) in &i.fields {
+                                        println!("    {k} = {v}");
+                                    }
+                                }
+                            }
+                            Value::Dict(d) => {
+                                if d.contains_key("__doc__") {
+                                    if let Some(Value::Dict(doc)) = d.get("__doc__") {
+                                        if let Some(Value::String(desc)) = doc.get("description") {
+                                            println!("{desc}");
+                                        }
+                                        if let Some(Value::Dict(funcs)) = doc.get("functions") {
+                                            println!("\nfunctions:");
+                                            for (name, info) in funcs {
+                                                match info {
+                                                    Value::Dict(fi) => {
+                                                        let params = fi.get("params")
+                                                            .map(|v| match v {
+                                                                Value::String(s) => s.clone(),
+                                                                _ => String::new(),
+                                                            })
+                                                            .unwrap_or_default();
+                                                        let ret = fi.get("returns")
+                                                            .map(|v| match v {
+                                                                Value::String(s) => format!(" -> {s}"),
+                                                                _ => String::new(),
+                                                            })
+                                                            .unwrap_or_default();
+                                                        let desc = fi.get("description")
+                                                            .and_then(|v| match v {
+                                                                Value::String(s) => Some(format!("  — {s}")),
+                                                                _ => None,
+                                                            })
+                                                            .unwrap_or_default();
+                                                        println!("  {name}({params}){ret}{desc}");
+                                                    }
+                                                    _ => println!("  {name}"),
+                                                }
+                                            }
+                                        }
+                                        if let Some(Value::Dict(classes)) = doc.get("classes") {
+                                            println!("\nclasses:");
+                                            for (name, info) in classes {
+                                                match info {
+                                                    Value::Dict(ci) => {
+                                                        let desc = ci.get("description")
+                                                            .and_then(|v| match v {
+                                                                Value::String(s) => Some(format!("  — {s}")),
+                                                                _ => None,
+                                                            })
+                                                            .unwrap_or_default();
+                                                        println!("  {name}{desc}");
+                                                    }
+                                                    _ => println!("  {name}"),
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    let keys: Vec<String> = d.keys().cloned().collect();
+                                    println!("dict with {} keys: {}", keys.len(), keys.join(", "));
+                                }
+                            }
+                            Value::List(lst) => {
+                                println!("list with {} elements", lst.len());
+                                if !lst.is_empty() {
+                                    let preview: Vec<String> = lst.iter().take(5).map(|v| v.to_string()).collect();
+                                    println!("  [{}{}]", preview.join(", "),
+                                        if lst.len() > 5 { ", ..." } else { "" });
+                                }
+                            }
+                            Value::String(s) => println!("string ({len}): \"{s}\"", len=s.len()),
+                            Value::Number(n) => println!("number: {n}"),
+                            Value::Bool(b) => println!("bool: {b}"),
+                            Value::Null => println!("null"),
+                            Value::NativeFunction(name) => println!("native function: {name}"),
+                            Value::Function(name) => println!("function: {name}"),
+                            _ => println!("{val}"),
+                        }
+                        Ok(Value::Null)
+                    }
+                }
+            },
+        );
 
         // json module
         let json = Value::Dict(BTreeMap::from([
@@ -4578,27 +4687,36 @@ self.vars.insert("re".into(), re);
         if let Ok(source) = fs::read_to_string(path) {
             module_vm.lines = source.lines().map(|l| l.to_string()).collect();
         }
+        let initial_keys: std::collections::HashSet<String> = module_vm.vars.keys().cloned().collect();
+        let initial_fns: std::collections::HashSet<String> = module_vm.functions.keys().cloned().collect();
+        let initial_classes: std::collections::HashSet<String> = module_vm.classes.keys().cloned().collect();
         module_vm.exec_module(&stmts)?;
         // Register the module's functions under a namespaced key in the caller so
         // `module.func(...)` calls resolve through self.functions.
         for (fname, function) in &module_vm.functions {
-            let key = format!("{namespace}::{fname}");
-            self.register_function(key, function.clone());
-            // Also expose under the plain name so closures escaping the module
-            // (e.g. logging handlers) can resolve module helpers by name.
-            self.register_function(fname.clone(), function.clone());
+            if !initial_fns.contains(fname) {
+                let key = format!("{namespace}::{fname}");
+                self.register_function(key, function.clone());
+                // Also expose under the plain name so closures escaping the module
+                // (e.g. logging handlers) can resolve module helpers by name.
+                self.register_function(fname.clone(), function.clone());
+            }
         }
         // Register the module's classes under a namespaced key so `new module.Class(...)` works.
         for (class, def) in &module_vm.classes {
-            let key = format!("{namespace}.{class}");
-            self.classes.insert(key, def.clone());
-            // Also expose under the plain name so module factories that do
-            // `new Class(...)` internally resolve.
-            self.classes.insert(class.clone(), def.clone());
+            if !initial_classes.contains(class) {
+                let key = format!("{namespace}.{class}");
+                self.classes.insert(key, def.clone());
+                // Also expose under the plain name so module factories that do
+                // `new Class(...)` internally resolve.
+                self.classes.insert(class.clone(), def.clone());
+            }
         }
-        let mut exports: HashMap<String, Value> = module_vm.vars.into_iter().collect();
+        let mut exports: HashMap<String, Value> = module_vm.vars.into_iter()
+            .filter(|(k, _)| !initial_keys.contains(k))
+            .collect();
         for (fname, _fn) in &module_vm.functions {
-            if !exports.contains_key(fname) {
+            if !initial_fns.contains(fname) && !exports.contains_key(fname) {
                 exports.insert(
                     fname.clone(),
                     Value::Function(format!("{namespace}::{fname}")),
@@ -4606,7 +4724,7 @@ self.vars.insert("re".into(), re);
             }
         }
         for (class, _def) in &module_vm.classes {
-            if !exports.contains_key(class) {
+            if !initial_classes.contains(class) && !exports.contains_key(class) {
                 exports.insert(
                     class.clone(),
                     Value::Function(format!("{namespace}.{class}")),
@@ -4797,6 +4915,9 @@ self.vars.insert("re".into(), re);
             }
         }
         // Check native functions first (most common fast path for builtins)
+        if name == "help" {
+            return Ok(Flow::Return(self.help(values.first())?));
+        }
         if let Some(&native_fn) = self.native_functions.get(name) {
             return Ok(Flow::Return(native_fn(values)?));
         }
@@ -5734,8 +5855,179 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             _ => None,
         }
     }
+    fn help(&mut self, val: Option<&Value>) -> Result<Value, String> {
+        match val {
+            None => {
+                println!("Zen built-ins: print, input, len, str, int, float, bool, type,");
+                println!(" range, dict, list, keys, values, items, has, push, pop,");
+                println!(" slice, assert, throw, exit, sleep, wait, typeof, help,");
+                println!(" min, max, abs, round, trunc, hex, chr, ord, cos, sin,");
+                println!(" tan, sqrt, pow, floor, ceil, json, fs, os, time, random,");
+                println!(" crypto, sys, re");
+                println!("Operators: + - * / % ** & | ^ ~ << >> == != < > <= >= && || ??");
+                println!("Keywords: let var const func return if elif else while for");
+                println!(" break switch case => try catch as class extends super");
+                println!(" new this self import from as default true false null");
+                println!("Tip: type help(<value>) for info on any value.");
+                Ok(Value::Null)
+            }
+            Some(val) => {
+                match val {
+                    Value::String(s) if self.classes.contains_key(s.as_str()) => {
+                        let class_name = s.as_str();
+                        let class = self.classes.get(class_name).unwrap();
+                        println!("class {class_name}");
+                        if let Some(p) = &class.parent {
+                            println!("  extends {p}");
+                        }
+                        if !class.methods.is_empty() {
+                            println!("  methods:");
+                            let mut method_names: Vec<_> = class.methods.iter().collect();
+                            method_names.sort_by_key(|(n, _)| n.clone());
+                            for (name, func) in method_names {
+                                let ps: Vec<String> = func.params.iter().map(|(p, _)| p.clone()).collect();
+                                println!("    {name}({})", ps.join(", "));
+                            }
+                        }
+                        if !class.fields.is_empty() {
+                            println!("  fields:");
+                            for (name, _) in &class.fields {
+                                println!("    {name}");
+                            }
+                        }
+                    }
+                    Value::Instance(inst) => {
+                        let i = inst.lock().unwrap();
+                        println!("instance of {}", i.class_name);
+                        if let Some(class) = self.classes.get(i.class_name.as_str()) {
+                            if !class.methods.is_empty() {
+                                println!("  methods:");
+                                let mut method_names: Vec<_> = class.methods.iter().collect();
+                                method_names.sort_by_key(|(n, _)| n.clone());
+                                for (name, func) in method_names {
+                                    let ps: Vec<String> = func.params.iter().map(|(p, _)| p.clone()).collect();
+                                    println!("    {name}({})", ps.join(", "));
+                                }
+                            }
+                        }
+                        if !i.fields.is_empty() {
+                            println!("  fields:");
+                            for (k, v) in &i.fields {
+                                println!("    {k} = {v}");
+                            }
+                        }
+                    }
+                    Value::Dict(d) => {
+                        if d.contains_key("__doc__") {
+                            if let Some(Value::Dict(doc)) = d.get("__doc__") {
+                                if let Some(Value::String(desc)) = doc.get("description") {
+                                    println!("{desc}");
+                                }
+                                if let Some(Value::Dict(funcs)) = doc.get("functions") {
+                                    println!("\nfunctions:");
+                                    let mut fnames: Vec<_> = funcs.iter().collect();
+                                    fnames.sort_by_key(|(n, _)| n.clone());
+                                    for (name, info) in fnames {
+                                        match info {
+                                            Value::Dict(fi) => {
+                                                let params = fi.get("params")
+                                                    .map(|v| match v {
+                                                        Value::String(s) => s.clone(),
+                                                        _ => String::new(),
+                                                    })
+                                                    .unwrap_or_default();
+                                                let ret = fi.get("returns")
+                                                    .map(|v| match v {
+                                                        Value::String(s) => format!(" -> {s}"),
+                                                        _ => String::new(),
+                                                    })
+                                                    .unwrap_or_default();
+                                                let desc = fi.get("description")
+                                                    .and_then(|v| match v {
+                                                        Value::String(s) => Some(format!("  — {s}")),
+                                                        _ => None,
+                                                    })
+                                                    .unwrap_or_default();
+                                                println!("  {name}({params}){ret}{desc}");
+                                            }
+                                            _ => println!("  {name}"),
+                                        }
+                                    }
+                                }
+                                if let Some(Value::Dict(classes)) = doc.get("classes") {
+                                    println!("\nclasses:");
+                                    let mut cnames: Vec<_> = classes.iter().collect();
+                                    cnames.sort_by_key(|(n, _)| n.clone());
+                                    for (name, info) in cnames {
+                                        match info {
+                                            Value::Dict(ci) => {
+                                                let desc = ci.get("description")
+                                                    .and_then(|v| match v {
+                                                        Value::String(s) => Some(format!("  — {s}")),
+                                                        _ => None,
+                                                    })
+                                                    .unwrap_or_default();
+                                                println!("  {name}{desc}");
+                                            }
+                                            _ => println!("  {name}"),
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            let keys: Vec<String> = d.keys().cloned().collect();
+                            println!("dict with {} keys: {}", keys.len(), keys.join(", "));
+                        }
+                    }
+                    Value::List(lst) => {
+                        println!("list with {} elements", lst.len());
+                        if !lst.is_empty() {
+                            let preview: Vec<String> = lst.iter().take(5).map(|v| v.to_string()).collect();
+                            println!("  [{}{}]", preview.join(", "),
+                                if lst.len() > 5 { ", ..." } else { "" });
+                        }
+                    }
+                    Value::String(s) => println!("string ({len}): \"{s}\"", len=s.len()),
+                    Value::Number(n) => println!("number: {n}"),
+                    Value::Bool(b) => println!("bool: {b}"),
+                    Value::Null => println!("null"),
+                    Value::NativeFunction(name) => println!("native function: {name}"),
+                    Value::Function(name) => {
+                        if let Some(class) = self.classes.get(name.as_str()) {
+                            println!("class {name}");
+                            if let Some(p) = &class.parent {
+                                println!("  extends {p}");
+                            }
+                            if !class.methods.is_empty() {
+                                println!("  methods:");
+                                let mut method_names: Vec<_> = class.methods.iter().collect();
+                                method_names.sort_by_key(|(n, _)| n.clone());
+                                for (mname, func) in method_names {
+                                    let ps: Vec<String> = func.params.iter().map(|(p, _)| p.clone()).collect();
+                                    println!("    {mname}({})", ps.join(", "));
+                                }
+                            }
+                            if !class.fields.is_empty() {
+                                println!("  fields:");
+                                for (fname, _) in &class.fields {
+                                    println!("    {fname}");
+                                }
+                            }
+                        } else {
+                            println!("function: {name}");
+                        }
+                    }
+                    _ => println!("{val}"),
+                }
+                Ok(Value::Null)
+            }
+        }
+    }
     fn apply_func(&mut self, f: &Value, values: Vec<Value>) -> Result<Value, String> {
         match f {
+            Value::NativeFunction(name) if name == "help" => {
+                self.help(values.first())
+            }
             Value::NativeFunction(name) => match self.native_functions.get(name.as_str()) {
                 Some(&native_fn) => native_fn(values),
                 None => Err(format!("unknown native function: {name}")),
@@ -6220,7 +6512,9 @@ let function = self
                             let child = parts[1];
                             let parent_map = self.imported_modules.entry(parent.to_string()).or_insert_with(HashMap::new);
                             let child_dict: BTreeMap<String, Value> = vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            parent_map.insert(child.to_string(), Value::Dict(child_dict));
+                            parent_map.insert(child.to_string(), Value::Dict(child_dict.clone()));
+                            // Also register child as a dict var so `child.func()` member calls work
+                            self.vars.insert(child.to_string(), Value::Dict(child_dict));
                         }
                         self.imported_modules.insert(name, vars);
                     }
@@ -6378,6 +6672,7 @@ let function = self
                             fields,
                         },
                     );
+                    self.vars.insert(name.clone(), Value::Function(name.clone()));
                     Ok(Flow::Normal)
                 }
                 StmtKind::SetMember(object, member, value) => {
@@ -12639,6 +12934,16 @@ pub fn help_module(name: &str) -> String {
 pub fn help_builtin(name: &str) -> Option<String> {
     match name {
         // I/O
+        "help" => Some(
+            "help() / help(x)  — show help information\n\
+             No args: lists all builtins and keywords.\n\
+             With a value: shows structure (class methods, dict keys, list length, etc).\n\n\
+             Example: help()           — list all builtins\n\
+             Example: help(print)      — show print signature\n\
+             Example: help(MyClass)    — show class methods\n\
+             Example: help(mydict)     — show dict keys or __doc__ info"
+                .into(),
+        ),
         "print" => Some(
             "print(values..., sep?, end?)  — print values to stdout\n\
              Prints each argument separated by spaces (or custom sep), followed by\n\
@@ -13232,7 +13537,7 @@ pub fn help_builtin_or_error(name: &str) -> String {
             "func", "def", "fn", "lambda", "return", "if", "elif", "else",
             "while", "for", "in", "break", "continue", "class", "inherit",
             "this", "new", "import", "from", "match", "when", "null",
-            "true", "false", "is", "as",
+            "true", "false", "is", "as", "help", "var", "enumerate",
             // List methods
             "map", "filter", "reduce", "sort", "reverse", "fill", "copy",
             "first", "last", "slice", "splice", "flat", "compact", "uniq",
@@ -13296,6 +13601,7 @@ pub fn lint(source: &str) -> Vec<String> {
     let builtins = [
         "str", "len", "range", "int", "float", "bool", "list", "abs", "min", "max",
         "round", "trunc", "print", "input", "typeof", "exit", "json", "fs", "re",
+        "help",
         "math", "time", "random", "base64", "os", "crypto", "statistics", "net",
         "go", "click", "fill", "wait", "text", "attr", "wait_for", "shot", "title",
         "url", "browser", "page",

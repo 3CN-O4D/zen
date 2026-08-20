@@ -1,4 +1,24 @@
 # argparser.z — command-line argument parsing for Zen
+#
+# Usage:
+#   import argparser
+#   let p = argparser.ArgumentParser("my tool")
+#   p.add_argument("input")                              # positional
+#   p.add_argument("--verbose", {action: "store_true"})  # boolean flag
+#   p.add_argument("--outfile", {short: "-o", value: "output.txt"})
+#   p.add_argument("--count", {type: "int", value: 0})
+#   let args = p.parse_args()
+#   # args.input, args.verbose, args.outfile, args.count
+#
+# Config keys for optional args:
+#   action: "store_true" / "store_false" (boolean flags, no value needed)
+#   type:   "int" / "float" (auto-convert the next token)
+#   value:  default value if flag not provided
+#   short:  short flag name, e.g. "-o"
+#   help:   description string for help text
+#
+# help() works on the module or ArgumentParser class:
+#   help(argparser)
 
 class ArgumentParser {
     var _description
@@ -17,14 +37,33 @@ class ArgumentParser {
         return name
     }
 
-    func add_argument(name, action = null, type = null, default_value = null, help = null) {
+    func add_argument(name, config = null) {
         let stripped = _strip(name)
         let arg = {
             name: stripped,
-            action: action,
-            type: type,
-            default_value: default_value,
-            help: help,
+            long: "--" + stripped,
+            short: null,
+            action: null,
+            type: null,
+            value: null,
+            help: null,
+        }
+        if config != null {
+            if config.has("action") {
+                arg.action = config.get("action")
+            }
+            if config.has("type") {
+                arg.type = config.get("type")
+            }
+            if config.has("value") {
+                arg.value = config.get("value")
+            }
+            if config.has("help") {
+                arg.help = config.get("help")
+            }
+            if config.has("short") {
+                arg.short = config.get("short")
+            }
         }
         if name.startsWith("-") {
             _optional.push(arg)
@@ -34,79 +73,118 @@ class ArgumentParser {
         return self
     }
 
-    func _index_of(lst, val) {
-        var i = 0
-        while i < len(lst) {
-            if lst[i] == val {
-                return i
+    func parse_args() {
+        let result = {}
+        let raw = cli_args()
+        var i = 2
+
+        # first pass: consume optional flags, collect positional candidates
+        let positional_vals = []
+        while i < len(raw) {
+            let token = raw[i]
+            if token.startsWith("--") {
+                let matched = _match_long(token, raw, i)
+                if matched != null {
+                    result[matched.name] = matched.value
+                    if matched.consumed > 1 {
+                        i = i + matched.consumed
+                    } else {
+                        i = i + 1
+                    }
+                } else {
+                    i = i + 1
+                }
+            } elif token.startsWith("-") && token.length == 2 {
+                let matched = _match_short(token, raw, i)
+                if matched != null {
+                    result[matched.name] = matched.value
+                    if matched.consumed > 1 {
+                        i = i + matched.consumed
+                    } else {
+                        i = i + 1
+                    }
+                } else {
+                    i = i + 1
+                }
+            } else {
+                positional_vals.push(token)
+                i = i + 1
             }
-            i += 1
+        }
+
+        # second pass: assign positional args in order
+        var pi = 0
+        for arg in _positional {
+            if pi < len(positional_vals) {
+                result[arg.name] = positional_vals[pi]
+                pi = pi + 1
+            } elif arg.value != null {
+                result[arg.name] = arg.value
+            }
+        }
+
+        # fill defaults for missing optional args
+        for arg in _optional {
+            if !result.has(arg.name) {
+                if arg.action == "store_true" {
+                    result[arg.name] = false
+                } elif arg.action == "store_false" {
+                    result[arg.name] = true
+                } elif arg.value != null {
+                    result[arg.name] = arg.value
+                }
+            }
+        }
+
+        return result
+    }
+
+    func _match_long(token, raw, pos) {
+        for arg in _optional {
+            if arg.long == token {
+                if arg.action == "store_true" {
+                    return {name: arg.name, value: true, consumed: 1}
+                } elif arg.action == "store_false" {
+                    return {name: arg.name, value: false, consumed: 1}
+                } elif pos + 1 < len(raw) {
+                    let v = raw[pos + 1]
+                    if arg.type == "int" {
+                        return {name: arg.name, value: int(v), consumed: 2}
+                    } elif arg.type == "float" {
+                        return {name: arg.name, value: float(v), consumed: 2}
+                    } else {
+                        return {name: arg.name, value: v, consumed: 2}
+                    }
+                }
+            }
         }
         return null
     }
 
-    func parse_args() {
-        let args = {}
-        let args_list = cli_args()
-
-        for arg in _positional {
-            let name = arg.name
-            let found = false
-            for a in args_list {
-                if a == name {
-                    let idx = _index_of(args_list, name)
-                    if idx != null && idx + 1 < len(args_list) {
-                        args[name] = args_list[idx + 1]
-                        found = true
-                        break
-                    }
-                }
-            }
-            if !found && arg.default_value != null {
-                args[name] = arg.default_value
-            }
-        }
-
+    func _match_short(token, raw, pos) {
         for arg in _optional {
-            let name = arg.name
-            let long_name = "--" + name
-            let short_name = "-" + name[0, 1]
-
-            let found = false
-            var idx = _index_of(args_list, long_name)
-            if idx == null {
-                idx = _index_of(args_list, short_name)
-            }
-            if idx != null {
-                found = true
+            if arg.short == token {
                 if arg.action == "store_true" {
-                    args[name] = true
+                    return {name: arg.name, value: true, consumed: 1}
                 } elif arg.action == "store_false" {
-                    args[name] = false
-                } elif idx + 1 < len(args_list) {
-                    let val = args_list[idx + 1]
+                    return {name: arg.name, value: false, consumed: 1}
+                } elif pos + 1 < len(raw) {
+                    let v = raw[pos + 1]
                     if arg.type == "int" {
-                        args[name] = int(val)
+                        return {name: arg.name, value: int(v), consumed: 2}
                     } elif arg.type == "float" {
-                        args[name] = float(val)
+                        return {name: arg.name, value: float(v), consumed: 2}
                     } else {
-                        args[name] = val
+                        return {name: arg.name, value: v, consumed: 2}
                     }
                 }
             }
-            if !found && arg.action == "store_true" {
-                args[name] = true
-            } elif !found && arg.action == "store_false" {
-                args[name] = false
-            } elif !found && arg.default_value != null {
-                args[name] = arg.default_value
-            }
         }
-
-        return args
+        return null
     }
 }
 
 func ArgumentParser(description) {
     return new ArgumentParser(description)
 }
+
