@@ -248,9 +248,11 @@ pub(crate) enum Kind {
     Null,
     Let,
     Const,
+    Var,
     Print,
     If,
     Else,
+    Elif,
     While,
     For,
     In,
@@ -567,8 +569,10 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             let kind = match word {
                 "let" => Kind::Let,
                 "const" => Kind::Const,
+                "var" => Kind::Var,
                 "print" => Kind::Print,
                 "if" => Kind::If,
+                "elif" => Kind::Elif,
                 "else" => Kind::Else,
                 "while" => Kind::While,
                 "for" => Kind::For,
@@ -847,13 +851,15 @@ pub(crate) enum Expr {
     Binary(Box<Expr>, Kind, Box<Expr>),
     Range(Box<Expr>, Box<Expr>, bool),
     Index(Box<Expr>, Box<Expr>),
+    Slice(Box<Expr>, Box<Expr>, Box<Expr>),
     Member(Box<Expr>, String),
     SafeMember(Box<Expr>, String),
     Call(Box<Expr>, Vec<Expr>),
     New(String, Vec<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
+    IfExpr(Box<Expr>, Vec<Stmt>, Vec<Stmt>),
     Increment(Box<Expr>, i64),
-    Lambda(Vec<String>, Vec<Stmt>),
+    Lambda(Vec<(String, Option<Expr>)>, Vec<Stmt>),
     Spread(Box<Expr>),
     Super(Vec<Expr>),
 }
@@ -881,8 +887,9 @@ pub(crate) enum StmtKind {
     For(String, Expr, Vec<Stmt>),
     Break,
     Continue,
-    Function(String, Vec<String>, Vec<Stmt>),
+    Function(String, Vec<(String, Option<Expr>)>, Vec<Stmt>),
     Native(String, Vec<String>),
+    Field(String, Option<Expr>),
     Try(Vec<Stmt>, Vec<CatchClause>, Option<Vec<Stmt>>),
     Throw(Expr),
     Return(Option<Expr>),
@@ -893,6 +900,7 @@ pub(crate) enum StmtKind {
     Include(String),
     Load(String),
     SetMember(Expr, String, Expr),
+    SetIndex(Expr, Expr, Expr),
     Switch(Expr, Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>),
     Expr(Expr),
 }
@@ -906,20 +914,81 @@ struct CatchClause {
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    prev: usize,
+    class_depth: usize,
 }
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            prev: 0,
+            class_depth: 0,
+        }
     }
     fn current(&self) -> &Token {
         &self.tokens[self.pos]
     }
+    /// The most recently consumed token (the one that failed a parse).
+    fn previous(&self) -> &Token {
+        &self.tokens[self.prev]
+    }
     fn advance(&mut self) -> Kind {
         let kind = self.current().kind.clone();
         if !matches!(kind, Kind::Eof) {
-            self.pos += 1
+            self.prev = self.pos;
+            self.pos += 1;
         }
         kind
+    }
+    /// Human-readable rendering of a token kind for error messages, e.g.
+    /// `==` for Eq, `{` for LBrace, `func` for Function.
+    fn kind_text(k: &Kind) -> String {
+        match k {
+            Kind::Ident(name) => format!("`{name}`"),
+            Kind::Eq => "`==`".into(),
+            Kind::Bang => "`!`".into(),
+            Kind::Ne => "`!=`".into(),
+            Kind::Assign => "`=`".into(),
+            Kind::NullishAssign => "`??=`".into(),
+            Kind::PlusAssign => "`+=`".into(),
+            Kind::MinusAssign => "`-=`".into(),
+            Kind::StarAssign => "`*=`".into(),
+            Kind::SlashAssign => "`/=`".into(),
+            Kind::PercentAssign => "`%=`".into(),
+            Kind::Arrow => "`->`".into(),
+            Kind::DotDot => "`..`".into(),
+            Kind::Ellipsis => "`...`".into(),
+            Kind::Nullish => "`??`".into(),
+            Kind::Amp => "`&`".into(),
+            Kind::Pipe => "`|`".into(),
+            Kind::Caret => "`^`".into(),
+            Kind::LShift => "`<<`".into(),
+            Kind::RShift => "`>>`".into(),
+            Kind::LBrace => "`{`".into(),
+            Kind::RBrace => "`}`".into(),
+            Kind::LParen => "`(`".into(),
+            Kind::RParen => "`)`".into(),
+            Kind::LBracket => "`[`".into(),
+            Kind::RBracket => "`]`".into(),
+            Kind::Colon => "`:`".into(),
+            Kind::Comma => "`,`".into(),
+            Kind::Dot => "`.`".into(),
+            Kind::Semi => "`;`".into(),
+            Kind::Question => "`?`".into(),
+            Kind::Plus => "`+`".into(),
+            Kind::Minus => "`-`".into(),
+            Kind::Star => "`*`".into(),
+            Kind::Slash => "`/`".into(),
+            Kind::Percent => "`%`".into(),
+            Kind::Number(n) => format!("`{n}`"),
+            Kind::String(_) => "<string>".into(),
+            Kind::Interp(_) => "<interpolated string>".into(),
+            Kind::Eof => "end of file".into(),
+            Kind::Function => "`func`".into(),
+            Kind::Lambda => "`lambda`".into(),
+            other => format!("`{other:?}`"),
+        }
     }
     fn same(a: &Kind, b: &Kind) -> bool {
         std::mem::discriminant(a) == std::mem::discriminant(b)
@@ -942,8 +1011,8 @@ impl Parser {
         if self.take(kind.clone()) {
             Ok(())
         } else {
-            let found = format!("{:?}", self.current().kind);
-            let expected = format!("{:?}", kind);
+            let found = Self::kind_text(&self.current().kind);
+            let expected = Self::kind_text(&kind);
             let hint = match &kind {
                 Kind::LBrace => "add `{` to start a block",
                 Kind::RBrace => "add `}` to close the block",
@@ -1015,7 +1084,20 @@ impl Parser {
             col: sc,
         };
         match self.current().kind.clone() {
-            Kind::Let | Kind::Const => {
+            Kind::Var if self.class_depth > 0 => {
+                self.advance();
+                let name = match self.advance() {
+                    Kind::Ident(name) => name,
+                    _ => return Err("expected field name after var/val in class body".into()),
+                };
+                let init = if self.take(Kind::Assign) {
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
+                Ok(mk(StmtKind::Field(name, init)))
+            }
+            Kind::Let | Kind::Const | Kind::Var => {
                 let is_const = matches!(self.current().kind, Kind::Const);
                 self.advance();
                 let target = if self.take(Kind::LBracket) {
@@ -1137,6 +1219,8 @@ impl Parser {
                     } else {
                         self.block()?
                     }
+                } else if self.take(Kind::Elif) {
+                    vec![self.if_tail()?]
                 } else {
                     vec![]
                 };
@@ -1175,17 +1259,32 @@ impl Parser {
                 let mut params = vec![];
                 if !self.take(Kind::RParen) {
                     loop {
-                        match self.advance() {
-                            Kind::Ident(name) => params.push(name),
-                            _ => return Err("expected parameter name".into()),
-                        }
+                        let pname = match self.advance() {
+                            Kind::Ident(name) => name,
+                            _ => return Err(format!(
+                                "{}:{}: expected parameter name, found {}",
+                                self.previous().line,
+                                self.previous().col,
+                                Self::kind_text(&self.previous().kind)
+                            )),
+                        };
+                        let default = if self.take(Kind::Assign) {
+                            Some(self.expr()?)
+                        } else {
+                            None
+                        };
+                        params.push((pname, default));
                         if !self.take(Kind::Comma) {
                             break;
                         }
                     }
                     self.expect(Kind::RParen)?;
                 }
-                Ok(mk(StmtKind::Function(name, params, self.block()?)))
+                let saved_depth = self.class_depth;
+                self.class_depth = 0;
+                let body = self.block();
+                self.class_depth = saved_depth;
+                Ok(mk(StmtKind::Function(name, params, body?)))
             }
             Kind::Native => {
                 self.advance();
@@ -1200,7 +1299,12 @@ impl Parser {
                     loop {
                         match self.advance() {
                             Kind::Ident(name) => params.push(name),
-                            _ => return Err("expected parameter name".into()),
+                            _ => return Err(format!(
+                                "{}:{}: expected parameter name, found {}",
+                                self.previous().line,
+                                self.previous().col,
+                                Self::kind_text(&self.previous().kind)
+                            )),
                         }
                         if !self.take(Kind::Comma) {
                             break;
@@ -1337,7 +1441,10 @@ impl Parser {
                 } else {
                     None
                 };
-                Ok(mk(StmtKind::Class(name, parent, self.block()?)))
+                self.class_depth += 1;
+                let body = self.block();
+                self.class_depth -= 1;
+                Ok(mk(StmtKind::Class(name, parent, body?)))
             }
             Kind::Switch => {
                 self.advance();
@@ -1429,6 +1536,9 @@ impl Parser {
                     let value = self.expr()?;
                     match expression {
                         Expr::Var(name) => Ok(mk(StmtKind::Assign(name, op, value))),
+                        Expr::Index(object, index) if matches!(op, Kind::Assign) => {
+                            Ok(mk(StmtKind::SetIndex(*object, *index, value)))
+                        }
                         Expr::Member(object, member) if matches!(op, Kind::Assign) => {
                             Ok(mk(StmtKind::SetMember(*object, member, value)))
                         }
@@ -1540,13 +1650,52 @@ impl Parser {
             _ => Ok(mk(StmtKind::Expr(self.expr()?))),
         }
     }
+        /// Parse `cond { .. } [elif/else if] { .. } [else] { .. }` as an expression
+    /// whose value is the last expression of the chosen branch. The leading
+    /// `if` token has already been consumed by `atom()`.
+    fn parse_if_expr(&mut self) -> Result<Expr, String> {
+        let condition = self.expr()?;
+        let yes = self.block()?;
+        self.separators();
+        let no = if self.take(Kind::Else) {
+            self.separators();
+            if self.take(Kind::If) {
+                let inner = self.parse_if_expr()?;
+                vec![Stmt {
+                    kind: StmtKind::Expr(inner),
+                    line: self.current().line,
+                    col: self.current().col,
+                }]
+            } else {
+                self.block()?
+            }
+        } else if self.take(Kind::Elif) {
+            let inner = self.parse_if_expr()?;
+            vec![Stmt {
+                kind: StmtKind::Expr(inner),
+                line: self.current().line,
+                col: self.current().col,
+            }]
+        } else {
+            vec![]
+        };
+        Ok(Expr::IfExpr(Box::new(condition), yes, no))
+    }
+
     fn if_tail(&mut self) -> Result<Stmt, String> {
         let (sl, sc) = (self.current().line, self.current().col);
         let condition = self.expr()?;
         let yes = self.block()?;
         self.separators();
         let no = if self.take(Kind::Else) {
-            self.block()?
+            self.separators();
+            if self.take(Kind::If) {
+                vec![self.if_tail()?]
+            } else {
+                self.block()?
+            }
+        } else if self.take(Kind::Elif) {
+            vec![self.if_tail()?]
         } else {
             vec![]
         };
@@ -1687,16 +1836,23 @@ impl Parser {
         loop {
             if self.take(Kind::LBracket) {
                 let index = self.expr()?;
-                self.expect(Kind::RBracket)?;
-                left = Expr::Index(Box::new(left), Box::new(index));
+                if self.take(Kind::Comma) {
+                    let end = self.expr()?;
+                    self.expect(Kind::RBracket)?;
+                    left = Expr::Slice(Box::new(left), Box::new(index), Box::new(end));
+                } else {
+                    self.expect(Kind::RBracket)?;
+                    left = Expr::Index(Box::new(left), Box::new(index));
+                }
             } else if self.take(Kind::Dot) {
                 let name = match self.advance() {
                     Kind::Ident(name) => name,
                     other => {
                         return Err(format!(
-                            "{}:{}: expected member name, found {other:?}",
-                            self.current().line,
-                            self.current().col
+                            "{}:{}: expected member name, found {}",
+                            self.previous().line,
+                            self.previous().col,
+                            Self::kind_text(&other)
                         ))
                     }
                 };
@@ -1706,9 +1862,10 @@ impl Parser {
                     Kind::Ident(name) => name,
                     other => {
                         return Err(format!(
-                            "{}:{}: expected member name, found {other:?}",
-                            self.current().line,
-                            self.current().col
+                            "{}:{}: expected member name, found {}",
+                            self.previous().line,
+                            self.previous().col,
+                            Self::kind_text(&other)
                         ))
                     }
                 };
@@ -1778,15 +1935,27 @@ impl Parser {
             Kind::False => Ok(Expr::Value(Value::Bool(false))),
             Kind::Null => Ok(Expr::Value(Value::Null)),
             Kind::Ident(s) => Ok(Expr::Var(s)),
-            Kind::Lambda => {
+            Kind::If => self.parse_if_expr(),
+            Kind::Function | Kind::Lambda => {
                 let mut params = vec![];
                 if self.take(Kind::LParen) {
                     if !self.take(Kind::RParen) {
                         loop {
-                            match self.advance() {
-                                Kind::Ident(name) => params.push(name),
-                                _ => return Err("expected parameter name".into()),
-                            }
+                            let pname = match self.advance() {
+                                Kind::Ident(name) => name,
+                                _ => return Err(format!(
+                                "{}:{}: expected parameter name, found {}",
+                                self.previous().line,
+                                self.previous().col,
+                                Self::kind_text(&self.previous().kind)
+                            )),
+                            };
+                            let default = if self.take(Kind::Assign) {
+                                Some(self.expr()?)
+                            } else {
+                                None
+                            };
+                            params.push((pname, default));
                             if !self.take(Kind::Comma) {
                                 break;
                             }
@@ -1794,15 +1963,32 @@ impl Parser {
                         self.expect(Kind::RParen)?;
                     }
                 } else if !matches!(self.current().kind, Kind::Colon | Kind::LBrace) {
-                    match self.advance() {
-                        Kind::Ident(name) => params.push(name),
-                        _ => return Err("expected parameter name".into()),
-                    }
+                    let pname = match self.advance() {
+                        Kind::Ident(name) => name,
+                        _ => return Err(format!(
+                        "{}:{}: expected parameter name, found {}",
+                        self.previous().line,
+                        self.previous().col,
+                        Self::kind_text(&self.previous().kind)
+                    )),
+                    };
+                    params.push((pname, None));
                     while self.take(Kind::Comma) {
-                        match self.advance() {
-                            Kind::Ident(name) => params.push(name),
-                            _ => return Err("expected parameter name".into()),
-                        }
+                        let pname = match self.advance() {
+                            Kind::Ident(name) => name,
+                            _ => return Err(format!(
+                                "{}:{}: expected parameter name, found {}",
+                                self.previous().line,
+                                self.previous().col,
+                                Self::kind_text(&self.previous().kind)
+                            )),
+                        };
+                        let default = if self.take(Kind::Assign) {
+                            Some(self.expr()?)
+                        } else {
+                            None
+                        };
+                        params.push((pname, default));
                     }
                 }
                 if self.take(Kind::LBrace) {
@@ -1922,10 +2108,10 @@ impl Parser {
                     Ok(Expr::Dict(entries))
                 }
             other => {
-                let found = format!("{:?}", other);
+                let found = Self::kind_text(&other);
                 let mut msg = format!(
                     "{}:{}: expected expression, found {}",
-                    self.current().line, self.current().col, found
+                    self.previous().line, self.previous().col, found
                 );
                 match other {
                     Kind::RBrace => msg.push_str("\n  \x1b[1;33m= help:\x1b[0m the block is already closed; remove the extra `}`"),
@@ -1943,13 +2129,29 @@ impl Parser {
 
 #[derive(Clone)]
 struct Function {
-    params: Vec<String>,
+    /// Parameter names with optional default-value expressions (evaluated at
+    /// definition time and stored in `default_values`).
+    params: Vec<(String, Option<Expr>)>,
+    /// Default values parallel to `params` (None where no default exists).
+    default_values: Vec<Option<Value>>,
     body: Arc<Vec<Stmt>>,
     captured: HashMap<String, Value>,
     /// Pre-filtered captured vars excluding params (computed at definition time)
     effective_captured: Vec<(String, Value)>,
     /// Compiled bytecode for this function body (None = tree-walk fallback)
     bytecode: Option<Arc<crate::bytecode::CompiledFunction>>,
+}
+
+impl Function {
+    fn param_names(&self) -> Vec<String> {
+        self.params.iter().map(|(n, _)| n.clone()).collect()
+    }
+    fn required_count(&self) -> usize {
+        self.params.iter().filter(|(_, d)| d.is_none()).count()
+    }
+    fn has_defaults(&self) -> bool {
+        self.params.iter().any(|(_, d)| d.is_some())
+    }
 }
 
 fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String>, free: &mut std::collections::HashSet<String>) {
@@ -1967,6 +2169,7 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
         }
         Expr::Range(s, e, _) => { collect_free_vars_expr(s, params, free); collect_free_vars_expr(e, params, free); }
         Expr::Index(o, i) => { collect_free_vars_expr(o, params, free); collect_free_vars_expr(i, params, free); }
+        Expr::Slice(o, s, e) => { collect_free_vars_expr(o, params, free); collect_free_vars_expr(s, params, free); collect_free_vars_expr(e, params, free); }
         Expr::Member(o, _) => { collect_free_vars_expr(o, params, free); }
         Expr::SafeMember(o, _) => { collect_free_vars_expr(o, params, free); }
         Expr::Call(callee, args) => { collect_free_vars_expr(callee, params, free); for a in args { collect_free_vars_expr(a, params, free); } }
@@ -1977,10 +2180,11 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
         Expr::Super(args) => { for a in args { collect_free_vars_expr(a, params, free); } }
         Expr::New(_, args) => { for a in args { collect_free_vars_expr(a, params, free); } }
         Expr::Ternary(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_expr(y, params, free); collect_free_vars_expr(n, params, free); }
+        Expr::IfExpr(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_stmts(y, params, free); collect_free_vars_stmts(n, params, free); }
         Expr::Increment(e, _) => { collect_free_vars_expr(e, params, free); }
         Expr::Lambda(lambda_params, lambda_body) => {
             let mut inner = params.clone();
-            for p in lambda_params { inner.insert(p.clone()); }
+            for p in lambda_params { inner.insert(p.0.clone()); }
             collect_free_vars_stmts(lambda_body, &inner, free);
         }
     }
@@ -2016,7 +2220,7 @@ fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<St
         }
         StmtKind::Function(_, fn_params, fn_body) => {
             let mut inner_params = params.clone();
-            for p in fn_params { inner_params.insert(p.clone()); }
+            for p in fn_params { inner_params.insert(p.0.clone()); }
             collect_free_vars_stmts(fn_body, &inner_params, free);
         }
         StmtKind::Try(t_body, catches, finally_body) => {
@@ -2036,6 +2240,7 @@ fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<St
             collect_free_vars_stmts(body, params, free);
         }
         StmtKind::SetMember(obj, _, val) => { collect_free_vars_expr(obj, params, free); collect_free_vars_expr(val, params, free); }
+        StmtKind::SetIndex(obj, idx, val) => { collect_free_vars_expr(obj, params, free); collect_free_vars_expr(idx, params, free); collect_free_vars_expr(val, params, free); }
         StmtKind::Expr(e) => { collect_free_vars_expr(e, params, free); }
         StmtKind::Switch(e, cases, default) => {
             collect_free_vars_expr(e, params, free);
@@ -2049,6 +2254,9 @@ fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<St
 struct ZenClass {
     parent: Option<String>,
     methods: HashMap<String, Function>,
+    /// Field declarations from `var name [= expr]` in the class body, with the
+    /// initializer expression to evaluate at instantiation (None => Null).
+    fields: Vec<(String, Option<Expr>)>,
 }
 type NativeFunc = fn(Vec<Value>) -> Result<Value, String>;
 
@@ -2129,7 +2337,8 @@ impl Vm {
     /// `class MyError extends errors.Error { }`.
     fn register_error_classes(&mut self) {
         let init = Function {
-            params: vec!["message".into()],
+            params: vec![("message".into(), None)],
+            default_values: vec![None],
             body: Arc::new(vec![Stmt {
                 kind: StmtKind::SetMember(
                     Expr::Var("self".into()),
@@ -2151,6 +2360,7 @@ impl Vm {
             let class = |methods: HashMap<String, Function>| ZenClass {
                 parent: parent_q.clone(),
                 methods,
+                fields: Vec::new(),
             };
             self.classes
                 .insert(leaf.into(), class(methods.clone()));
@@ -3406,6 +3616,9 @@ self.vars.insert("re".into(), re);
                         Value::Dict(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                     });
                 }
+                if let Some(v) = self.self_field_get(n) {
+                    return Ok(v);
+                }
                 let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
                 candidates.extend(self.functions.keys().map(|s| s.as_str()));
                 let hint = suggest_name(n, &candidates, 3)
@@ -3498,6 +3711,39 @@ self.vars.insert("re".into(), re);
                     _ => Err("invalid index operation".into()),
                 }
             }
+            Expr::Slice(object, start, end) => {
+                let object = self.eval(object)?;
+                let Value::Number(s) = self.eval(start)? else {
+                    return Err("slice start must be a number".into());
+                };
+                let Value::Number(e) = self.eval(end)? else {
+                    return Err("slice end must be a number".into());
+                };
+                let s = s as i64;
+                let e = e as i64;
+                match object {
+                    Value::String(value) => {
+                        let chars: Vec<char> = value.chars().collect();
+                        let len = chars.len() as i64;
+                        let a = if s < 0 { len + s } else { s };
+                        let b = if e < 0 { len + e } else { e };
+                        let a = a.max(0).min(len) as usize;
+                        let b = b.max(0).min(len) as usize;
+                        Ok(Value::String(
+                            chars.get(a..b).unwrap_or(&[]).iter().collect(),
+                        ))
+                    }
+                    Value::List(values) => {
+                        let len = values.len() as i64;
+                        let a = if s < 0 { len + s } else { s };
+                        let b = if e < 0 { len + e } else { e };
+                        let a = a.max(0).min(len) as usize;
+                        let b = b.max(0).min(len) as usize;
+                        Ok(Value::List(values.get(a..b).unwrap_or(&[]).to_vec()))
+                    }
+                    _ => Err("slice requires a string or list".into()),
+                }
+            }
             Expr::Member(object, name) => {
                 let obj = self.eval(object)?;
                 self.member(obj, name)
@@ -3515,6 +3761,13 @@ self.vars.insert("re".into(), re);
                     self.eval(yes)
                 } else {
                     self.eval(no)
+                }
+            }
+            Expr::IfExpr(condition, yes, no) => {
+                if self.eval(condition)?.truthy() {
+                    self.eval_block_expr(yes)
+                } else {
+                    self.eval_block_expr(no)
                 }
             }
             Expr::Increment(target, amount) => {
@@ -3543,11 +3796,24 @@ self.vars.insert("re".into(), re);
             Expr::Lambda(params, body) => {
                 let fname = format!("__lambda_{}", self.lambda_counter);
                 self.lambda_counter += 1;
-                let param_set: std::collections::HashSet<String> = params.iter().cloned().collect();
+                let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+                let param_set: std::collections::HashSet<String> = names.iter().cloned().collect();
                 let mut free = std::collections::HashSet::new();
                 collect_free_vars_stmts(body, &param_set, &mut free);
                 let captured: HashMap<String, Value> = free.iter()
-                    .filter_map(|k| self.vars.get(k).map(|v| (k.clone(), v.clone())))
+                    .filter_map(|k| {
+                        if let Some(v) = self.vars.get(k) {
+                            return Some((k.clone(), v.clone()));
+                        }
+                        // Enclosing function params/captures live on the locals
+                        // stack; grab the nearest binding so closures can close
+                        // over parameters of the defining function.
+                        self.locals
+                            .iter()
+                            .rev()
+                            .find(|(n, _)| n == k)
+                            .map(|(n, v)| (n.clone(), v.clone()))
+                    })
                     .collect();
                 let effective_captured: Vec<(String, Value)> = captured.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 let mut captured_names: Vec<String> = captured
@@ -3556,9 +3822,16 @@ self.vars.insert("re".into(), re);
                     .cloned()
                     .collect();
                 captured_names.sort();
-                let bytecode = crate::bytecode::compile_function(&fname, params, &captured_names, body).ok();
+                let has_defaults = params.iter().any(|(_, d)| d.is_some());
+                let default_values = self.eval_default_values(params)?;
+                let bytecode = if has_defaults {
+                    None
+                } else {
+                    crate::bytecode::compile_function(&fname, &names, &captured_names, body).ok()
+                };
                 let function = Function {
                     params: params.clone(),
+                    default_values,
                     body: Arc::new(body.clone()),
                     captured,
                     effective_captured,
@@ -3585,18 +3858,22 @@ self.vars.insert("re".into(), re);
                 for arg in args {
                     values.push(self.eval(arg)?);
                 }
-                if values.len() != function.params.len() {
+                let total = function.params.len();
+                if values.len() > total || values.len() < function.required_count() {
                     return Err(format!(
                         "{parent_name}.{method_name} expects {} arguments, got {}",
-                        function.params.len(), values.len()
+                        total, values.len()
                     ));
+                }
+                for i in values.len()..total {
+                    values.push(function.default_values[i].clone().unwrap_or(Value::Null));
                 }
                 let instance = self.eval(&Expr::Var("self".into()))?;
                 let saved_len = self.locals.len();
                 self.locals.reserve(1 + function.params.len());
                 self.locals.push(("self".into(), instance));
                 for (param, val) in function.params.iter().zip(values) {
-                    self.locals.push((param.clone(), val));
+                    self.locals.push((param.0.clone(), val));
                 }
                 let prev_class = self.current_class.take();
                 let prev_method = self.current_method.take();
@@ -3684,7 +3961,27 @@ self.vars.insert("re".into(), re);
                                 self.dict_method(dict, method, values)
                             }
                             Value::String(value) => self.string_method(value, method, values),
-                            Value::List(list) => self.list_method(list, method, values),
+                            Value::List(list) => {
+                                if matches!(method.as_str(), "push" | "pop") {
+                                    if let Some((inst, field)) = self.list_target_field(object) {
+                                        let result = self.list_method(list.clone(), method, values.clone())?;
+                                        let mut new_list = list;
+                                        match method.as_str() {
+                                            "push" => {
+                                                if let Some(item) = values.first() {
+                                                    new_list.push(item.clone());
+                                                }
+                                            }
+                                            _ => {
+                                                new_list.pop();
+                                            }
+                                        }
+                                        inst.lock().unwrap().fields.insert(field, Value::List(new_list));
+                                        return Ok(result);
+                                    }
+                                }
+                                self.list_method(list, method, values)
+                            }
                             _ => Err("only instance methods and dicts are supported currently".into()),
                         }
                     }
@@ -3707,6 +4004,27 @@ self.vars.insert("re".into(), re);
                     class_name: class_name.clone(),
                     fields: BTreeMap::new(),
                 }));
+                {
+                    let mut seen = std::collections::HashSet::new();
+                    let mut cur = Some(class_name.clone());
+                    while let Some(cname) = cur {
+                        let (fields, parent): (Vec<(String, Option<Expr>)>, Option<String>) =
+                            match self.classes.get(&cname) {
+                                Some(c) => (c.fields.clone(), c.parent.clone()),
+                                None => break,
+                            };
+                        for (fname, init) in fields {
+                            if seen.insert(fname.clone()) {
+                                let val = match init {
+                                    Some(e) => self.eval(&e)?,
+                                    None => Value::Null,
+                                };
+                                instance.lock().unwrap().fields.insert(fname, val);
+                            }
+                        }
+                        cur = parent;
+                    }
+                }
                 if self.find_method(class_name, "init").is_some() {
                     let init_values = if values.is_empty() && self.is_error_class(class_name) {
                         vec![Value::String(String::new())]
@@ -4042,7 +4360,7 @@ self.vars.insert("re".into(), re);
     }
     fn dict_method(&mut self, dict: BTreeMap<String, Value>, method: &str, args: Vec<Value>) -> Result<Value, String> {
         match method {
-            "has" | "containsKey" => {
+            "has" | "containsKey" | "has_key" | "contains" => {
                 let key = match args.first() {
                     Some(Value::String(k)) => k.clone(),
                     _ => return Err(format!("{method} expects a string key")),
@@ -4066,6 +4384,9 @@ self.vars.insert("re".into(), re);
                 dict.keys().map(|k| Value::String(k.clone())).collect(),
             )),
             "values" => Ok(Value::List(dict.into_values().collect())),
+            "items" => Ok(Value::List(
+                dict.iter().map(|(k, v)| Value::List(vec![Value::String(k.clone()), v.clone()])).collect(),
+            )),
             "set" => {
                 let (key, value) = match args.as_slice() {
                     [Value::String(k), v] => (k.clone(), v.clone()),
@@ -4073,6 +4394,29 @@ self.vars.insert("re".into(), re);
                 };
                 let mut dict = dict;
                 dict.insert(key, value);
+                Ok(Value::Dict(dict))
+            }
+            "delete" | "remove" => {
+                let key = match args.first() {
+                    Some(Value::String(k)) => k.clone(),
+                    _ => return Err("{method} expects a string key".into()),
+                };
+                let mut dict = dict;
+                dict.remove(&key);
+                Ok(Value::Dict(dict))
+            }
+            "update" | "merge" => {
+                let mut dict = dict;
+                for arg in args {
+                    match arg {
+                        Value::Dict(other) => {
+                            for (k, v) in other {
+                                dict.insert(k, v);
+                            }
+                        }
+                        _ => return Err(format!("{method} expects a dictionary argument")),
+                    }
+                }
                 Ok(Value::Dict(dict))
             }
             "length" => Ok(Value::Number(dict.len() as f64)),
@@ -4240,11 +4584,17 @@ self.vars.insert("re".into(), re);
         for (fname, function) in &module_vm.functions {
             let key = format!("{namespace}::{fname}");
             self.register_function(key, function.clone());
+            // Also expose under the plain name so closures escaping the module
+            // (e.g. logging handlers) can resolve module helpers by name.
+            self.register_function(fname.clone(), function.clone());
         }
         // Register the module's classes under a namespaced key so `new module.Class(...)` works.
         for (class, def) in &module_vm.classes {
             let key = format!("{namespace}.{class}");
             self.classes.insert(key, def.clone());
+            // Also expose under the plain name so module factories that do
+            // `new Class(...)` internally resolve.
+            self.classes.insert(class.clone(), def.clone());
         }
         let mut exports: HashMap<String, Value> = module_vm.vars.into_iter().collect();
         for (fname, _fn) in &module_vm.functions {
@@ -4272,7 +4622,9 @@ self.vars.insert("re".into(), re);
             let candidates = [
                 name.to_string(),
                 format!("{name}.z"),
+                format!("{name}.zen"),
                 format!("{name}/main.z"),
+                format!("{name}/main.zen"),
             ];
             for c in &candidates {
                 if std::path::Path::new(c).exists() {
@@ -4287,7 +4639,9 @@ self.vars.insert("re".into(), re);
             let path_name = parts.join("/");
             let base_candidates = [
                 format!("{path_name}.z"),
+                format!("{path_name}.zen"),
                 format!("{path_name}/main.z"),
+                format!("{path_name}/main.zen"),
                 format!("{path_name}/{}", parts.last().unwrap_or(&"")),
             ];
             // Try local first
@@ -4310,6 +4664,10 @@ self.vars.insert("re".into(), re);
         if std::path::Path::new(&local).exists() {
             return Ok(local);
         }
+        let local_zen = format!("{name}.zen");
+        if std::path::Path::new(&local_zen).exists() {
+            return Ok(local_zen);
+        }
         // Package directory: name/main.z or name/name.z
         let pkg_main = format!("{name}/main.z");
         let pkg_self = format!("{name}/{}.z", name);
@@ -4319,10 +4677,21 @@ self.vars.insert("re".into(), re);
         if std::path::Path::new(&pkg_self).exists() {
             return Ok(pkg_self);
         }
+        let pkg_main_zen = format!("{name}/main.zen");
+        let pkg_self_zen = format!("{name}/{}.zen", name);
+        if std::path::Path::new(&pkg_main_zen).exists() {
+            return Ok(pkg_main_zen);
+        }
+        if std::path::Path::new(&pkg_self_zen).exists() {
+            return Ok(pkg_self_zen);
+        }
         if let Some(path) = crate::pm::resolve_module_file(name) {
             return Ok(path);
         }
         if let Some(path) = find_std_file(&format!("{name}.z")) {
+            return Ok(path);
+        }
+        if let Some(path) = find_std_file(&format!("{name}.zen")) {
             return Ok(path);
         }
         Err(format!("module not found: {name}"))
@@ -4334,6 +4703,73 @@ self.vars.insert("re".into(), re);
             registry.insert(name.clone(), function.clone());
         }
         self.functions.insert(name, function);
+    }
+
+    /// Evaluate default-value expressions for a function's parameters at
+    /// definition time, producing a value parallel to `params`.
+    fn eval_default_values(
+        &mut self,
+        params: &[(String, Option<Expr>)],
+    ) -> Result<Vec<Option<Value>>, String> {
+        let mut out = Vec::with_capacity(params.len());
+        for (_, default) in params {
+            out.push(match default {
+                Some(e) => Some(self.eval(e)?),
+                None => None,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Evaluate a block used as an expression (`if`-expression branch).
+    /// Returns the value of the last expression statement, or the result of an
+    /// explicit `return`, or Null.
+    fn eval_block_expr(&mut self, body: &[Stmt]) -> Result<Value, String> {
+        let mut result = Value::Null;
+        for stmt in body {
+            match &stmt.kind {
+                StmtKind::Expr(e) => {
+                    result = self.eval(e)?;
+                }
+                StmtKind::Let(_, e, _) => {
+                    let v = self.eval(e)?;
+                    match &stmt.kind {
+                        StmtKind::Let(LetTarget::Var(n), _, _) => {
+                            self.vars.insert(n.clone(), v.clone());
+                        }
+                        StmtKind::Let(LetTarget::List(names), _, _) => {
+                            if let Value::List(items) = v.clone() {
+                                for (i, name) in names.iter().enumerate() {
+                                    if let Some(item) = items.get(i) {
+                                        self.vars.insert(name.clone(), item.clone());
+                                    }
+                                }
+                            }
+                        }
+                        StmtKind::Let(LetTarget::Dict(names), _, _) => {
+                            if let Value::Dict(dict) = v.clone() {
+                                for name in names {
+                                    if let Some(item) = dict.get(name) {
+                                        self.vars.insert(name.clone(), item.clone());
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    result = v;
+                }
+                _ => {
+                    match self.exec(std::slice::from_ref(stmt))? {
+                        Flow::Normal | Flow::Continue => {}
+                        Flow::Return(v) => return Ok(v),
+                        Flow::Break => break,
+                        Flow::Throw(v) => return Err(format!("unhandled exception: {v}")),
+                    }
+                }
+            }
+        }
+        Ok(result)
     }
 
     fn call(&mut self, name: &str, values: Vec<Value>) -> Result<Flow, String> {
@@ -4367,13 +4803,26 @@ self.vars.insert("re".into(), re);
 
         // Check registered functions directly (hot path for user-defined functions)
         if let Some(function) = self.functions.get(name) {
-            if values.len() != function.params.len() {
+            let argc = values.len();
+            let required = function.required_count();
+            if argc > function.params.len() || argc < required {
                 return Err(format!(
                     "{name} expects {} arguments, got {}",
                     function.params.len(),
-                    values.len()
+                    argc
                 ));
             }
+            let bind_args = |function: &Function, values: &[Value]| -> Vec<Value> {
+                let mut bound = values.to_vec();
+                for i in bound.len()..function.params.len() {
+                    bound.push(
+                        function.default_values[i]
+                            .clone()
+                            .unwrap_or(Value::Null),
+                    );
+                }
+                bound
+            };
             // Bytecode fast path: run the compiled body if available.
             if let Some(bc) = &function.bytecode {
                 let bc = Arc::clone(bc);
@@ -4382,6 +4831,7 @@ self.vars.insert("re".into(), re);
                 } else {
                     function.captured.clone()
                 };
+                let bound = bind_args(&function, &values);
                 let param_count = function.params.len();
                 let cache_matches = self
                     .call_cache
@@ -4396,7 +4846,7 @@ self.vars.insert("re".into(), re);
                         generation: self.fn_generation,
                     });
                 }
-                let flow = self.run_bytecode(&bc, values, &captured)?;
+                let flow = self.run_bytecode(&bc, bound, &captured)?;
                 return Ok(match flow {
                     Flow::Return(value) => Flow::Return(value),
                     Flow::Throw(value) => Flow::Throw(value),
@@ -4408,11 +4858,12 @@ self.vars.insert("re".into(), re);
             }
             let body = Arc::clone(&function.body);
             let cap_count = function.effective_captured.len();
+            let bound = bind_args(&function, &values);
             // Save locals stack position, push params + captured onto fast local stack
             let saved_len = self.locals.len();
             self.locals.reserve(function.params.len() + cap_count);
-            for (parameter, value) in function.params.iter().zip(values) {
-                self.locals.push((parameter.clone(), value));
+            for (parameter, value) in function.params.iter().zip(bound) {
+                self.locals.push((parameter.0.clone(), value));
             }
             for (k, v) in &function.effective_captured {
                 self.locals.push((k.clone(), v.clone()));
@@ -4444,6 +4895,23 @@ self.vars.insert("re".into(), re);
                     return self.call(&fname, values);
                 }
                 _ => {}
+            }
+        }
+
+        // Implicit-self method call: a bare `find_index(...)` inside a method
+        // resolves to `self.find_index(...)`.
+        if self.current_class.is_some() {
+            if let Some((_, Value::Instance(instance))) = self
+                .locals
+                .iter()
+                .rev()
+                .find(|(n, _)| n == "self")
+            {
+                let instance = instance.clone();
+                let class_name = instance.lock().unwrap().class_name.clone();
+                if self.find_method(&class_name, name).is_some() {
+                    return self.call_method(instance, name, values);
+                }
             }
         }
 
@@ -4855,11 +5323,11 @@ self.vars.insert("re".into(), re);
                     }
                     // 3. Registered user functions.
                     if let Some(function) = self.functions.get(name.as_str()) {
-                        if argc != function.params.len() {
+                        let total = function.params.len();
+                        if argc > total || argc < function.required_count() {
                             return Err(format!(
                                 "{name} expects {} arguments, got {}",
-                                function.params.len(),
-                                argc
+                                total, argc
                             ));
                         }
                         if let Some(cbc) = &function.bytecode {
@@ -4872,7 +5340,7 @@ self.vars.insert("re".into(), re);
                             self.call_cache = Some(CallCache {
                                 name: name.to_string(),
                                 bc: Arc::clone(&cbc),
-                                param_count: argc,
+                                param_count: total,
                                 captured: captured.clone(),
                                 generation: self.fn_generation,
                             });
@@ -4880,6 +5348,13 @@ self.vars.insert("re".into(), re);
                             frames.push((Arc::clone(&cur), ip, base, new_base, start));
                             for i in 0..argc {
                                 locals.push(stack[start + i].clone());
+                            }
+                            for i in argc..total {
+                                locals.push(
+                                    function.default_values[i]
+                                        .clone()
+                                        .unwrap_or(Value::Null),
+                                );
                             }
                             stack.truncate(start);
                             locals.resize(new_base + cbc.local_count as usize, Value::Null);
@@ -5075,7 +5550,8 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
                     let function = Function {
-                        params: cf.params.clone(),
+                        params: cf.params.iter().cloned().map(|n| (n, None)).collect(),
+                        default_values: Vec::new(),
                         body: Arc::new(Vec::new()),
                         captured: captured_map,
                         effective_captured,
@@ -5099,6 +5575,164 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             current = class.parent.clone();
         }
         None
+    }
+    /// Look up `name` as an instance field of the current method's `self`.
+    /// Returns Some(field value) when the name is a declared field (and not a
+    /// method name) of the instance's class or one of its ancestors.
+    /// Locals-first read: prefer the current frame's locals (params/captured),
+    /// then the global scope.
+    fn get_var(&mut self, name: &str) -> Option<Value> {
+        if let Some((_, v)) = self.locals.iter().rev().find(|(n, _)| n == name) {
+            return Some(v.clone());
+        }
+        self.vars.get(name).cloned()
+    }
+    /// Locals-first write: update the nearest local binding if one exists,
+    /// otherwise store in the global scope.
+    fn set_var(&mut self, name: &str, value: Value) {
+        if let Some(idx) = self.locals.iter().rposition(|(n, _)| n == name) {
+            self.locals[idx].1 = value;
+        } else {
+            self.vars.insert(name.to_string(), value);
+        }
+    }
+    fn self_field_get(&mut self, name: &str) -> Option<Value> {
+        let inst = {
+            let mut found = None;
+            for (k, v) in self.locals.iter().rev() {
+                if k == "self" {
+                    if let Value::Instance(i) = v {
+                        found = Some(Arc::clone(i));
+                    }
+                    break;
+                }
+            }
+            found?
+        };
+        let class_name = inst.lock().unwrap().class_name.clone();
+        let mut cur = Some(class_name);
+        while let Some(c) = cur {
+            let class = self.classes.get(&c)?;
+            if class.methods.contains_key(name) {
+                return None;
+            }
+            if let Some(v) = inst.lock().unwrap().fields.get(name) {
+                return Some(v.clone());
+            }
+            cur = class.parent.clone();
+        }
+        None
+    }
+    /// True when `name` is a declared field of the current method's `self`
+    /// (checking the instance's class and its ancestors).
+    fn is_self_field(&self, name: &str) -> bool {
+        let Some(inst) = self.locals.iter().rev().find_map(|(k, v)| {
+            if k == "self" {
+                if let Value::Instance(i) = v {
+                    Some(Arc::clone(i))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }) else {
+            return false;
+        };
+        let class_name = inst.lock().unwrap().class_name.clone();
+        let mut cur = Some(class_name);
+        while let Some(c) = cur {
+            let class = match self.classes.get(&c) {
+                Some(c) => c,
+                None => return false,
+            };
+            if class.methods.contains_key(name) {
+                return false;
+            }
+            if class.fields.iter().any(|(f, _)| f == name) {
+                return true;
+            }
+            cur = class.parent.clone();
+        }
+        false
+    }
+    /// Assign `value` to the instance field `name` on the current method's
+    /// `self` if it is a declared field. Returns true when handled.
+    fn self_field_set(&mut self, name: &str, value: Value) -> bool {
+        let Some(inst) = (self.locals.iter().rev().find_map(|(k, v)| {
+            if k == "self" {
+                if let Value::Instance(i) = v {
+                    Some(Arc::clone(i))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })) else {
+            return false;
+        };
+        let class_name = inst.lock().unwrap().class_name.clone();
+        let mut cur = Some(class_name);
+        while let Some(c) = cur {
+            let class = match self.classes.get(&c) {
+                Some(c) => c,
+                None => return false,
+            };
+            if class.methods.contains_key(name) {
+                return false;
+            }
+            if class.fields.iter().any(|(f, _)| f == name) {
+                inst.lock().unwrap().fields.insert(name.to_string(), value);
+                return true;
+            }
+            cur = class.parent.clone();
+        }
+        false
+    }
+    /// If `object` refers to an instance field (a bare field name in a method,
+    /// or `self.field`, or `var.field` where var holds an instance), return the
+    /// instance and field name so list mutations can be written back.
+    fn list_target_field(&self, object: &Expr) -> Option<(InstanceRef, String)> {
+        match object {
+            Expr::Member(inner, field) => {
+                let inst = match &**inner {
+                    Expr::Var(name) => {
+                        let v = self
+                            .locals
+                            .iter()
+                            .rev()
+                            .find(|(k, _)| k == name)
+                            .map(|(_, v)| v.clone())
+                            .or_else(|| self.vars.get(name).cloned())?;
+                        match v {
+                            Value::Instance(i) => i,
+                            _ => return None,
+                        }
+                    }
+                    _ => return None,
+                };
+                Some((inst, field.clone()))
+            }
+            Expr::Var(name) => {
+                if !self.is_self_field(name) {
+                    return None;
+                }
+                let inst = self.locals.iter().rev().find_map(|(k, v)| {
+                    if k == "self" {
+                        if let Value::Instance(i) = v {
+                            Some(Arc::clone(i))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })?;
+                Some((inst, name.clone()))
+            }
+            _ => None,
+        }
     }
     fn apply_func(&mut self, f: &Value, values: Vec<Value>) -> Result<Value, String> {
         match f {
@@ -5124,12 +5758,17 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
 let function = self
             .find_method(&class_name, method)
             .ok_or_else(|| format!("{class_name} has no method: {method}"))?;
-        if values.len() != function.params.len() {
+        let total = function.params.len();
+        let argc = values.len();
+        if argc > total || argc < function.required_count() {
             return Err(format!(
                 "{class_name}.{method} expects {} arguments, got {}",
-                function.params.len(),
-                values.len()
+                total, argc
             ));
+        }
+        let mut bound = values;
+        for i in bound.len()..total {
+            bound.push(function.default_values[i].clone().unwrap_or(Value::Null));
         }
         let body = Arc::clone(&function.body);
         let prev_class = self.current_class.take();
@@ -5139,9 +5778,9 @@ let function = self
         // Bytecode fast path for compiled methods.
         if let Some(bc) = &function.bytecode {
             let bc = Arc::clone(bc);
-            let mut args = Vec::with_capacity(1 + values.len());
+            let mut args = Vec::with_capacity(1 + bound.len());
             args.push(Value::Instance(instance));
-            args.extend(values);
+            args.extend(bound);
             let captured = if function.captured.is_empty() {
                 HashMap::new()
             } else {
@@ -5165,8 +5804,8 @@ let function = self
         let saved_len = self.locals.len();
         self.locals.reserve(1 + function.params.len() + function.effective_captured.len());
         self.locals.push(("self".into(), Value::Instance(instance)));
-        for (parameter, value) in function.params.iter().zip(values) {
-            self.locals.push((parameter.clone(), value));
+        for (parameter, value) in function.params.iter().zip(bound) {
+            self.locals.push((parameter.0.clone(), value));
         }
         for (k, v) in &function.effective_captured {
             self.locals.push((k.clone(), v.clone()));
@@ -5229,7 +5868,8 @@ let function = self
             let parent_q = parent.clone().map(|p| format!("errors.{p}"));
             let qualified = format!("errors.{name}");
             let init = Function {
-                params: vec!["message".into()],
+                params: vec![("message".into(), None)],
+                default_values: vec![None],
                 body: Arc::new(vec![Stmt {
                     kind: StmtKind::SetMember(
                         Expr::Var("self".into()),
@@ -5248,6 +5888,7 @@ let function = self
             let class = ZenClass {
                 parent: parent_q.clone(),
                 methods: methods.clone(),
+                fields: Vec::new(),
             };
             self.classes.insert(name.clone(), class.clone());
             self.classes.insert(qualified, class);
@@ -5309,6 +5950,37 @@ let function = self
                     Ok(Flow::Normal)
                 }
                 StmtKind::Assign(n, op, e) => {
+                    if self.is_self_field(n) {
+                        let v = if matches!(op, Kind::Assign) {
+                            self.eval(e)?
+                        } else if matches!(op, Kind::NullishAssign) {
+                            let current = self.self_field_get(n).unwrap_or(Value::Null);
+                            if matches!(current, Value::Null) {
+                                self.eval(e)?
+                            } else {
+                                current
+                            }
+                        } else {
+                            let current = self.self_field_get(n).unwrap_or(Value::Null);
+                            let rhs = self.eval(e)?;
+                            let binary_op = match op {
+                                Kind::PlusAssign => Kind::Plus,
+                                Kind::MinusAssign => Kind::Minus,
+                                Kind::StarAssign => Kind::Star,
+                                Kind::SlashAssign => Kind::Slash,
+                                Kind::PercentAssign => Kind::Percent,
+                                Kind::AmpAssign => Kind::Amp,
+                                Kind::PipeAssign => Kind::Pipe,
+                                Kind::CaretAssign => Kind::Caret,
+                                Kind::LShiftAssign => Kind::LShift,
+                                Kind::RShiftAssign => Kind::RShift,
+                                _ => return Err("unsupported assignment operator".into()),
+                            };
+                            self.binary(current, &binary_op, rhs)?
+                        };
+                        self.self_field_set(n, v);
+                        return Ok(Flow::Normal);
+                    }
                     let v = if matches!(op, Kind::Assign) {
                         self.eval(e)?
                     } else {
@@ -5318,9 +5990,7 @@ let function = self
                         let rhs = self.eval(e)?;
                         if matches!(op, Kind::NullishAssign) {
                             let current = self
-                                .vars
-                                .get(n)
-                                .cloned()
+                                .get_var(n)
                                 .ok_or_else(|| format!("undefined variable: {n}"))?;
                             if matches!(current, Value::Null) {
                                 rhs
@@ -5341,17 +6011,13 @@ let function = self
                                 Kind::RShiftAssign => Kind::RShift,
                                 _ => return Err("unsupported assignment operator".into()),
                             };
-                            self.binary(
-                                self.vars
-                                    .get(n)
-                                    .cloned()
-                                    .ok_or_else(|| format!("undefined variable: {n}"))?,
-                                &binary_op,
-                                rhs,
-                            )?
+                            let current = self
+                                .get_var(n)
+                                .ok_or_else(|| format!("undefined variable: {n}"))?;
+                            self.binary(current, &binary_op, rhs)?
                         }
                     };
-                    self.vars.insert(n.clone(), v);
+                    self.set_var(n, v);
                     Ok(Flow::Normal)
                 }
                 StmtKind::Print(values, sep, end) => {
@@ -5409,11 +6075,21 @@ let function = self
                 StmtKind::Break => return Ok(Flow::Break),
                 StmtKind::Continue => return Ok(Flow::Continue),
                 StmtKind::Function(name, params, body) => {
-                    let param_set: std::collections::HashSet<String> = params.iter().cloned().collect();
+                    let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+                    let param_set: std::collections::HashSet<String> = names.iter().cloned().collect();
                     let mut free = std::collections::HashSet::new();
                     collect_free_vars_stmts(body, &param_set, &mut free);
                     let captured: HashMap<String, Value> = free.iter()
-                        .filter_map(|k| self.vars.get(k).map(|v| (k.clone(), v.clone())))
+                        .filter_map(|k| {
+                            if let Some(v) = self.vars.get(k) {
+                                return Some((k.clone(), v.clone()));
+                            }
+                            self.locals
+                                .iter()
+                                .rev()
+                                .find(|(n, _)| n == k)
+                                .map(|(n, v)| (n.clone(), v.clone()))
+                        })
                         .collect();
                     let effective_captured: Vec<(String, Value)> = captured.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     let mut captured_names: Vec<String> = captured
@@ -5422,9 +6098,16 @@ let function = self
                         .cloned()
                         .collect();
                     captured_names.sort();
-                    let bytecode = crate::bytecode::compile_function(name, params, &captured_names, body).ok();
+                    let has_defaults = params.iter().any(|(_, d)| d.is_some());
+                    let default_values = self.eval_default_values(params)?;
+                    let bytecode = if has_defaults {
+                        None
+                    } else {
+                        crate::bytecode::compile_function(name, &names, &captured_names, body).ok()
+                    };
                     let function = Function {
                         params: params.clone(),
+                        default_values,
                         body: Arc::new(body.clone()),
                         captured,
                         effective_captured,
@@ -5653,22 +6336,38 @@ let function = self
                         }
                     }
                     let mut methods = HashMap::new();
+                    let mut fields = Vec::new();
                     for statement in body {
-                        if let StmtKind::Function(method, params, body) = &statement.kind {
-                            methods.insert(
-                                method.clone(),
-                                Function {
-                                    params: params.clone(),
-                                    body: Arc::new(body.clone()),
-                                    captured: HashMap::new(),
-                                    effective_captured: Vec::new(),
-                                    bytecode: crate::bytecode::compile_method(method, params, body).ok(),
-                                },
-                            );
-                        } else {
-                            return Err(format!(
-                                "class '{name}' may currently contain only methods"
-                            ));
+                        match &statement.kind {
+                            StmtKind::Function(method, params, body) => {
+                                let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+                                let has_defaults = params.iter().any(|(_, d)| d.is_some());
+                                let default_values = self.eval_default_values(params)?;
+                                // Methods run via tree-walk so implicit-self
+                                // field access (`var _x` -> `self._x`) resolves
+                                // correctly. Bytecode for methods is disabled.
+                                let bytecode = None;
+                                let _ = names;
+                                methods.insert(
+                                    method.clone(),
+                                    Function {
+                                        params: params.clone(),
+                                        default_values,
+                                        body: Arc::new(body.clone()),
+                                        captured: HashMap::new(),
+                                        effective_captured: Vec::new(),
+                                        bytecode,
+                                    },
+                                );
+                            }
+                            StmtKind::Field(fname, init) => {
+                                fields.push((fname.clone(), init.clone()));
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "class '{name}' may currently contain only methods"
+                                ));
+                            }
                         }
                     }
                     self.classes.insert(
@@ -5676,6 +6375,7 @@ let function = self
                         ZenClass {
                             parent: parent.clone(),
                             methods,
+                            fields,
                         },
                     );
                     Ok(Flow::Normal)
@@ -5702,6 +6402,41 @@ let function = self
                     }
                     Ok(Flow::Normal)
                 }
+                StmtKind::SetIndex(object, index, value) => {
+                    let obj = self.eval(object)?;
+                    let idx = self.eval(index)?;
+                    let new_val = self.eval(value)?;
+                    match obj {
+                        Value::Dict(mut dict) => {
+                            let key = match idx {
+                                Value::String(s) => s,
+                                _ => return Err("dictionary index must be a string".into()),
+                            };
+                            dict.insert(key, new_val);
+                            if let Expr::Var(name) = object {
+                                self.vars.insert(name.clone(), Value::Dict(dict));
+                            }
+                        }
+                        Value::List(mut list) => {
+                            let Value::Number(n) = idx else {
+                                return Err("list index must be a number".into());
+                            };
+                            let mut i = n as i64;
+                            if i < 0 {
+                                i += list.len() as i64;
+                            }
+                            if i < 0 || i as usize >= list.len() {
+                                return Err("list index out of bounds".into());
+                            }
+                            list[i as usize] = new_val;
+                            if let Expr::Var(name) = object {
+                                self.vars.insert(name.clone(), Value::List(list));
+                            }
+                        }
+                        _ => return Err("index assignment requires a dict or list".into()),
+                    }
+                    Ok(Flow::Normal)
+                }
                 StmtKind::Switch(value, cases, default_body) => {
                     let target = self.eval(value)?;
                     let mut matched = false;
@@ -5723,6 +6458,7 @@ let function = self
                     }
                     Ok(Flow::Normal)
                 }
+                StmtKind::Field(..) => unreachable!("field declarations are handled by the class handler"),
             }
         }
     fn locate(&self, line: usize, col: usize, message: String) -> String {
@@ -8492,13 +9228,38 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::String(datetime.format("%Y-%m-%d").to_string()))
         },
         "time_format" => |args| {
-            let fmt = match args.first() {
-                Some(Value::String(f)) => f,
+            enum Ts {
+                Now,
+                Unix(f64),
+                Str(String),
+            }
+            let (fmt, ts) = match args.as_slice() {
+                [Value::String(f)] => (f.clone(), Ts::Now),
+                [Value::Number(unix), Value::String(f)] => (f.clone(), Ts::Unix(*unix)),
+                [Value::String(ts), Value::String(f)] => (f.clone(), Ts::Str(ts.clone())),
                 _ => return Err("time.format expects a format string".into()),
             };
-            let now = SystemTime::now();
-            let datetime: chrono::DateTime<chrono::Local> = now.into();
-            Ok(Value::String(datetime.format(fmt).to_string()))
+            match ts {
+                Ts::Unix(unix) => {
+                    let datetime: chrono::DateTime<chrono::Local> =
+                        chrono::DateTime::from_timestamp(unix as i64, 0)
+                            .unwrap_or_default()
+                            .into();
+                    Ok(Value::String(datetime.format(&fmt).to_string()))
+                }
+                Ts::Str(ts) => match chrono::DateTime::parse_from_rfc3339(&ts) {
+                    Ok(dt) => Ok(Value::String(dt.format(&fmt).to_string())),
+                    Err(_) => match chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%dT%H:%M:%S") {
+                        Ok(parsed) => Ok(Value::String(parsed.format(&fmt).to_string())),
+                        Err(_) => Err("time.format could not parse timestamp".into()),
+                    },
+                },
+                Ts::Now => {
+                    let now = SystemTime::now();
+                    let datetime: chrono::DateTime<chrono::Local> = now.into();
+                    Ok(Value::String(datetime.format(&fmt).to_string()))
+                }
+            }
         },
         "time_parse" => |args| {
             let (s, fmt) = match args.as_slice() {
@@ -12593,7 +13354,7 @@ fn lint_block(
             StmtKind::For(_, _, body) => lint_block(body, depth + 1, globals, consts, warnings),
             StmtKind::Function(name, params, body) => {
                 let saved = globals.clone();
-                for param in params {
+                for (param, _) in params {
                     globals.insert(param.clone());
                 }
                 lint_block(body, depth + 1, globals, consts, warnings);
@@ -12652,10 +13413,16 @@ fn find_std_file(name: &str) -> Option<String> {
     }
     if let Ok(exe) = env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            for dir in [exe_dir, exe_dir.parent().unwrap_or(exe_dir)] {
+            // Walk up from the executable's directory looking for a `std/`
+            // directory so imports work from any working directory.
+            let mut dir = exe_dir.to_path_buf();
+            loop {
                 let path = dir.join("std").join(name);
                 if path.exists() {
                     return Some(path.to_string_lossy().into_owned());
+                }
+                if !dir.pop() {
+                    break;
                 }
             }
         }

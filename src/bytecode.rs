@@ -494,9 +494,15 @@ impl FunctionCompiler {
                 if !self.allow_defs {
                     return Err("nested function definitions are not supported in bytecode".into());
                 }
+                // Default parameters are handled by the tree-walk runtime, so a
+                // module containing them falls back to interpretation.
+                if params.iter().any(|(_, d)| d.is_some()) {
+                    return Err("default parameters are not supported in bytecode".into());
+                }
+                let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
                 // Module-level functions reference module globals by name at call
                 // time (LoadGlobal), so no captured slots are needed here.
-                let cf = compile_function(name, params, &[], body)?;
+                let cf = compile_function(name, &names, &[], body)?;
                 let idx = self.nested.len() + 1; // main is index 0 in the final table
                 self.nested.push((*cf).clone());
                 let ci = self.const_str(name);
@@ -702,9 +708,13 @@ fn local_opcode(&self, op: &Kind) -> Result<Opcode, String> {
                 if !self.allow_defs {
                     return Err("lambdas are not supported in bytecode".into());
                 }
+                if params.iter().any(|(_, d)| d.is_some()) {
+                    return Err("default parameters are not supported in bytecode".into());
+                }
                 let fname = format!("__lambda_{}", self.nested.len());
+                let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
                 // Module-level lambdas reference globals by name, no capture slots.
-                let cf = compile_function(&fname, params, &[], body)?;
+                let cf = compile_function(&fname, &names, &[], body)?;
                 let idx = self.nested.len() + 1;
                 self.nested.push((*cf).clone());
                 self.emit(Opcode::Closure, idx as u16, 0, 0);
