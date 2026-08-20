@@ -4453,26 +4453,51 @@ self.vars.insert("re".into(), re);
     /// `Flow::Throw` propagates to tree-walk try/catch callers.
     fn run_bytecode(
         &mut self,
-        bc: &crate::bytecode::CompiledFunction,
+        bc: &std::sync::Arc<crate::bytecode::CompiledFunction>,
         args: Vec<Value>,
         captured: &HashMap<String, Value>,
     ) -> Result<Flow, String> {
         use crate::bytecode::Opcode;
-        let mut locals: Vec<Value> = vec![Value::Null; bc.local_count as usize];
+        let mut cur = Arc::clone(bc);
+        let mut locals: Vec<Value> = Vec::new();
+        locals.resize(cur.local_count as usize, Value::Null);
         for (i, v) in args.into_iter().enumerate() {
-            if i < bc.param_count as usize {
+            if i < cur.param_count as usize {
                 locals[i] = v;
             }
         }
-        for (i, name) in bc.captured_names.iter().enumerate() {
+        for (i, name) in cur.captured_names.iter().enumerate() {
             if let Some(v) = captured.get(name) {
-                locals[bc.param_count as usize + i] = v.clone();
+                let idx = cur.param_count as usize + i;
+                if idx < locals.len() {
+                    locals[idx] = v.clone();
+                }
             }
         }
         let mut stack: Vec<Value> = Vec::new();
         let mut ip: usize = 0;
-        while ip < bc.instructions.len() {
-            let inst = bc.instructions[ip];
+        let mut frames: Vec<(
+            Arc<crate::bytecode::CompiledFunction>,
+            usize,
+            usize,
+            usize,
+            usize,
+        )> = Vec::new();
+        let mut base: usize = 0;
+        loop {
+            if ip >= cur.instructions.len() {
+                if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
+                    locals.truncate(fnew_base);
+                    stack.truncate(fstack_len);
+                    stack.push(Value::Null);
+                    cur = fbc;
+                    ip = fip;
+                    base = fbase;
+                    continue;
+                }
+                return Ok(Flow::Normal);
+            }
+            let inst = cur.instructions[ip];
             ip += 1;
             match inst.opcode {
                 Opcode::Pop => {
@@ -4484,25 +4509,27 @@ self.vars.insert("re".into(), re);
                     }
                 }
                 Opcode::Const => {
-                    let c = bc.constants[inst.arg1 as usize].clone();
+                    let c = cur.constants[inst.arg1 as usize].clone();
                     stack.push(c);
                 }
                 Opcode::True => stack.push(Value::Bool(true)),
                 Opcode::False => stack.push(Value::Bool(false)),
                 Opcode::Null => stack.push(Value::Null),
                 Opcode::LoadLocal => {
-                    let v = locals.get(inst.arg1 as usize).cloned().unwrap_or(Value::Null);
+                    let idx = base + inst.arg1 as usize;
+                    let v = locals.get(idx).cloned().unwrap_or(Value::Null);
                     stack.push(v);
                 }
                 Opcode::StoreLocal => {
                     if let Some(v) = stack.pop() {
-                        if let Some(slot) = locals.get_mut(inst.arg1 as usize) {
+                        let idx = base + inst.arg1 as usize;
+                        if let Some(slot) = locals.get_mut(idx) {
                             *slot = v;
                         }
                     }
                 }
                 Opcode::LoadGlobal => {
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in LoadGlobal".into());
                     };
                     if let Some(v) = self.vars.get(name.as_str()) {
@@ -4521,14 +4548,14 @@ self.vars.insert("re".into(), re);
                     }
                 }
                 Opcode::StoreGlobal => {
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in StoreGlobal".into());
                     };
                     let v = stack.pop().unwrap_or(Value::Null);
                     self.vars.insert(name.clone(), v);
                 }
                 Opcode::CheckLockedAssign => {
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in CheckLockedAssign".into());
                     };
                     if self.locked.contains(name.as_str()) {
@@ -4538,7 +4565,7 @@ self.vars.insert("re".into(), re);
                     }
                 }
                 Opcode::CheckLockedRedefine => {
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in CheckLockedRedefine".into());
                     };
                     if self.locked.contains(name.as_str()) {
@@ -4548,13 +4575,13 @@ self.vars.insert("re".into(), re);
                     }
                 }
                 Opcode::LockGlobal => {
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in LockGlobal".into());
                     };
                     self.locked.insert(name.clone());
                 }
                 Opcode::UnlockGlobal => {
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in UnlockGlobal".into());
                     };
                     self.locked.remove(name.as_str());
@@ -4564,7 +4591,7 @@ self.vars.insert("re".into(), re);
                 | Opcode::MulGlobal
                 | Opcode::DivGlobal
                 | Opcode::ModGlobal => {
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in compound assign".into());
                     };
                     if self.locked.contains(name.as_str()) {
@@ -4609,7 +4636,7 @@ self.vars.insert("re".into(), re);
                 | Opcode::MulLocal
                 | Opcode::DivLocal
                 | Opcode::ModLocal => {
-                    let slot = inst.arg1 as usize;
+                    let slot = base + inst.arg1 as usize;
                     let rhs = stack.pop().unwrap_or(Value::Null);
                     let current = locals.get(slot).cloned().unwrap_or(Value::Null);
                     let v = match (inst.opcode, current, rhs) {
@@ -4780,32 +4807,160 @@ self.vars.insert("re".into(), re);
                     }
                 }
                 Opcode::Call => {
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in Call".into());
                     };
                     let argc = inst.arg2 as usize;
-                    let mut vals = Vec::with_capacity(argc);
-                    for _ in 0..argc {
-                        vals.push(stack.pop().unwrap_or(Value::Null));
+                    let start = stack.len().checked_sub(argc).unwrap_or(0);
+                    // 1. Cache fast path: repeated calls to the same compiled
+                    // function (recursion).
+                    if let Some(c) = &self.call_cache {
+                        if c.generation == self.fn_generation
+                            && c.name.as_str() == name
+                            && c.param_count == argc
+                        {
+                            let cbc = Arc::clone(&c.bc);
+                            let captured = if c.captured.is_empty() {
+                                HashMap::new()
+                            } else {
+                                c.captured.clone()
+                            };
+                            let new_base = locals.len();
+                            frames.push((Arc::clone(&cur), ip, base, new_base, start));
+                            for i in 0..argc {
+                                locals.push(stack[start + i].clone());
+                            }
+                            stack.truncate(start);
+                            locals.resize(new_base + cbc.local_count as usize, Value::Null);
+                            for (i, cn) in cbc.captured_names.iter().enumerate() {
+                                if let Some(v) = captured.get(cn) {
+                                    locals[new_base + cbc.param_count as usize + i] = v.clone();
+                                }
+                            }
+                            cur = cbc;
+                            ip = 0;
+                            base = new_base;
+                            continue;
+                        }
                     }
-                    vals.reverse();
-                    let flow = self.call(name, vals)?;
-                    match flow {
-                        Flow::Return(v) => stack.push(v),
-                        Flow::Throw(v) => return Ok(Flow::Throw(v)),
-                        _ => stack.push(Value::Null),
+                    // 2. Native functions.
+                    if let Some(&native_fn) = self.native_functions.get(name.as_str()) {
+                        let mut vals = Vec::with_capacity(argc);
+                        for i in 0..argc {
+                            vals.push(stack[start + i].clone());
+                        }
+                        stack.truncate(start);
+                        stack.push(native_fn(vals)?);
+                        continue;
                     }
+                    // 3. Registered user functions.
+                    if let Some(function) = self.functions.get(name.as_str()) {
+                        if argc != function.params.len() {
+                            return Err(format!(
+                                "{name} expects {} arguments, got {}",
+                                function.params.len(),
+                                argc
+                            ));
+                        }
+                        if let Some(cbc) = &function.bytecode {
+                            let cbc = Arc::clone(cbc);
+                            let captured = if function.captured.is_empty() {
+                                HashMap::new()
+                            } else {
+                                function.captured.clone()
+                            };
+                            self.call_cache = Some(CallCache {
+                                name: name.to_string(),
+                                bc: Arc::clone(&cbc),
+                                param_count: argc,
+                                captured: captured.clone(),
+                                generation: self.fn_generation,
+                            });
+                            let new_base = locals.len();
+                            frames.push((Arc::clone(&cur), ip, base, new_base, start));
+                            for i in 0..argc {
+                                locals.push(stack[start + i].clone());
+                            }
+                            stack.truncate(start);
+                            locals.resize(new_base + cbc.local_count as usize, Value::Null);
+                            for (i, cn) in cbc.captured_names.iter().enumerate() {
+                                if let Some(v) = captured.get(cn) {
+                                    locals[new_base + cbc.param_count as usize + i] = v.clone();
+                                }
+                            }
+                            cur = cbc;
+                            ip = 0;
+                            base = new_base;
+                            continue;
+                        }
+                        let mut vals = Vec::with_capacity(argc);
+                        for i in 0..argc {
+                            vals.push(stack[start + i].clone());
+                        }
+                        stack.truncate(start);
+                        let flow = self.call(name, vals)?;
+                        match flow {
+                            Flow::Return(v) => stack.push(v),
+                            Flow::Throw(v) => return Ok(Flow::Throw(v)),
+                            _ => stack.push(Value::Null),
+                        }
+                        continue;
+                    }
+                    // 4. Function pointers stored in variables.
+                    if let Some(val) = self.vars.get(name.as_str()) {
+                        match val {
+                            Value::NativeFunction(n) => {
+                                if let Some(&native_fn) = self.native_functions.get(n) {
+                                    let mut vals = Vec::with_capacity(argc);
+                                    for i in 0..argc {
+                                        vals.push(stack[start + i].clone());
+                                    }
+                                    stack.truncate(start);
+                                    stack.push(native_fn(vals)?);
+                                    continue;
+                                }
+                            }
+                            Value::Function(fname) => {
+                                let fname = fname.clone();
+                                let mut vals = Vec::with_capacity(argc);
+                                for i in 0..argc {
+                                    vals.push(stack[start + i].clone());
+                                }
+                                stack.truncate(start);
+                                let flow = self.call(&fname, vals)?;
+                                match flow {
+                                    Flow::Return(v) => stack.push(v),
+                                    Flow::Throw(v) => return Ok(Flow::Throw(v)),
+                                    _ => stack.push(Value::Null),
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                    return Err(format!("undefined function: {name}"));
                 }
                 Opcode::Return => {
                     let v = stack.pop().unwrap_or(Value::Null);
-                    return Ok(Flow::Return(v));
+                    if cur.name == "f" {
+                    }
+if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
+                        locals.truncate(fnew_base);
+                        stack.truncate(fstack_len);
+                        stack.push(v);
+                        cur = fbc;
+                        ip = fip;
+                        base = fbase;
+                    } else {
+                        return Ok(Flow::Return(v));
+                    }
                 }
                 Opcode::Print => {
                     let count = inst.arg1 as usize;
                     let sep = if inst.arg2 == u16::MAX {
                         " ".to_string()
                     } else {
-                        match &bc.constants[inst.arg2 as usize] {
+                        match &cur.constants[inst.arg2 as usize] {
                             Value::String(s) => s.clone(),
                             _ => " ".to_string(),
                         }
@@ -4813,7 +4968,7 @@ self.vars.insert("re".into(), re);
                     let end = if inst.arg3 == u16::MAX {
                         "\n".to_string()
                     } else {
-                        match &bc.constants[inst.arg3 as usize] {
+                        match &cur.constants[inst.arg3 as usize] {
                             Value::String(s) => s.clone(),
                             _ => "\n".to_string(),
                         }
@@ -4881,7 +5036,7 @@ self.vars.insert("re".into(), re);
                 }
                 Opcode::GetMember => {
                     let obj = stack.pop().unwrap_or(Value::Null);
-                    let Value::String(name) = &bc.constants[inst.arg1 as usize] else {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in GetMember".into());
                     };
                     let v = self.member(obj, name)?;
@@ -4933,7 +5088,6 @@ self.vars.insert("re".into(), re);
                 }
             }
         }
-        Ok(Flow::Normal)
     }
     fn find_method(&self, class_name: &str, method: &str) -> Option<Function> {
         let mut current = Some(class_name.to_string());
@@ -4967,7 +5121,7 @@ self.vars.insert("re".into(), re);
         values: Vec<Value>,
     ) -> Result<Flow, String> {
         let class_name = instance.lock().unwrap().class_name.clone();
-        let function = self
+let function = self
             .find_method(&class_name, method)
             .ok_or_else(|| format!("{class_name} has no method: {method}"))?;
         if values.len() != function.params.len() {
