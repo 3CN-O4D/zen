@@ -3462,6 +3462,34 @@ self.vars.insert("re".into(), re);
         ]));
         self.vars.insert("ssh".into(), ssh);
 
+        // bluetooth module (wraps bluetoothctl)
+        let bluetooth = Value::Dict(BTreeMap::from([
+            ("status".into(), Value::NativeFunction("bt_status".into())),
+            ("power".into(), Value::NativeFunction("bt_power".into())),
+            ("scan".into(), Value::NativeFunction("bt_scan".into())),
+            ("scan_stop".into(), Value::NativeFunction("bt_scan_stop".into())),
+            ("devices".into(), Value::NativeFunction("bt_devices".into())),
+            ("pair".into(), Value::NativeFunction("bt_pair".into())),
+            ("unpair".into(), Value::NativeFunction("bt_unpair".into())),
+            ("connect".into(), Value::NativeFunction("bt_connect".into())),
+            ("disconnect".into(), Value::NativeFunction("bt_disconnect".into())),
+            ("trust".into(), Value::NativeFunction("bt_trust".into())),
+            ("send".into(), Value::NativeFunction("bt_send".into())),
+        ]));
+        self.vars.insert("bluetooth".into(), bluetooth);
+
+        // wifi module (wraps nmcli / iw)
+        let wifi = Value::Dict(BTreeMap::from([
+            ("scan".into(), Value::NativeFunction("wifi_scan".into())),
+            ("status".into(), Value::NativeFunction("wifi_status".into())),
+            ("connect".into(), Value::NativeFunction("wifi_connect".into())),
+            ("disconnect".into(), Value::NativeFunction("wifi_disconnect".into())),
+            ("forget".into(), Value::NativeFunction("wifi_forget".into())),
+            ("interfaces".into(), Value::NativeFunction("wifi_interfaces".into())),
+            ("list".into(), Value::NativeFunction("wifi_list".into())),
+        ]));
+        self.vars.insert("wifi".into(), wifi);
+
         // scapy module (packet crafting / sniffing)
         let scapy = Value::Dict(BTreeMap::from([
             ("checksum".into(), Value::NativeFunction("scapy_checksum".into())),
@@ -3665,7 +3693,7 @@ self.vars.insert("re".into(), re);
         self.vars.insert("binascii".into(), binascii);
 
         // Register all core native functions eagerly
-          const NATIVES: [&str; 374] = [
+          const NATIVES: [&str; 392] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -3936,6 +3964,24 @@ self.vars.insert("re".into(), re);
             "ssh_upload",
             "ssh_download",
             "ssh_available",
+            "bt_status",
+            "bt_power",
+            "bt_scan",
+            "bt_scan_stop",
+            "bt_devices",
+            "bt_pair",
+            "bt_unpair",
+            "bt_connect",
+            "bt_disconnect",
+            "bt_trust",
+            "bt_send",
+            "wifi_scan",
+            "wifi_status",
+            "wifi_connect",
+            "wifi_disconnect",
+            "wifi_forget",
+            "wifi_interfaces",
+            "wifi_list",
             "scapy_checksum",
             "scapy_ip",
             "scapy_tcp",
@@ -12024,6 +12070,275 @@ fn native_for(name: &str) -> NativeFunc {
             }
             Ok(Value::List(out))
         },
+
+        // ── bluetooth module ──────────────────────────────────────────
+        "bt_status" => |_| {
+            let out = Command::new("hciconfig").arg("hci0").output()
+                .map_err(|e| format!("hciconfig not found: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let up = stdout.contains("UP RUNNING");
+            let addr = stdout.lines()
+                .find(|l| l.contains("BD Address:"))
+                .and_then(|l| l.split("BD Address: ").nth(1))
+                .map(|s| s.split_whitespace().next().unwrap_or("").to_string())
+                .unwrap_or_default();
+            let name = stdout.lines()
+                .find(|l| l.contains("Name:"))
+                .and_then(|l| l.split("Name: '").nth(1))
+                .and_then(|s| s.split('\'').next())
+                .unwrap_or("")
+                .to_string();
+            let mut result = BTreeMap::new();
+            result.insert("adapter".into(), Value::String("hci0".into()));
+            result.insert("up".into(), Value::Bool(up));
+            result.insert("address".into(), Value::String(addr));
+            result.insert("name".into(), Value::String(name));
+            Ok(Value::Dict(result))
+        },
+        "bt_power" => |args| {
+            let on = match args.first() {
+                Some(Value::Bool(b)) => *b,
+                Some(Value::Number(n)) => *n != 0.0,
+                _ => true,
+            };
+            let state = if on { "on" } else { "off" };
+            let out = Command::new("bluetoothctl").arg("power").arg(state).output()
+                .map_err(|e| format!("bluetoothctl not found: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("succeeded") || on))
+        },
+        "bt_scan" => |args| {
+            let timeout_s = match args.first() {
+                Some(Value::Number(n)) => *n as u64,
+                _ => 10,
+            };
+            Command::new("bluetoothctl").arg("scan").arg("on").output()
+                .map_err(|e| format!("bluetoothctl scan: {e}"))?;
+            std::thread::sleep(std::time::Duration::from_secs(timeout_s));
+            Command::new("bluetoothctl").arg("scan").arg("off").output().ok();
+            let out = Command::new("bluetoothctl").arg("devices").output()
+                .map_err(|e| format!("bluetoothctl devices: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut devices = Vec::new();
+            for line in stdout.lines() {
+                if let Some(rest) = line.strip_prefix("Device ") {
+                    let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+                    if parts.len() >= 2 {
+                        let mut d = BTreeMap::new();
+                        d.insert("address".into(), Value::String(parts[0].to_string()));
+                        d.insert("name".into(), Value::String(parts[1].trim().to_string()));
+                        devices.push(Value::Dict(d));
+                    }
+                }
+            }
+            Ok(Value::List(devices))
+        },
+        "bt_scan_stop" => |_| {
+            Command::new("bluetoothctl").arg("scan").arg("off").output()
+                .map_err(|e| format!("bluetoothctl scan off: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "bt_devices" => |args| {
+            let filter = match args.first() {
+                Some(Value::String(s)) => s.clone(),
+                _ => "all".into(),
+            };
+            let subcmd = match filter.as_str() {
+                "paired" => "paired-devices",
+                _ => "devices",
+            };
+            let out = Command::new("bluetoothctl").arg(subcmd).output()
+                .map_err(|e| format!("bluetoothctl {subcmd}: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut devices = Vec::new();
+            for line in stdout.lines() {
+                let stripped = line.strip_prefix("Device ").unwrap_or(line);
+                let parts: Vec<&str> = stripped.splitn(2, ' ').collect();
+                if parts.len() >= 2 {
+                    let addr = parts[0].trim();
+                    let name = parts[1].trim();
+                    if !addr.contains(':') { continue; }
+                    let mut d = BTreeMap::new();
+                    d.insert("address".into(), Value::String(addr.to_string()));
+                    d.insert("name".into(), Value::String(name.to_string()));
+                    devices.push(Value::Dict(d));
+                }
+            }
+            Ok(Value::List(devices))
+        },
+        "bt_pair" => |args| {
+            let addr = arg_string(&args, 0)?;
+            let out = Command::new("bluetoothctl").arg("pair").arg(&addr).output()
+                .map_err(|e| format!("bluetoothctl pair: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("succeeded") || stdout.contains("Pairing successful")))
+        },
+        "bt_unpair" => |args| {
+            let addr = arg_string(&args, 0)?;
+            let out = Command::new("bluetoothctl").arg("remove").arg(&addr).output()
+                .map_err(|e| format!("bluetoothctl remove: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("succeeded") || stdout.contains("removed")))
+        },
+        "bt_connect" => |args| {
+            let addr = arg_string(&args, 0)?;
+            let out = Command::new("bluetoothctl").arg("connect").arg(&addr).output()
+                .map_err(|e| format!("bluetoothctl connect: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("succeeded") || stdout.contains("Connection successful")))
+        },
+        "bt_disconnect" => |args| {
+            let addr = arg_string(&args, 0)?;
+            let out = Command::new("bluetoothctl").arg("disconnect").arg(&addr).output()
+                .map_err(|e| format!("bluetoothctl disconnect: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("succeeded") || true))
+        },
+        "bt_trust" => |args| {
+            let addr = arg_string(&args, 0)?;
+            let out = Command::new("bluetoothctl").arg("trust").arg(&addr).output()
+                .map_err(|e| format!("bluetoothctl trust: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("succeeded") || stdout.contains("trust")))
+        },
+        "bt_send" => |args| {
+            let addr = arg_string(&args, 0)?;
+            let data = arg_string(&args, 1)?;
+            let out = Command::new("bluetoothctl").arg("send").arg(&addr).arg(&data).output()
+                .map_err(|e| format!("bluetoothctl send: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("succeeded") || true))
+        },
+
+        // ── wifi module ───────────────────────────────────────────────
+        "wifi_scan" => |args| {
+            let iface = match args.first() {
+                Some(Value::String(s)) => s.clone(),
+                _ => "wlan0".into(),
+            };
+            let out = Command::new("nmcli").args(["-t", "-f", "SSID,BSSID,MODE,FREQ,RATE,SIGNAL,SECURITY", "device", "wifi", "list", "ifname", &iface]).output()
+                .map_err(|e| format!("nmcli wifi list: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut networks = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for line in stdout.lines() {
+                // nmcli -t uses : as separator; BSSID contains colons escaped as \:
+                // Reassemble by joining everything after first 6 fields
+                let raw: Vec<&str> = line.split(':').collect();
+                if raw.len() < 7 { continue; }
+                let ssid = raw[0].replace("\\:", ":");
+                if ssid.is_empty() || seen.contains(&ssid) { continue; }
+                seen.insert(ssid.clone());
+                // BSSID is fields 1..6 joined with unescaped colons
+                let bssid: String = raw[1..6].iter().map(|s| s.replace("\\:", ":")).collect::<Vec<String>>().join(":");
+                let mode = raw[6].replace("\\:", ":");
+                let freq = if raw.len() > 7 { raw[7].replace("\\:", ":") } else { String::new() };
+                let rate = if raw.len() > 8 { raw[8].replace("\\:", ":") } else { String::new() };
+                let signal = if raw.len() > 9 { raw[9].replace("\\:", ":") } else { String::new() };
+                let security = raw[raw.len()-1..].join("").replace("\\:", ":");
+                let mut net = BTreeMap::new();
+                net.insert("ssid".into(), Value::String(ssid));
+                net.insert("bssid".into(), Value::String(bssid));
+                net.insert("mode".into(), Value::String(mode));
+                net.insert("frequency".into(), Value::String(freq));
+                net.insert("speed".into(), Value::String(rate));
+                net.insert("signal".into(), Value::String(signal));
+                net.insert("security".into(), Value::String(security));
+                networks.push(Value::Dict(net));
+            }
+            Ok(Value::List(networks))
+        },
+        "wifi_status" => |_| {
+            let out = Command::new("nmcli").args(["-t", "-f", "TYPE,VALUE", "general", "wifi"]).output()
+                .map_err(|e| format!("nmcli general wifi: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let enabled = stdout.trim().contains("enabled");
+            let conn = Command::new("nmcli").args(["-t", "-f", "NAME,DEVICE,TYPE", "connection", "show", "--active"]).output()
+                .map_err(|e| format!("nmcli connection show: {e}"))?;
+            let conn_out = String::from_utf8_lossy(&conn.stdout);
+            let mut result = BTreeMap::new();
+            result.insert("wifi_enabled".into(), Value::Bool(enabled));
+            result.insert("connected".into(), Value::Bool(false));
+            for line in conn_out.lines() {
+                if line.contains(":wifi:") || line.contains(":802-11-wireless:") {
+                    let parts: Vec<&str> = line.split(':').collect();
+                    if parts.len() >= 2 {
+                        result.insert("ssid".into(), Value::String(parts[0].to_string()));
+                        result.insert("device".into(), Value::String(parts[1].to_string()));
+                        result.insert("connected".into(), Value::Bool(true));
+                    }
+                }
+            }
+            Ok(Value::Dict(result))
+        },
+        "wifi_connect" => |args| {
+            let ssid = arg_string(&args, 0)?;
+            let password = match args.get(1) {
+                Some(Value::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let mut cmd = Command::new("nmcli");
+            cmd.args(["device", "wifi", "connect", &ssid]);
+            if !password.is_empty() {
+                cmd.args(["password", &password]);
+            }
+            let out = cmd.output().map_err(|e| format!("nmcli wifi connect: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("successfully activated") || stdout.contains("connected")))
+        },
+        "wifi_disconnect" => |args| {
+            let iface = match args.first() {
+                Some(Value::String(s)) => s.clone(),
+                _ => "wlan0".into(),
+            };
+            let out = Command::new("nmcli").args(["device", "disconnect", &iface]).output()
+                .map_err(|e| format!("nmcli device disconnect: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("successfully disconnected") || true))
+        },
+        "wifi_forget" => |args| {
+            let ssid = arg_string(&args, 0)?;
+            let out = Command::new("nmcli").args(["connection", "delete", &ssid]).output()
+                .map_err(|e| format!("nmcli connection delete: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            Ok(Value::Bool(stdout.contains("successfully deleted") || true))
+        },
+        "wifi_interfaces" => |_| {
+            let out = Command::new("nmcli").args(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"]).output()
+                .map_err(|e| format!("nmcli device: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut ifaces = Vec::new();
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() < 4 { continue; }
+                if !parts[1].contains("wireless") && parts[1] != "wifi" { continue; }
+                let mut d = BTreeMap::new();
+                d.insert("device".into(), Value::String(parts[0].to_string()));
+                d.insert("type".into(), Value::String(parts[1].to_string()));
+                d.insert("state".into(), Value::String(parts[2].to_string()));
+                d.insert("connection".into(), Value::String(parts[3].to_string()));
+                ifaces.push(Value::Dict(d));
+            }
+            Ok(Value::List(ifaces))
+        },
+        "wifi_list" => |_| {
+            let out = Command::new("nmcli").args(["-t", "-f", "NAME,UUID,TYPE,DEVICE", "connection", "show"]).output()
+                .map_err(|e| format!("nmcli connection show: {e}"))?;
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut conns = Vec::new();
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() < 4 { continue; }
+                if !parts[2].contains("wireless") && parts[2] != "802-11-wireless" { continue; }
+                let mut d = BTreeMap::new();
+                d.insert("name".into(), Value::String(parts[0].to_string()));
+                d.insert("uuid".into(), Value::String(parts[1].to_string()));
+                d.insert("device".into(), Value::String(parts[3].to_string()));
+                conns.push(Value::Dict(d));
+            }
+            Ok(Value::List(conns))
+        },
+
         "str_upper" => |args| Ok(Value::String(arg_string(&args, 0)?.to_uppercase())),
         "str_lower" => |args| Ok(Value::String(arg_string(&args, 0)?.to_lowercase())),
         "str_title" => |args| {
@@ -13251,6 +13566,8 @@ pub fn list_modules() -> String {
         ("imap", "Pure-Rust IMAP client (connect, select, search, fetch)"),
         ("telnet", "Pure-Rust telnet client (connect, write, read, read_until)"),
         ("dns", "DNS resolver (resolve, query)"),
+        ("bluetooth", "Bluetooth via bluetoothctl (scan, pair, connect, send)"),
+        ("wifi", "WiFi via nmcli (scan, connect, disconnect, status)"),
         ("ssh", "System SSH/SCP wrapper (run, upload, download, available)"),
         ("scapy", "Packet crafting/sniffing (ip, tcp, udp, build, parse, send, sniff)"),
     ];
@@ -13757,7 +14074,36 @@ pub fn module_help(name: &str) -> Option<String> {
              opts: {host, user?, port?, key?, strict_host_key?: false}\n\n\
              Example:\n\
              let opts = {\"host\": \"192.168.1.1\", \"user\": \"root\"}\n\
-             print ssh.run(opts, \"uname -a\")"
+              print ssh.run(opts, \"uname -a\")"
+                .into(),
+        ),
+        "bluetooth" => Some(
+            "bluetooth — Bluetooth via bluetoothctl (Linux/BlueZ)\n\n\
+             bluetooth.status()                adapter status {up, address, name}\n\
+             bluetooth.power(on?)              power adapter on/off\n\
+             bluetooth.scan(timeout?)          scan for devices (default 10s)\n\
+             bluetooth.scan_stop()             stop scanning\n\
+             bluetooth.devices(filter?)        list devices (filter: 'all', 'paired')\n\
+             bluetooth.pair(addr)              pair with device\n\
+             bluetooth.unpair(addr)            remove device\n\
+             bluetooth.connect(addr)           connect to device\n\
+             bluetooth.disconnect(addr)        disconnect from device\n\
+             bluetooth.trust(addr)             trust device\n\
+             bluetooth.send(addr, data)        send data\n\n\
+             Requires bluetoothd running.\n\
+             Example: bluetooth.scan(5)"
+                .into(),
+        ),
+        "wifi" => Some(
+            "wifi — WiFi via NetworkManager (nmcli)\n\n\
+             wifi.scan(iface?)                 scan networks (default wlan0)\n\
+             wifi.status()                     connection status {wifi_enabled, connected, ssid}\n\
+             wifi.connect(ssid, password?)     connect to network\n\
+             wifi.disconnect(iface?)           disconnect (default wlan0)\n\
+             wifi.forget(ssid)                 forget saved network\n\
+             wifi.interfaces()                 list wireless interfaces\n\
+             wifi.list()                       list saved connections\n\n\
+             Example: wifi.connect(\"MyNetwork\", \"password\")"
                 .into(),
         ),
         "scapy" => Some(
