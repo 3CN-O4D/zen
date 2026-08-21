@@ -419,12 +419,121 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
         }
         if c == '"' || c == '\'' {
             let quote = c;
+            let triple = bytes.get(i + 1) == Some(&(quote as u8))
+                && bytes.get(i + 2) == Some(&(quote as u8));
             let is_interpolated = c == '"';
-            i += 1;
-            col += 1;
             let mut text = String::new();
             let mut closed = false;
             let mut parts: Vec<InterpPart> = Vec::new();
+            if triple {
+                i += 3;
+                col += 3;
+                // Triple-quoted string: scan until """
+                while i < bytes.len() {
+                    let ch = bytes[i] as char;
+                    if ch == quote
+                        && bytes.get(i + 1) == Some(&(quote as u8))
+                        && bytes.get(i + 2) == Some(&(quote as u8))
+                    {
+                        i += 3;
+                        col += 3;
+                        closed = true;
+                        break;
+                    }
+                    if ch == '\\' {
+                        i += 1;
+                        col += 1;
+                        let escape = *bytes
+                            .get(i)
+                            .ok_or_else(|| format!("{line}:{col}: unfinished escape"))?
+                            as char;
+                        text.push(match escape {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            '\\' => '\\',
+                            '\'' => '\'',
+                            '"' => '"',
+                            '$' => '$',
+                            x => x,
+                        });
+                        i += 1;
+                        col += 1;
+                    } else if is_interpolated && ch == '$' && bytes.get(i + 1) == Some(&b'{') {
+                        if !text.is_empty() {
+                            parts.push(InterpPart::Text(std::mem::take(&mut text)));
+                        }
+                        i += 2;
+                        col += 2;
+                        let expr_start = i;
+                        let mut depth = 1usize;
+                        let mut expr_line = line;
+                        let mut expr_col = col;
+                        while i < bytes.len() {
+                            let e = bytes[i] as char;
+                            if e == '{' {
+                                depth += 1;
+                            } else if e == '}' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            } else if e == '\n' {
+                                expr_line += 1;
+                                expr_col = 1;
+                                i += 1;
+                                continue;
+                            }
+                            i += 1;
+                            expr_col += 1;
+                        }
+                        if depth != 0 {
+                            return Err(format!(
+                                "{}:{}: unterminated interpolation expression in triple-quoted string",
+                                expr_line, expr_col
+                            ));
+                        }
+                        let expr_source = source[expr_start..i].to_string();
+                        parts.push(InterpPart::Expr(expr_source));
+                        i += 1;
+                        col += 1;
+                    } else {
+                        text.push(ch);
+                        i += 1;
+                        if ch == '\n' {
+                            line += 1;
+                            col = 1;
+                        } else {
+                            col += 1;
+                        }
+                    }
+                }
+                if !closed {
+                    return Err(format!(
+                        "{}:{}: unterminated triple-quoted string\n  \x1b[1;33m= help:\x1b[0m add `\"\"\"` to close the string",
+                        start.0, start.1
+                    ));
+                }
+                if !parts.is_empty() {
+                    if !text.is_empty() {
+                        parts.push(InterpPart::Text(text));
+                    }
+                    out.push(Token {
+                        kind: Kind::Interp(parts),
+                        line: start.0,
+                        col: start.1,
+                    });
+                } else {
+                    out.push(Token {
+                        kind: Kind::String(text),
+                        line: start.0,
+                        col: start.1,
+                    });
+                }
+                continue;
+            }
+            i += 1;
+            col += 1;
             while i < bytes.len() {
                 let ch = bytes[i] as char;
                 if ch == quote {
@@ -585,6 +694,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 "class" => Kind::Class,
                 "new" => Kind::New,
                 "extends" => Kind::Extends,
+                "inherit" => Kind::Extends,
                 "import" => Kind::Import,
                 "from" => Kind::From,
                 "include" => Kind::Include,
@@ -1425,7 +1535,7 @@ impl Parser {
                     Kind::Ident(name) => name,
                     _ => return Err("expected class name".into()),
                 };
-                let parent = if self.take(Kind::Extends) {
+                let parent = if self.take(Kind::Extends) || self.take(Kind::Lt) {
                     let mut name = match self.advance() {
                         Kind::Ident(name) => name,
                         _ => return Err("expected parent class name".into()),
@@ -1992,8 +2102,22 @@ impl Parser {
                     }
                 }
                 if self.take(Kind::LBrace) {
-                    let body = self.program()?;
+                    let mut body = self.program()?;
                     self.expect(Kind::RBrace)?;
+                    // Auto-return the last expression if it's a bare expression statement
+                    if let Some(last) = body.last() {
+                        if let StmtKind::Expr(e) = &last.kind {
+                            let e = e.clone();
+                            let line = last.line;
+                            let col = last.col;
+                            body.pop();
+                            body.push(Stmt {
+                                kind: StmtKind::Return(Some(e)),
+                                line,
+                                col,
+                            });
+                        }
+                    }
                     Ok(Expr::Lambda(params, body))
                 } else {
                     self.expect(Kind::Colon)?;
@@ -2503,18 +2627,7 @@ impl Vm {
             "type".into(),
             |args| {
                 Ok(Value::String(
-                    match args.first().cloned().unwrap_or(Value::Null) {
-                        Value::Null => "null",
-                        Value::Bool(_) => "bool",
-                        Value::Number(_) => "number",
-                        Value::String(_) => "string",
-                        Value::List(_) => "list",
-                        Value::Dict(_) => "dict",
-                        Value::Instance(_) => "object",
-                        Value::Socket(_) => "socket",
-                        Value::NativeFunction(_) | Value::Function(_) => "function",
-                    }
-                    .into(),
+                    args.first().map_or("null", |v| v.type_name()).into(),
                 ))
             },
         );
@@ -2665,7 +2778,228 @@ impl Vm {
                 }
             },
         );
-
+        // char/chr — convert codepoint to character
+        self.native_functions.insert(
+            "char".into(),
+            |args| {
+                let n = match args.first() {
+                    Some(Value::Number(n)) => *n as u32,
+                    _ => return Err("char expects a number (Unicode codepoint)".into()),
+                };
+                let c = char::from_u32(n).ok_or_else(|| format!("invalid codepoint: {n}"))?;
+                Ok(Value::String(c.to_string()))
+            },
+        );
+        self.native_functions.insert(
+            "chr".into(),
+            |args| {
+                let n = match args.first() {
+                    Some(Value::Number(n)) => *n as u32,
+                    _ => return Err("chr expects a number (Unicode codepoint)".into()),
+                };
+                let c = char::from_u32(n).ok_or_else(|| format!("invalid codepoint: {n}"))?;
+                Ok(Value::String(c.to_string()))
+            },
+        );
+        // ord — convert first character to codepoint
+        self.native_functions.insert(
+            "ord".into(),
+            |args| {
+                let s = match args.first() {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => return Err("ord expects a string".into()),
+                };
+                let c = s.chars().next().ok_or("ord: empty string")?;
+                Ok(Value::Number(c as u32 as f64))
+            },
+        );
+        // keys / values / items — dict helpers
+        self.native_functions.insert(
+            "keys".into(),
+            |args| {
+                match args.first() {
+                    Some(Value::Dict(d)) => Ok(Value::List(d.keys().map(|k| Value::String(k.clone())).collect())),
+                    _ => Err("keys expects a dict".into()),
+                }
+            },
+        );
+        self.native_functions.insert(
+            "values".into(),
+            |args| {
+                match args.first() {
+                    Some(Value::Dict(d)) => Ok(Value::List(d.values().cloned().collect())),
+                    _ => Err("values expects a dict".into()),
+                }
+            },
+        );
+        self.native_functions.insert(
+            "items".into(),
+            |args| {
+                match args.first() {
+                    Some(Value::Dict(d)) => Ok(Value::List(
+                        d.iter().map(|(k, v)| Value::List(vec![Value::String(k.clone()), v.clone()])).collect(),
+                    )),
+                    _ => Err("items expects a dict".into()),
+                }
+            },
+        );
+        // has — check if collection contains key/element
+        self.native_functions.insert(
+            "has".into(),
+            |args| {
+                let (col, key) = match args.as_slice() {
+                    [c, k] => (c, k),
+                    _ => return Err("has expects (collection, key)".into()),
+                };
+                match col {
+                    Value::Dict(d) => match key {
+                        Value::String(s) => Ok(Value::Bool(d.contains_key(s.as_str()))),
+                        _ => Ok(Value::Bool(false)),
+                    },
+                    Value::List(l) => Ok(Value::Bool(l.contains(key))),
+                    Value::String(s) => match key {
+                        Value::String(needle) => Ok(Value::Bool(s.contains(needle.as_str()))),
+                        _ => Ok(Value::Bool(false)),
+                    },
+                    _ => Err(format!("has() unsupported for {}", col)),
+                }
+            },
+        );
+        // push — append to list
+        self.native_functions.insert(
+            "push".into(),
+            |args| {
+                let (list_val, item) = match args.as_slice() {
+                    [l, i] => (l, i),
+                    _ => return Err("push expects (list, item)".into()),
+                };
+                match list_val {
+                    Value::List(l) => {
+                        let mut l = l.clone();
+                        l.push(item.clone());
+                        Ok(Value::List(l))
+                    }
+                    _ => Err("push expects a list as first argument".into()),
+                }
+            },
+        );
+        // pop — remove last element from list
+        self.native_functions.insert(
+            "pop".into(),
+            |args| {
+                match args.first() {
+                    Some(Value::List(l)) => {
+                        let mut l = l.clone();
+                        Ok(l.pop().unwrap_or(Value::Null))
+                    }
+                    _ => Err("pop expects a list".into()),
+                }
+            },
+        );
+        // enumerate — list of [index, value] pairs
+        self.native_functions.insert(
+            "enumerate".into(),
+            |args| {
+                match args.first() {
+                    Some(Value::List(l)) => Ok(Value::List(
+                        l.iter().enumerate().map(|(i, v)| {
+                            Value::List(vec![Value::Number(i as f64), v.clone()])
+                        }).collect(),
+                    )),
+                    Some(Value::String(s)) => Ok(Value::List(
+                        s.chars().enumerate().map(|(i, c)| {
+                            Value::List(vec![Value::Number(i as f64), Value::String(c.to_string())])
+                        }).collect(),
+                    )),
+                    _ => Err("enumerate expects a list or string".into()),
+                }
+            },
+        );
+        // slice — extract sub-list or sub-string
+        self.native_functions.insert(
+            "slice".into(),
+            |args| {
+                let (col, start, end) = match args.as_slice() {
+                    [c, Value::Number(s)] => (c, *s as usize, None),
+                    [c, Value::Number(s), Value::Number(e)] => (c, *s as usize, Some(*e as usize)),
+                    _ => return Err("slice expects (collection, start[, end])".into()),
+                };
+                match col {
+                    Value::List(l) => {
+                        let start = start.min(l.len());
+                        let end = end.unwrap_or(l.len()).min(l.len());
+                        Ok(Value::List(l[start..end].to_vec()))
+                    }
+                    Value::String(s) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let start = start.min(chars.len());
+                        let end = end.unwrap_or(chars.len()).min(chars.len());
+                        Ok(Value::String(chars[start..end].iter().collect()))
+                    }
+                    _ => Err("slice expects a list or string".into()),
+                }
+            },
+        );
+        // list — convert to list
+        self.native_functions.insert(
+            "list".into(),
+            |args| {
+                match args.first() {
+                    Some(Value::String(s)) => Ok(Value::List(s.chars().map(|c| Value::String(c.to_string())).collect())),
+                    Some(Value::List(l)) => Ok(Value::List(l.clone())),
+                    Some(Value::Dict(d)) => Ok(Value::List(
+                        d.iter().map(|(k, v)| Value::List(vec![Value::String(k.clone()), v.clone()])).collect(),
+                    )),
+                    Some(v) => Ok(Value::List(vec![v.clone()])),
+                    None => Ok(Value::List(vec![])),
+                }
+            },
+        );
+        // dict — create dict from pairs
+        self.native_functions.insert(
+            "dict".into(),
+            |args| {
+                match args.first() {
+                    Some(Value::List(pairs)) => {
+                        let mut map = BTreeMap::new();
+                        for pair in pairs {
+                            if let Value::List(kv) = pair {
+                                if kv.len() >= 2 {
+                                    if let Value::String(k) = &kv[0] {
+                                        map.insert(k.clone(), kv[1].clone());
+                                    }
+                                }
+                            }
+                        }
+                        Ok(Value::Dict(map))
+                    }
+                    Some(Value::Dict(d)) => Ok(Value::Dict(d.clone())),
+                    _ => Ok(Value::Dict(BTreeMap::new())),
+                }
+            },
+        );
+        // assert
+        self.native_functions.insert(
+            "assert".into(),
+            |args| {
+                let cond = args.first().map_or(false, |v| v.truthy());
+                if cond {
+                    Ok(Value::Null)
+                } else {
+                    let msg = args.get(1).map(|v| v.to_string()).unwrap_or_else(|| "assertion failed".into());
+                    Err(msg)
+                }
+            },
+        );
+        // typeof
+        self.native_functions.insert(
+            "typeof".into(),
+            |args| {
+                Ok(Value::String(
+                    args.first().map_or("null", |v| v.type_name()).into(),
+                ))
+            },
+        );
         // json module
         let json = Value::Dict(BTreeMap::from([
             ("parse".into(), Value::NativeFunction("json_decode".into())),
@@ -3029,9 +3363,15 @@ self.vars.insert("re".into(), re);
         // socket module
         let socket = Value::Dict(BTreeMap::from([
             ("open".into(), Value::NativeFunction("socket_open".into())),
+            ("open_udp".into(), Value::NativeFunction("socket_open_udp".into())),
             ("send".into(), Value::NativeFunction("socket_send".into())),
+            ("send_to".into(), Value::NativeFunction("socket_send_to".into())),
             ("recv".into(), Value::NativeFunction("socket_recv".into())),
+            ("recv_from".into(), Value::NativeFunction("socket_recv_from".into())),
+            ("recv_all".into(), Value::NativeFunction("socket_recv_all".into())),
             ("close".into(), Value::NativeFunction("socket_close".into())),
+            ("set_timeout".into(), Value::NativeFunction("socket_set_timeout".into())),
+            ("scan".into(), Value::NativeFunction("socket_scan".into())),
         ]));
         self.vars.insert("socket".into(), socket);
 
@@ -3126,6 +3466,8 @@ self.vars.insert("re".into(), re);
             ("sniff".into(), Value::NativeFunction("scapy_sniff".into())),
             ("ip_to_int".into(), Value::NativeFunction("scapy_ip_to_int".into())),
             ("int_to_ip".into(), Value::NativeFunction("scapy_int_to_ip".into())),
+            ("cidr_expand".into(), Value::NativeFunction("scapy_cidr_expand".into())),
+            ("subnet_hosts".into(), Value::NativeFunction("scapy_subnet_hosts".into())),
         ]));
         self.vars.insert("scapy".into(), scapy);
 
@@ -3313,7 +3655,7 @@ self.vars.insert("re".into(), re);
         self.vars.insert("binascii".into(), binascii);
 
         // Register all core native functions eagerly
-          const NATIVES: [&str; 367] = [
+          const NATIVES: [&str; 369] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -3591,6 +3933,8 @@ self.vars.insert("re".into(), re);
             "scapy_sniff",
             "scapy_ip_to_int",
             "scapy_int_to_ip",
+            "scapy_cidr_expand",
+            "scapy_subnet_hosts",
             "str_upper",
             "str_lower",
             "str_title",
@@ -3700,6 +4044,13 @@ self.vars.insert("re".into(), re);
         match expr {
             Expr::Value(v) => Ok(v.clone()),
             Expr::Var(n) => {
+                let resolved;
+                let n: &String = if n == "this" {
+                    resolved = "self".to_string();
+                    &resolved
+                } else {
+                    n
+                };
                 // Fast path: check local stack (innermost last)
                 // Most common case in fib: "n" is at known position in locals
                 let mut found = None;
@@ -4091,6 +4442,13 @@ self.vars.insert("re".into(), re);
                                 }
                                 self.list_method(list, method, values)
                             }
+                            Value::Number(n) => self.number_method(n, method, values),
+                            Value::Bool(b) => {
+                                match method.as_str() {
+                                    "toString" | "to_string" => Ok(Value::String(b.to_string())),
+                                    _ => Err(format!("bool has no method: {method}")),
+                                }
+                            }
                             _ => Err("only instance methods and dicts are supported currently".into()),
                         }
                     }
@@ -4162,18 +4520,7 @@ self.vars.insert("re".into(), re);
                     },
                     Kind::Bang | Kind::Not => Ok(Value::Bool(!v.truthy())),
                     Kind::Typeof => Ok(Value::String(
-                        match v {
-                            Value::Null => "null",
-                            Value::Bool(_) => "bool",
-                            Value::Number(_) => "number",
-                            Value::String(_) => "string",
-                            Value::List(_) => "list",
-                            Value::Dict(_) => "dict",
-                            Value::Instance(_) => "object",
-                            Value::Socket(_) => "socket",
-                        Value::NativeFunction(_) | Value::Function(_) => "function",
-                    }
-                    .into(),
+                        v.type_name().to_string(),
                     )),
                     Kind::Tilde => match v {
                         Value::Number(value) if value.fract() == 0.0 => {
@@ -4248,6 +4595,36 @@ self.vars.insert("re".into(), re);
             value => Err(format!("{} has no member: {name}", value)),
         }
     }
+    fn number_method(&mut self, n: f64, method: &str, args: Vec<Value>) -> Result<Value, String> {
+        match method {
+            "floor" => Ok(Value::Number(n.floor())),
+            "ceil" => Ok(Value::Number(n.ceil())),
+            "round" => Ok(Value::Number(n.round())),
+            "abs" => Ok(Value::Number(n.abs())),
+            "toInt" | "to_int" => Ok(Value::Number(n.trunc())),
+            "toString" | "to_string" | "str" => Ok(Value::String(n.to_string())),
+            "toFixed" | "to_fixed" => {
+                let decimals = match args.first() {
+                    Some(Value::Number(d)) => *d as usize,
+                    _ => 0,
+                };
+                Ok(Value::String(format!("{:.prec$}", n, prec = decimals)))
+            }
+            "sqrt" => Ok(Value::Number(n.sqrt())),
+            "pow" => {
+                let exp = match args.first() {
+                    Some(Value::Number(e)) => *e,
+                    _ => return Err("pow expects an exponent".into()),
+                };
+                Ok(Value::Number(n.powf(exp)))
+            }
+            "isNaN" | "is_nan" => Ok(Value::Bool(n.is_nan())),
+            "isFinite" | "is_finite" => Ok(Value::Bool(n.is_finite())),
+            "isInfinite" | "is_infinite" => Ok(Value::Bool(n.is_infinite())),
+            "isInteger" | "is_integer" => Ok(Value::Bool(n.fract() == 0.0)),
+            _ => Err(format!("number has no method: {method}")),
+        }
+    }
     fn string_method(&mut self, value: String, method: &str, args: Vec<Value>) -> Result<Value, String> {
         let one = || -> Result<String, String> {
             match args.first() {
@@ -4274,14 +4651,112 @@ self.vars.insert("re".into(), re);
                 let suffix = one()?;
                 Ok(Value::Bool(value.ends_with(&suffix)))
             }
+            "format" => {
+                let mut result = String::new();
+                let mut auto_idx = 0usize;
+                let chars: Vec<char> = value.chars().collect();
+                let mut i = 0;
+                while i < chars.len() {
+                    if chars[i] == '{' && i + 1 < chars.len() && chars[i + 1] == '}' {
+                        if auto_idx < args.len() {
+                            result.push_str(&args[auto_idx].to_string());
+                            auto_idx += 1;
+                        }
+                        i += 2;
+                    } else if chars[i] == '{' {
+                        let start = i + 1;
+                        i += 1;
+                        while i < chars.len() && chars[i] != '}' {
+                            i += 1;
+                        }
+                        let key: String = chars[start..i].iter().collect();
+                        let key = key.trim();
+                        if let Ok(idx) = key.parse::<usize>() {
+                            if idx < args.len() {
+                                result.push_str(&args[idx].to_string());
+                            }
+                        } else {
+                            let mut found = false;
+                            for arg in &args {
+                                if let Value::Dict(map) = arg {
+                                    if let Some(val) = map.get(key) {
+                                        result.push_str(&val.to_string());
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !found {
+                                result.push_str(&format!("{{{key}}}"));
+                            }
+                        }
+                        if i < chars.len() {
+                            i += 1;
+                        }
+                    } else {
+                        result.push(chars[i]);
+                        i += 1;
+                    }
+                }
+                Ok(Value::String(result))
+            }
+            "find" => {
+                let needle = one()?;
+                match value.find(&needle) {
+                    Some(i) => Ok(Value::Number(i as f64)),
+                    None => Ok(Value::Number(-1.0)),
+                }
+            }
+            "includes" | "contains" => {
+                let needle = one()?;
+                Ok(Value::Bool(value.contains(&needle)))
+            }
+            "startsWith" | "startswith" => {
+                let prefix = one()?;
+                Ok(Value::Bool(value.starts_with(&prefix)))
+            }
+            "endsWith" | "endswith" => {
+                let suffix = one()?;
+                Ok(Value::Bool(value.ends_with(&suffix)))
+            }
+            "charAt" | "char" => {
+                let idx = match args.first() {
+                    Some(Value::Number(n)) => *n as usize,
+                    _ => return Err("charAt expects a number index".into()),
+                };
+                let ch = value.chars().nth(idx).unwrap_or('\0');
+                Ok(Value::String(ch.to_string()))
+            }
+            "ord" => {
+                let ch = value.chars().next().unwrap_or('\0');
+                Ok(Value::Number(ch as u32 as f64))
+            }
             "trim" | "strip" => Ok(Value::String(value.trim().into())),
-            "trimEnd" | "trimRight" => Ok(Value::String(value.trim_end().into())),
-            "trimStart" | "trimLeft" => Ok(Value::String(value.trim_start().into())),
+            "trimEnd" | "trimRight" | "trim_right" => Ok(Value::String(value.trim_end().into())),
+            "trimStart" | "trimLeft" | "trim_left" => Ok(Value::String(value.trim_start().into())),
             "lower" | "toLower" | "toLowerCase" => Ok(Value::String(value.to_lowercase())),
             "upper" | "toUpper" | "toUpperCase" => Ok(Value::String(value.to_uppercase())),
-            "toList" => Ok(Value::List(
-                value.chars().map(|c| Value::String(c.to_string())).collect(),
-            )),
+            "length" => Ok(Value::Number(value.chars().count() as f64)),
+            "repeat" => {
+                let n = match args.first() {
+                    Some(Value::Number(n)) => *n as usize,
+                    _ => return Err("repeat expects a number".into()),
+                };
+                Ok(Value::String(value.repeat(n)))
+            }
+            "concat" => {
+                let mut out = value;
+                for arg in &args {
+                    out.push_str(&arg.to_string());
+                }
+                Ok(Value::String(out))
+            }
+            "split" => {
+                let sep = one()?;
+                Ok(Value::List(
+                    value.split(&sep).map(|s| Value::String(s.into())).collect(),
+                ))
+            }
             "replace" => {
                 let (from, to) = match args.as_slice() {
                     [Value::String(f), Value::String(t)] => (f.clone(), t.clone()),
@@ -4296,14 +4771,6 @@ self.vars.insert("re".into(), re);
                     None => Ok(Value::Number(-1.0)),
                 }
             }
-            "length" => Ok(Value::Number(value.chars().count() as f64)),
-            "repeat" => {
-                let n = match args.first() {
-                    Some(Value::Number(n)) => *n as usize,
-                    _ => return Err("repeat expects a number".into()),
-                };
-                Ok(Value::String(value.repeat(n)))
-            }
             "substring" | "substr" | "slice" => {
                 let (start, end) = match args.as_slice() {
                     [Value::Number(s), Value::Number(e)] => (*s as usize, Some(*e as usize)),
@@ -4315,6 +4782,9 @@ self.vars.insert("re".into(), re);
                 let end = end.unwrap_or(chars.len()).min(chars.len());
                 Ok(Value::String(chars[start..end].iter().collect()))
             }
+            "toList" => Ok(Value::List(
+                value.chars().map(|c| Value::String(c.to_string())).collect(),
+            )),
             _ => Err(format!("string has no method: {method}")),
         }
     }
@@ -4464,6 +4934,194 @@ self.vars.insert("re".into(), re);
                 Ok(Value::Null)
             }
             "length" => Ok(Value::Number(list.len() as f64)),
+            "includes" | "indexOf" | "index_of" => {
+                let item = match args.first() {
+                    Some(v) => v.clone(),
+                    None => return Err(format!("{method} expects an argument")),
+                };
+                match list.iter().position(|x| x == &item) {
+                    Some(i) => Ok(Value::Number(i as f64)),
+                    None => Ok(Value::Number(-1.0)),
+                }
+            }
+            "flat" | "flatten" => {
+                let mut out = Vec::new();
+                for item in list {
+                    if let Value::List(sub) = item {
+                        out.extend(sub);
+                    } else {
+                        out.push(item);
+                    }
+                }
+                Ok(Value::List(out))
+            }
+            "compact" => {
+                Ok(Value::List(list.into_iter().filter(|v| v.truthy()).collect()))
+            }
+            "uniq" | "unique" => {
+                let mut seen = Vec::new();
+                let mut out = Vec::new();
+                for item in list {
+                    if !seen.contains(&item) {
+                        seen.push(item.clone());
+                        out.push(item);
+                    }
+                }
+                Ok(Value::List(out))
+            }
+            "shuffle" => {
+                let mut list = list;
+                for i in (1..list.len()).rev() {
+                    let j = (rand::random::<f64>() * (i + 1) as f64) as usize;
+                    list.swap(i, j);
+                }
+                Ok(Value::List(list))
+            }
+            "sample" => {
+                if list.is_empty() {
+                    Ok(Value::Null)
+                } else {
+                    let idx = (rand::random::<f64>() * list.len() as f64) as usize;
+                    Ok(list[idx].clone())
+                }
+            }
+            "take" => {
+                let n = match args.first() {
+                    Some(Value::Number(n)) => *n as usize,
+                    _ => return Err("take expects a number".into()),
+                };
+                Ok(Value::List(list.into_iter().take(n).collect()))
+            }
+            "drop" => {
+                let n = match args.first() {
+                    Some(Value::Number(n)) => *n as usize,
+                    _ => return Err("drop expects a number".into()),
+                };
+                Ok(Value::List(list.into_iter().skip(n).collect()))
+            }
+            "chunk" => {
+                let size = match args.first() {
+                    Some(Value::Number(n)) => *n as usize,
+                    _ => return Err("chunk expects a number".into()),
+                };
+                let size = size.max(1);
+                let mut out = Vec::new();
+                let mut i = 0;
+                while i < list.len() {
+                    let end = (i + size).min(list.len());
+                    out.push(Value::List(list[i..end].to_vec()));
+                    i += size;
+                }
+                Ok(Value::List(out))
+            }
+            "copy" => Ok(Value::List(list)),
+            "slice" => {
+                let (start, end) = match args.as_slice() {
+                    [Value::Number(s), Value::Number(e)] => (*s as usize, Some(*e as usize)),
+                    [Value::Number(s)] => (*s as usize, None),
+                    _ => return Err("slice expects (start[, end])".into()),
+                };
+                let start = start.min(list.len());
+                let end = end.unwrap_or(list.len()).min(list.len());
+                Ok(Value::List(list[start..end].to_vec()))
+            }
+            "splice" => {
+                let (start, delete_count) = match args.as_slice() {
+                    [Value::Number(s), Value::Number(d)] => (*s as usize, *d as usize),
+                    [Value::Number(s)] => (*s as usize, 0),
+                    _ => return Err("splice expects (start[, delete_count])".into()),
+                };
+                let mut list = list;
+                let start = start.min(list.len());
+                let delete_count = delete_count.min(list.len() - start);
+                let removed: Vec<Value> = list.drain(start..start + delete_count).collect();
+                let insert: Vec<Value> = args.into_iter().skip(2).collect();
+                for (i, item) in insert.into_iter().enumerate() {
+                    list.insert(start + i, item);
+                }
+                Ok(Value::List(removed))
+            }
+            "zip" => {
+                let other = match args.first() {
+                    Some(Value::List(l)) => l,
+                    _ => return Err("zip expects a list".into()),
+                };
+                let len = list.len().min(other.len());
+                let out: Vec<Value> = (0..len)
+                    .map(|i| Value::List(vec![list[i].clone(), other[i].clone()]))
+                    .collect();
+                Ok(Value::List(out))
+            }
+            "reduce" => {
+                let f = match args.first().cloned() {
+                    Some(v) => v,
+                    None => return Err("reduce expects a function".into()),
+                };
+                let has_init = args.len() > 1;
+                let init = args.get(1).cloned();
+                let mut acc = match init {
+                    Some(v) => v,
+                    None => {
+                        if list.is_empty() {
+                            return Err("reduce of empty list with no initial value".into());
+                        }
+                        let mut l = list.clone();
+                        l.remove(0)
+                    }
+                };
+                let items: Vec<Value> = if has_init {
+                    list
+                } else {
+                    list.into_iter().skip(1).collect()
+                };
+                for item in items {
+                    acc = self.apply_func(&f, vec![acc, item])?;
+                }
+                Ok(acc)
+            }
+            "find" => {
+                let f = match args.first().cloned() {
+                    Some(v) => v,
+                    None => return Err("find expects a function".into()),
+                };
+                for item in &list {
+                    if self.apply_func(&f, vec![item.clone()])?.truthy() {
+                        return Ok(item.clone());
+                    }
+                }
+                Ok(Value::Null)
+            }
+            "some" => {
+                let f = match args.first().cloned() {
+                    Some(v) => v,
+                    None => return Err("some expects a function".into()),
+                };
+                for item in &list {
+                    if self.apply_func(&f, vec![item.clone()])?.truthy() {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            "every" => {
+                let f = match args.first().cloned() {
+                    Some(v) => v,
+                    None => return Err("every expects a function".into()),
+                };
+                for item in &list {
+                    if !self.apply_func(&f, vec![item.clone()])?.truthy() {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
+            "fill" => {
+                let val = match args.first() {
+                    Some(v) => v.clone(),
+                    None => return Err("fill expects a value".into()),
+                };
+                Ok(Value::List(vec![val; list.len()]))
+            }
             _ => Err(format!("list has no method: {method}")),
         }
     }
@@ -5113,7 +5771,21 @@ self.vars.insert("re".into(), re);
                     if let Some(v) = stack.pop() {
                         let idx = base + inst.arg1 as usize;
                         if let Some(slot) = locals.get_mut(idx) {
-                            *slot = v;
+                            *slot = v.clone();
+                        }
+                        // Propagate captured variable mutations to enclosing scope
+                        if idx >= cur.param_count as usize
+                            && idx < cur.param_count as usize + cur.captured_names.len()
+                        {
+                            let captured_idx = idx - cur.param_count as usize;
+                            if let Some(cname) = cur.captured_names.get(captured_idx) {
+                                self.vars.insert(cname.clone(), v.clone());
+                                if let Some(f) = self.functions.get_mut(&cur.name) {
+                                    f.captured.insert(cname.clone(), v.clone());
+                                }
+                                // Invalidate call cache so next call uses updated captures
+                                self.call_cache = None;
+                            }
                         }
                     }
                 }
@@ -5257,7 +5929,21 @@ self.vars.insert("re".into(), re);
                         }
                     };
                     if let Some(slot_v) = locals.get_mut(slot) {
-                        *slot_v = v;
+                        *slot_v = v.clone();
+                    }
+                    // Propagate captured variable mutations to enclosing scope
+                    if slot >= cur.param_count as usize
+                        && slot < cur.param_count as usize + cur.captured_names.len()
+                    {
+                        let captured_idx = slot - cur.param_count as usize;
+                        if let Some(cname) = cur.captured_names.get(captured_idx) {
+                            self.vars.insert(cname.clone(), v.clone());
+                            if let Some(f) = self.functions.get_mut(&cur.name) {
+                                f.captured.insert(cname.clone(), v.clone());
+                            }
+                            // Invalidate call cache so next call uses updated captures
+                            self.call_cache = None;
+                        }
                     }
                 }
                 Opcode::Add => {
@@ -5703,18 +6389,28 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
     /// Locals-first read: prefer the current frame's locals (params/captured),
     /// then the global scope.
     fn get_var(&mut self, name: &str) -> Option<Value> {
-        if let Some((_, v)) = self.locals.iter().rev().find(|(n, _)| n == name) {
+        let resolve = if name == "this" { "self" } else { name };
+        if let Some((_, v)) = self.locals.iter().rev().find(|(n, _)| n == resolve) {
             return Some(v.clone());
         }
-        self.vars.get(name).cloned()
+        self.vars.get(resolve).cloned()
     }
     /// Locals-first write: update the nearest local binding if one exists,
     /// otherwise store in the global scope.
     fn set_var(&mut self, name: &str, value: Value) {
-        if let Some(idx) = self.locals.iter().rposition(|(n, _)| n == name) {
-            self.locals[idx].1 = value;
-        } else {
-            self.vars.insert(name.to_string(), value);
+        let resolve = if name == "this" { "self" } else { name };
+        let mut found_in_locals = false;
+        if let Some(idx) = self.locals.iter().rposition(|(n, _)| n == resolve) {
+            self.locals[idx].1 = value.clone();
+            found_in_locals = true;
+        }
+        // Propagate captured variable mutations back to the enclosing scope.
+        // When a lambda captures a variable from self.vars, mutations inside
+        // the lambda must be visible after the lambda returns.
+        if found_in_locals && self.vars.contains_key(resolve) {
+            self.vars.insert(resolve.to_string(), value);
+        } else if !found_in_locals {
+            self.vars.insert(resolve.to_string(), value);
         }
     }
     fn self_field_get(&mut self, name: &str) -> Option<Value> {
@@ -7684,8 +8380,28 @@ fn imap_command(stream: &mut TcpStream, tag: &str, cmd: &str) -> Result<String, 
         if line.starts_with('*') {
             response.push_str(&line);
             response.push('\n');
+            // Handle IMAP literal {N}\r\n — read N bytes of literal data
+            if let Some(brace_pos) = line.find('{') {
+                if let Some(close_pos) = line[brace_pos..].find('}') {
+                    let num_str = &line[brace_pos + 1..brace_pos + close_pos];
+                    if let Ok(literal_len) = num_str.parse::<usize>() {
+                        let mut literal_buf = vec![0u8; literal_len];
+                        let mut total_read = 0;
+                        while total_read < literal_len {
+                            match stream.read(&mut literal_buf[total_read..]) {
+                                Ok(0) => break,
+                                Ok(n) => total_read += n,
+                                Err(e) => return Err(format!("IMAP literal read error: {e}")),
+                            }
+                        }
+                        response.push_str(&String::from_utf8_lossy(&literal_buf));
+                        // Read the \r\n after the literal
+                        let _ = read_line(stream);
+                    }
+                }
+            }
         } else if line.starts_with(tag) {
-            if !line.contains(" OK") {
+            if !line.contains(" OK") && !line.contains(" NO") {
                 return Err(format!("IMAP {cmd}: {line}"));
             }
             return Ok(response);
@@ -7696,8 +8412,9 @@ fn imap_command(stream: &mut TcpStream, tag: &str, cmd: &str) -> Result<String, 
     }
 }
 
-fn strip_telnet_iac(buf: &[u8]) -> Vec<u8> {
+fn strip_telnet_iac(buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut out = Vec::with_capacity(buf.len());
+    let mut replies = Vec::new();
     let mut i = 0;
     while i < buf.len() {
         if buf[i] == 0xff {
@@ -7707,16 +8424,17 @@ fn strip_telnet_iac(buf: &[u8]) -> Vec<u8> {
                 continue;
             }
             if i + 1 < buf.len() && buf[i + 1] == 0xfb {
-                out.extend_from_slice(&[0xff, 0xfc]); // DO -> DONT
+                replies.extend_from_slice(&[0xff, 0xfc]); // DO -> send WONT
                 i += 2;
                 continue;
             }
             if i + 1 < buf.len() && buf[i + 1] == 0xfd {
-                out.extend_from_slice(&[0xff, 0xfe]); // WILL -> WONT
+                replies.extend_from_slice(&[0xff, 0xfe]); // WILL -> send DONT
                 i += 2;
                 continue;
             }
             if i + 2 < buf.len() {
+                replies.extend_from_slice(&[0xff, buf[i + 1], buf[i + 2]]);
                 i += 3;
                 continue;
             }
@@ -7726,7 +8444,7 @@ fn strip_telnet_iac(buf: &[u8]) -> Vec<u8> {
             i += 1;
         }
     }
-    out
+    (out, replies)
 }
 
 fn dns_name_to_bytes(name: &str) -> Vec<u8> {
@@ -8183,20 +8901,41 @@ fn dns_query_impl(name: &str, rtype: &str) -> Result<Vec<Value>, String> {
     let (n, _) = sock
         .recv_from(&mut buf)
         .map_err(|e| format!("dns: no response from {server}: {e}"))?;
-    let resp = &buf[..n];
+    let mut resp = buf[..n].to_vec();
+    // Check TC (truncation) bit — byte 2, bit 1
+    if resp.len() >= 3 && (resp[2] & 0x02) != 0 {
+        // Retry over TCP for truncated response
+        let tcp_sock = TcpStream::connect_timeout(
+            &format!("{server}:53").parse().map_err(|e: std::net::AddrParseError| format!("{e}"))?,
+            Duration::from_secs(5),
+        ).map_err(|e| format!("dns tcp connect: {e}"))?;
+        // TCP DNS: prefix with 2-byte length
+        let len = query.len() as u16;
+        let mut tcp_query = Vec::with_capacity(2 + query.len());
+        tcp_query.extend_from_slice(&len.to_be_bytes());
+        tcp_query.extend_from_slice(&query);
+        let mut stream = tcp_sock;
+        stream.write_all(&tcp_query).map_err(|e| format!("dns tcp write: {e}"))?;
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let mut len_buf = [0u8; 2];
+        stream.read_exact(&mut len_buf).map_err(|e| format!("dns tcp read len: {e}"))?;
+        let tcp_len = u16::from_be_bytes(len_buf) as usize;
+        resp.resize(tcp_len, 0);
+        stream.read_exact(&mut resp).map_err(|e| format!("dns tcp read: {e}"))?;
+    }
     if resp.len() < 12 {
         return Ok(Vec::new());
     }
     let ancount = u16::from_be_bytes([resp[6], resp[7]]) as usize;
     let mut pos = 12usize;
-    let (_, npos) = dns_read_name(resp, pos);
+    let (_, npos) = dns_read_name(&resp, pos);
     pos = npos + 4;
     let mut results = Vec::new();
     for _ in 0..ancount {
         if pos >= resp.len() {
             break;
         }
-        let (rname, npos) = dns_read_name(resp, pos);
+        let (rname, npos) = dns_read_name(&resp, pos);
         pos = npos;
         if pos + 10 > resp.len() {
             break;
@@ -8222,12 +8961,12 @@ fn dns_query_impl(name: &str, rtype: &str) -> Result<Vec<Value>, String> {
             }
             15 if rdlen >= 3 => {
                 let pref = u16::from_be_bytes([rdata[0], rdata[1]]);
-                let (hostname, _) = dns_read_name(resp, pos + 2);
+                let (hostname, _) = dns_read_name(&resp, pos + 2);
                 format!("{pref} {hostname}")
             }
             16 => String::from_utf8_lossy(rdata).into_owned(),
             2 | 5 => {
-                let (hostname, _) = dns_read_name(resp, pos);
+                let (hostname, _) = dns_read_name(&resp, pos);
                 hostname
             }
             _ => hexlify(rdata),
@@ -8739,6 +9478,114 @@ fn native_for(name: &str) -> NativeFunc {
             let n = socket.lock().unwrap().read(&mut buffer)
                 .map_err(|e| format!("failed to recv: {e}"))?;
             Ok(Value::String(String::from_utf8_lossy(&buffer[..n]).into()))
+        },
+        "socket_open_udp" => |args| {
+            let addr = arg_string(&args, 0)?;
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+                .map_err(|e| format!("failed to bind UDP socket: {e}"))?;
+            socket.connect(&addr)
+                .map_err(|e| format!("failed to connect UDP: {e}"))?;
+            // Wrap in TcpStream somehow — we need a new type. Use Socket type with a flag.
+            // Actually, we'll use a dummy TcpStream trick... no, let's just use the existing Socket
+            // by converting UdpSocket to a TcpStream-like wrapper. Since we can't,
+            // we'll store it differently. For now, store UDP info in a dict.
+            Ok(Value::Dict(BTreeMap::from([
+                ("type".into(), Value::String("udp".into())),
+                ("addr".into(), Value::String(addr)),
+            ])))
+        },
+        "socket_send_to" => |args| {
+            let (session, data, addr) = match args.as_slice() {
+                [Value::Dict(d), Value::String(data), Value::String(addr)] => (d, data, addr),
+                _ => return Err("socket_send_to expects (session, data, addr)".into()),
+            };
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+                .map_err(|e| format!("failed to bind UDP: {e}"))?;
+            socket.send_to(data.as_bytes(), addr)
+                .map_err(|e| format!("failed to send_to: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "socket_recv_from" => |args| {
+            let size = match args.get(1) {
+                Some(Value::Number(n)) => *n as usize,
+                _ => 1024,
+            };
+            let addr = arg_string(&args, 0)?;
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+                .map_err(|e| format!("failed to bind UDP: {e}"))?;
+            socket.connect(&addr)
+                .map_err(|e| format!("failed to connect UDP: {e}"))?;
+            let mut buf = vec![0u8; size];
+            let n = socket.recv(&mut buf)
+                .map_err(|e| format!("failed to recv_from: {e}"))?;
+            Ok(Value::String(String::from_utf8_lossy(&buf[..n]).into_owned()))
+        },
+        "socket_recv_all" => |args| {
+            let socket = match &args[0] {
+                Value::Socket(s) => s,
+                _ => return Err("socket_recv_all expects a Socket".into()),
+            };
+            let timeout = match args.get(1) {
+                Some(Value::Number(n)) => std::time::Duration::from_secs_f64(*n),
+                _ => std::time::Duration::from_secs(5),
+            };
+            let mut s = socket.lock().unwrap();
+            s.set_read_timeout(Some(timeout)).ok();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            loop {
+                match s.read(&mut tmp) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => break,
+                    Err(e) => return Err(format!("socket_recv_all error: {e}")),
+                }
+            }
+            Ok(Value::String(String::from_utf8_lossy(&buf).into_owned()))
+        },
+        "socket_set_timeout" => |args| {
+            let socket = match &args[0] {
+                Value::Socket(s) => s,
+                _ => return Err("socket_set_timeout expects a Socket".into()),
+            };
+            let secs = match args.get(1) {
+                Some(Value::Number(n)) => *n,
+                _ => return Err("socket_set_timeout expects (Socket, seconds)".into()),
+            };
+            let dur = std::time::Duration::from_secs_f64(secs);
+            let mut s = socket.lock().unwrap();
+            s.set_read_timeout(Some(dur)).map_err(|e| format!("set timeout error: {e}"))?;
+            s.set_write_timeout(Some(dur)).map_err(|e| format!("set timeout error: {e}"))?;
+            Ok(Value::Bool(true))
+        },
+        "socket_scan" => |args| {
+            let host = arg_string(&args, 0)?;
+            let (start_port, end_port) = match args.as_slice() {
+                [_, Value::Number(s), Value::Number(e)] => (*s as u16, *e as u16),
+                [_, Value::Number(p)] => (*p as u16, *p as u16),
+                _ => {
+                    // Default: scan common ports
+                    (1, 1024)
+                }
+            };
+            let timeout_ms = match args.get(3) {
+                Some(Value::Number(n)) => *n as u64,
+                _ => 200,
+            };
+            let mut open_ports = Vec::new();
+            for port in start_port..=end_port {
+                let addr = format!("{host}:{port}");
+                let timeout = std::time::Duration::from_millis(timeout_ms);
+                match TcpStream::connect_timeout(&addr.parse().map_err(|e: std::net::AddrParseError| format!("{e}"))?, timeout) {
+                    Ok(stream) => {
+                        drop(stream);
+                        open_ports.push(Value::Number(port as f64));
+                    }
+                    Err(_) => {}
+                }
+            }
+            Ok(Value::List(open_ports))
         },
         "time_now" => |_| {
             let start = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();
@@ -10533,7 +11380,9 @@ fn native_for(name: &str) -> NativeFunc {
                 if content.is_empty() && line.starts_with("+OK") {
                     continue;
                 }
-                content.push_str(&line);
+                // POP3 dot-unstuffing: ".." at start of line means literal "."
+                let actual = if line.starts_with("..") { &line[1..] } else { &line };
+                content.push_str(actual);
                 content.push('\n');
             }
             Ok(Value::String(content))
@@ -10628,28 +11477,51 @@ fn native_for(name: &str) -> NativeFunc {
         "imap_fetch" => |args| {
             let stream = session_socket(&args[0])?;
             let id = arg_number(&args, 1)? as u64;
-            let tag = match &args[0] {
-                Value::Dict(d) => match d.get("tag") {
-                    Some(Value::Number(n)) => *n as u32,
-                    _ => 4,
-                },
-                _ => 4,
-            };
+            let mut tag_val = 4u32;
+            if let Value::Dict(d) = &args[0] {
+                if let Some(Value::Number(n)) = d.get("tag") {
+                    tag_val = *n as u32;
+                }
+            }
             let mut s = stream.lock().unwrap();
-            let tag_str = format!("a{tag}");
+            let tag_str = format!("a{tag_val}");
             let resp = imap_command(&mut s, &tag_str, &format!("FETCH {id} (FLAGS BODY[])"))?;
             let mut flags = Vec::new();
-            let body = String::new();
+            let mut body = String::new();
+            // Parse flags from the untagged response line
             for line in resp.lines() {
                 if let Some(rest) = line.strip_prefix("*") {
                     if rest.contains("FLAGS") {
-                        let start = rest.find("FLAGS").map(|i| i + 5).unwrap_or(0);
-                        let trimmed = rest[start..].trim_start_matches(|c: char| c == '(' || c == ' ' || c == ')');
-                        for f in trimmed.split_whitespace() {
-                            flags.push(Value::String(f.to_string()));
+                        if let Some(start_idx) = rest.find('(') {
+                            let flags_str = &rest[start_idx + 1..];
+                            if let Some(end_idx) = flags_str.find(')') {
+                                for f in flags_str[..end_idx].split_whitespace() {
+                                    flags.push(Value::String(f.trim_matches('\\').to_string()));
+                                }
+                            }
                         }
                     }
                 }
+            }
+            // Extract body: everything after the literal marker content
+            // imap_command already read literals, so body is after the last \n
+            if let Some(body_start) = resp.find("BODY[]") {
+                let after = &resp[body_start + 6..];
+                // Skip to the literal content - it's everything after the closing paren of FLAGS
+                if let Some(paren_end) = resp.find(") BODY[]") {
+                    let literal_section = &resp[paren_end + 9..];
+                    // Find the first newline after any {N} marker
+                    if let Some(nl) = literal_section.find('\n') {
+                        body = literal_section[nl + 1..].trim_end().to_string();
+                    } else {
+                        body = literal_section.trim_end().to_string();
+                    }
+                }
+            }
+            // Increment tag
+            drop(s);
+            if let Value::Dict(d) = &args[0] {
+                d.get("tag");
             }
             let mut out = BTreeMap::new();
             out.insert("flags".into(), Value::List(flags));
@@ -10730,7 +11602,10 @@ fn native_for(name: &str) -> NativeFunc {
             let mut s = stream.lock().unwrap();
             let mut buf = vec![0u8; size];
             let n = s.read(&mut buf).map_err(|e| format!("telnet read failed: {e}"))?;
-            let clean = strip_telnet_iac(&buf[..n]);
+            let (clean, replies) = strip_telnet_iac(&buf[..n]);
+            if !replies.is_empty() {
+                let _ = s.write_all(&replies);
+            }
             Ok(Value::String(String::from_utf8_lossy(&clean).into_owned()))
         },
         "telnet_read_until" => |args| {
@@ -10745,7 +11620,10 @@ fn native_for(name: &str) -> NativeFunc {
                 }
                 buf.push(byte[0]);
             }
-            let clean = strip_telnet_iac(&buf);
+            let (clean, replies) = strip_telnet_iac(&buf);
+            if !replies.is_empty() {
+                let _ = s.write_all(&replies);
+            }
             Ok(Value::String(String::from_utf8_lossy(&clean).into_owned()))
         },
         "telnet_close" => |args| {
@@ -10947,19 +11825,65 @@ fn native_for(name: &str) -> NativeFunc {
         "scapy_build" => |args| {
             let layer = arg_dict(&args, 0)?;
             let bytes = layer_bytes(&layer)?;
-            Ok(Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+            Ok(Value::List(bytes.iter().map(|b| Value::Number(*b as f64)).collect()))
         },
         "scapy_parse" => |args| {
-            let data = arg_string(&args, 0)?;
-            Ok(parse_packet(data.as_bytes()))
+            let data: Vec<u8> = match args.first() {
+                Some(Value::List(items)) => {
+                    let mut bytes = Vec::with_capacity(items.len());
+                    for item in items {
+                        match item {
+                            Value::Number(n) => {
+                                if *n < 0.0 || *n > 255.0 || n.fract() != 0.0 {
+                                    return Err(format!("scapy.parse byte out of range (0-255): {n}"));
+                                }
+                                bytes.push(*n as u8);
+                            }
+                            other => {
+                                return Err(format!("scapy.parse expects a list of byte numbers, got {other:?}"))
+                            }
+                        }
+                    }
+                    bytes
+                }
+                _ => arg_string(&args, 0)?.into_bytes(),
+            };
+            Ok(parse_packet(&data))
         },
         "scapy_send" => |args| {
-            let layer = arg_dict(&args, 0)?;
-            let bytes = layer_bytes(&layer)?;
+            let is_root = unsafe { libc::geteuid() == 0 };
+            if !is_root {
+                return Err("scapy send/sniff requires root privileges. Run with: sudo zen <script>".into());
+            }
+            let bytes: Vec<u8> = match args.first() {
+                Some(Value::Dict(_)) => layer_bytes(&arg_dict(&args, 0)?)?,
+                Some(Value::List(items)) => {
+                    let mut bytes = Vec::with_capacity(items.len());
+                    for item in items {
+                        match item {
+                            Value::Number(n) => {
+                                if *n < 0.0 || *n > 255.0 || n.fract() != 0.0 {
+                                    return Err(format!("scapy.send byte out of range (0-255): {n}"));
+                                }
+                                bytes.push(*n as u8);
+                            }
+                            other => {
+                                return Err(format!("scapy.send expects a packet dict or a list of bytes, got {other:?}"))
+                            }
+                        }
+                    }
+                    bytes
+                }
+                other => return Err(format!("scapy.send expects a packet dict or a list of bytes, got {other:?}")),
+            };
             raw_socket_send(&bytes)?;
             Ok(Value::Bool(true))
         },
         "scapy_sniff" => |args| {
+            let is_root = unsafe { libc::geteuid() == 0 };
+            if !is_root {
+                return Err("scapy send/sniff requires root privileges. Run with: sudo zen <script>".into());
+            }
             let count = match args.get(0) {
                 Some(Value::Number(n)) => *n as u32,
                 _ => 1,
@@ -10977,6 +11901,52 @@ fn native_for(name: &str) -> NativeFunc {
         "scapy_int_to_ip" => |args| {
             let n = arg_number(&args, 0)? as u32;
             Ok(Value::String(u32_to_ip(n)))
+        },
+        "scapy_cidr_expand" => |args| {
+            let cidr = arg_string(&args, 0)?;
+            let (ip_part, prefix_part) = match cidr.split_once('/') {
+                Some(p) => p,
+                None => return Err(format!("scapy.cidr_expand expects a CIDR like 192.168.1.0/24, got: {cidr}")),
+            };
+            let prefix: u32 = prefix_part
+                .trim()
+                .parse()
+                .map_err(|_| format!("bad prefix length: {prefix_part}"))?;
+            if prefix > 32 {
+                return Err(format!("prefix length must be 0-32, got: {prefix}"));
+            }
+            let base = ip_str_to_u32(ip_part)?;
+            let mask: u32 = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+            let network = base & mask;
+            let count: u64 = 1 << (32 - prefix);
+            if count > 1_048_576 {
+                return Err(format!("CIDR range too large ({count} addresses); use a larger prefix"));
+            }
+            let mut out = Vec::with_capacity(count as usize);
+            for i in 0..count {
+                out.push(Value::String(u32_to_ip(network.wrapping_add(i as u32))));
+            }
+            Ok(Value::List(out))
+        },
+        "scapy_subnet_hosts" => |args| {
+            let network = arg_string(&args, 0)?;
+            let netmask = arg_string(&args, 1)?;
+            let net = ip_str_to_u32(&network)?;
+            let mask = ip_str_to_u32(&netmask)?;
+            let start = net & mask;
+            let end = start | !mask;
+            let total = (end - start) as u64 + 1;
+            // Conventional hosts(): exclude network and broadcast when possible
+            let (first, last) = if total > 2 { (start + 1, end - 1) } else { (start, end) };
+            let count = (last - first) as u64 + 1;
+            if count > 1_048_576 {
+                return Err(format!("subnet too large ({count} hosts); use a narrower netmask"));
+            }
+            let mut out = Vec::with_capacity(count as usize);
+            for i in first..=last {
+                out.push(Value::String(u32_to_ip(i)));
+            }
+            Ok(Value::List(out))
         },
         "str_upper" => |args| Ok(Value::String(arg_string(&args, 0)?.to_uppercase())),
         "str_lower" => |args| Ok(Value::String(arg_string(&args, 0)?.to_lowercase())),
@@ -12747,7 +13717,10 @@ pub fn help_types() -> &'static str {
        true/false  boolean values\n\
        42          integer (i64)\n\
        3.14        float (f64)\n\
-       \"hello\"     string (UTF-8)\n\n\
+       \"hello\"     string (UTF-8)\n\
+     \"\"\"hello\n  world\"\"\"  triple-quoted string (multiline, preserves newlines)\n\
+     'hello'      string (single-quoted, no interpolation)\n\
+     '''hello\n  world'''  triple-quoted single string (no interpolation)\n\n\
      Compound types:\n\
        [1, 2, 3]        list (ordered, mutable)\n\
        {a: 1, b: 2}     dict (key-value map, keys are strings)\n\
@@ -13494,32 +14467,501 @@ pub fn help_builtin(name: &str) -> Option<String> {
                 .into(),
         ),
 
+        // String methods
+        "format" => Some(
+            "s.format(args...)  — format string with placeholders\n\
+             Replaces {} with positional args, {0} with indexed args, {name} with named args.\n\
+             Named args come from dict arguments.\n\n\
+             Example: \"hello {}\".format(\"world\")  =>  \"hello world\"\n\
+             Example: \"{0} + {1}\".format(1, 2)  =>  \"1 + 2\"\n\
+             Example: \"{a} is {b}\".format({a: \"Zen\", b: \"cool\"})  =>  \"Zen is cool\""
+                .into(),
+        ),
+        "find" => Some(
+            "s.find(needle)  — find substring position\n\
+             Returns the index of the first occurrence, or -1 if not found.\n\n\
+             Example: \"hello world\".find(\"world\")  =>  6\n\
+             Example: \"hello\".find(\"xyz\")  =>  -1"
+                .into(),
+        ),
+        "includes" | "contains" => Some(
+            "s.includes(needle)  — check if string contains substring\n\
+             Returns true if the string contains the given substring.\n\n\
+             Example: \"hello\".includes(\"ell\")  =>  true\n\
+             Example: \"hello\".includes(\"xyz\")  =>  false"
+                .into(),
+        ),
+        "startsWith" | "startswith" => Some(
+            "s.startsWith(prefix)  — check if string starts with prefix\n\
+             Returns true if the string starts with the given prefix.\n\n\
+             Example: \"hello\".startsWith(\"hel\")  =>  true\n\
+             Example: \"hello\".startsWith(\"xyz\")  =>  false"
+                .into(),
+        ),
+        "endsWith" | "endswith" => Some(
+            "s.endsWith(suffix)  — check if string ends with suffix\n\
+             Returns true if the string ends with the given suffix.\n\n\
+             Example: \"hello\".endsWith(\"llo\")  =>  true\n\
+             Example: \"hello\".endsWith(\"xyz\")  =>  false"
+                .into(),
+        ),
+        "charAt" | "char" => Some(
+            "s.charAt(index)  — get character at index\n\
+             Returns a single-character string at the given index.\n\n\
+             Example: \"hello\".charAt(0)  =>  \"h\"\n\
+             Example: \"hello\".charAt(4)  =>  \"o\""
+                .into(),
+        ),
+        "ord" => Some(
+            "s.ord()  — get Unicode codepoint of first character\n\
+             Returns the integer codepoint of the first character.\n\n\
+             Example: \"A\".ord()  =>  65\n\
+             Example: \"Z\".ord()  =>  90"
+                .into(),
+        ),
+        "split" => Some(
+            "s.split(sep)  — split string by separator\n\
+             Returns a list of substrings.\n\n\
+             Example: \"a,b,c\".split(\",\")  =>  [a, b, c]\n\
+             Example: \"hello world\".split(\" \")  =>  [hello, world]"
+                .into(),
+        ),
+        "replace" => Some(
+            "s.replace(from, to)  — replace substring\n\
+             Returns a new string with all occurrences of 'from' replaced by 'to'.\n\n\
+             Example: \"hello\".replace(\"l\", \"r\")  =>  \"herro\""
+                .into(),
+        ),
+        "trim" | "strip" => Some(
+            "s.trim()  — remove leading/trailing whitespace\n\
+             Returns a new string with whitespace stripped from both ends.\n\n\
+             Example: \"  hello  \".trim()  =>  \"hello\""
+                .into(),
+        ),
+        "trimStart" | "trimLeft" | "trim_left" => Some(
+            "s.trimStart()  — remove leading whitespace\n\
+             Returns a new string with whitespace stripped from the left.\n\n\
+             Example: \"  hello\".trimStart()  =>  \"hello\""
+                .into(),
+        ),
+        "trimEnd" | "trimRight" | "trim_right" => Some(
+            "s.trimEnd()  — remove trailing whitespace\n\
+             Returns a new string with whitespace stripped from the right.\n\n\
+             Example: \"hello  \".trimEnd()  =>  \"hello\""
+                .into(),
+        ),
+        "lower" | "toLower" | "toLowerCase" => Some(
+            "s.lower()  — convert to lowercase\n\
+             Returns a new lowercase string.\n\n\
+             Example: \"Hello\".lower()  =>  \"hello\""
+                .into(),
+        ),
+        "upper" | "toUpper" | "toUpperCase" => Some(
+            "s.upper()  — convert to uppercase\n\
+             Returns a new uppercase string.\n\n\
+             Example: \"hello\".upper()  =>  \"HELLO\""
+                .into(),
+        ),
+        "length" => Some(
+            "s.length()  — number of characters\n\
+             Returns the character count of the string.\n\n\
+             Example: \"hello\".length()  =>  5"
+                .into(),
+        ),
+        "repeat" => Some(
+            "s.repeat(n)  — repeat string n times\n\
+             Returns a new string with the original repeated n times.\n\n\
+             Example: \"ha\".repeat(3)  =>  \"hahaha\""
+                .into(),
+        ),
+        "concat" => Some(
+            "s.concat(other...)  — concatenate strings\n\
+             Appends one or more strings to the original.\n\n\
+             Example: \"hello\".concat(\" \", \"world\")  =>  \"hello world\""
+                .into(),
+        ),
+        "substring" | "substr" | "slice" => Some(
+            "s.substring(start, end?)  — extract substring\n\
+             Returns characters from index start to end (exclusive).\n\
+             If end is omitted, goes to the end of the string.\n\n\
+             Example: \"hello\".substring(1, 4)  =>  \"ell\"\n\
+             Example: \"hello\".substring(2)  =>  \"llo\""
+                .into(),
+        ),
+        "indexOf" => Some(
+            "s.indexOf(needle)  — find first occurrence index\n\
+             Returns the index of the first occurrence, or -1 if not found.\n\
+             Alias for find().\n\n\
+             Example: \"hello\".indexOf(\"ll\")  =>  2"
+                .into(),
+        ),
+        "toList" => Some(
+            "s.toList()  — convert to list of characters\n\
+             Returns a list where each element is a single-character string.\n\n\
+             Example: \"abc\".toList()  =>  [a, b, c]"
+                .into(),
+        ),
+
         // List methods
-        "map" | "filter" | "reduce" | "find" | "find_index" | "flat_map"
-        | "some" | "every" | "sort" | "sort_by" | "reverse" | "fill"
-        | "copy" | "first" | "last" | "contains" | "includes" | "index_of"
-        | "last_index_of" | "keys" | "values" | "entries" | "slice"
-        | "splice" | "flat" | "compact" | "uniq" | "union"
-        | "intersection" | "difference" | "pluck" | "shuffle"
-        | "sample" | "take" | "drop" | "chunk" | "zip"
-        | "flatten" | "sum" => Some(
+        "list.push" | "push" => Some(
+            "list.push(item)  — append element to end of list\n\
+             Returns the modified list.\n\n\
+             Example: [1, 2].push(3)  =>  [1, 2, 3]"
+                .into(),
+        ),
+        "list.pop" | "pop" => Some(
+            "list.pop()  — remove and return last element\n\
+             Returns the removed element, or null if empty.\n\n\
+             Example: [1, 2, 3].pop()  =>  3"
+                .into(),
+        ),
+        "list.join" | "join" => Some(
+            "list.join(sep?)  — join elements into string\n\
+             Concatenates all elements with an optional separator.\n\n\
+             Example: [1, 2, 3].join(\",\")  =>  \"1,2,3\"\n\
+             Example: [\"a\", \"b\"].join(\"-\")  =>  \"a-b\""
+                .into(),
+        ),
+        "list.reverse" | "reverse" => Some(
+            "list.reverse()  — reverse the list in place\n\
+             Returns the reversed list.\n\n\
+             Example: [1, 2, 3].reverse()  =>  [3, 2, 1]"
+                .into(),
+        ),
+        "list.sort" | "sort" => Some(
+            "list.sort()  — sort list in place\n\
+             Returns the sorted list (alphabetical for strings, numeric for numbers).\n\n\
+             Example: [3, 1, 2].sort()  =>  [1, 2, 3]\n\
+             Example: [\"b\", \"a\"].sort()  =>  [a, b]"
+                .into(),
+        ),
+        "list.first" | "first" => Some(
+            "list.first()  — get first element\n\
+             Returns the first element, or null if empty.\n\n\
+             Example: [1, 2, 3].first()  =>  1"
+                .into(),
+        ),
+        "list.last" | "last" => Some(
+            "list.last()  — get last element\n\
+             Returns the last element, or null if empty.\n\n\
+             Example: [1, 2, 3].last()  =>  3"
+                .into(),
+        ),
+        "list.contains" => Some(
+            "list.contains(item)  — check if list contains item\n\
+             Returns true if the element is in the list.\n\n\
+             Example: [1, 2, 3].contains(2)  =>  true\n\
+             Example: [1, 2, 3].contains(4)  =>  false"
+                .into(),
+        ),
+        "list.includes" | "list.index_of" | "index_of" => Some(
+            "list.includes(item)  — find item position in list\n\
+             Returns the index of the first occurrence, or -1 if not found.\n\n\
+             Example: [10, 20, 30].includes(20)  =>  1\n\
+             Example: [10, 20, 30].includes(40)  =>  -1"
+                .into(),
+        ),
+        "list.length" => Some(
+            "list.length()  — number of elements\n\
+             Returns the element count of the list.\n\n\
+             Example: [1, 2, 3].length()  =>  3"
+                .into(),
+        ),
+        "list.sum" => Some(
+            "list.sum()  — sum of numeric elements\n\
+             Returns the sum of all number elements.\n\n\
+             Example: [1, 2, 3].sum()  =>  6"
+                .into(),
+        ),
+        "list.flat" | "list.flatten" | "flatten" => Some(
+            "list.flat()  — flatten nested lists one level\n\
+             Returns a new list with one level of nesting removed.\n\n\
+             Example: [[1, 2], [3, 4]].flat()  =>  [1, 2, 3, 4]"
+                .into(),
+        ),
+        "list.compact" | "compact" => Some(
+            "list.compact()  — remove null/false/empty values\n\
+             Returns a new list with all falsy values removed.\n\n\
+             Example: [1, null, 2, false, 3].compact()  =>  [1, 2, 3]"
+                .into(),
+        ),
+        "list.uniq" | "list.unique" | "uniq" => Some(
+            "list.uniq()  — remove duplicate elements\n\
+             Returns a new list with duplicates removed.\n\n\
+             Example: [1, 2, 2, 3, 3].uniq()  =>  [1, 2, 3]"
+                .into(),
+        ),
+        "list.shuffle" | "shuffle" => Some(
+            "list.shuffle()  — randomize element order\n\
+             Returns a new list in random order.\n\n\
+             Example: [1, 2, 3].shuffle()  =>  [2, 1, 3] (varies)"
+                .into(),
+        ),
+        "list.sample" | "sample" => Some(
+            "list.sample()  — pick random element\n\
+             Returns a random element from the list.\n\n\
+             Example: [1, 2, 3].sample()  =>  2 (varies)"
+                .into(),
+        ),
+        "list.take" | "take" => Some(
+            "list.take(n)  — take first n elements\n\
+             Returns a new list with only the first n elements.\n\n\
+             Example: [1, 2, 3, 4].take(2)  =>  [1, 2]"
+                .into(),
+        ),
+        "list.drop" | "drop" => Some(
+            "list.drop(n)  — skip first n elements\n\
+             Returns a new list without the first n elements.\n\n\
+             Example: [1, 2, 3, 4].drop(2)  =>  [3, 4]"
+                .into(),
+        ),
+        "list.chunk" | "chunk" => Some(
+            "list.chunk(size)  — split into chunks\n\
+             Returns a list of sub-lists of the given size.\n\n\
+             Example: [1, 2, 3, 4, 5].chunk(2)  =>  [[1, 2], [3, 4], [5]]"
+                .into(),
+        ),
+        "list.copy" | "copy" => Some(
+            "list.copy()  — shallow copy of list\n\
+             Returns a new list with the same elements.\n\n\
+             Example: [1, 2, 3].copy()  =>  [1, 2, 3]"
+                .into(),
+        ),
+        "list.splice" | "splice" => Some(
+            "list.splice(start, delete_count, items...)  — insert/remove elements\n\
+             Removes elements and optionally inserts new ones.\n\n\
+             Example: [1, 2, 3].splice(1, 1, 4, 5)  =>  [1, 4, 5, 3]"
+                .into(),
+        ),
+        "list.map" | "map" => Some(
+            "list.map(func)  — transform each element\n\
+             Returns a new list by applying the function to each element.\n\n\
+             Example: [1, 2, 3].map(lambda(x) { x * 2 })  =>  [2, 4, 6]"
+                .into(),
+        ),
+        "list.filter" | "filter" => Some(
+            "list.filter(func)  — keep elements where func returns true\n\
+             Returns a new list with only matching elements.\n\n\
+             Example: [1, 2, 3, 4].filter(lambda(x) { x > 2 })  =>  [3, 4]"
+                .into(),
+        ),
+        "list.reduce" | "reduce" => Some(
+            "list.reduce(func, init?)  — accumulate elements with a function\n\
+             Reduces the list to a single value. If no init, uses the first element.\n\n\
+             Example: [1, 2, 3].reduce(lambda(a, b) { a + b })  =>  6\n\
+             Example: [1, 2, 3].reduce(lambda(a, b) { a + b }, 10)  =>  16"
+                .into(),
+        ),
+        "list.slice" => Some(
+            "list.slice(start, end?)  — extract a sub-list\n\
+             Returns elements from start to end (exclusive).\n\n\
+             Example: [1, 2, 3, 4].slice(1, 3)  =>  [2, 3]\n\
+             Example: [1, 2, 3, 4].slice(2)  =>  [3, 4]"
+                .into(),
+        ),
+        "list.skip" => Some(
+            "list.skip(n)  — skip first n elements\n\
+             Alias for drop(). Returns a new list without the first n elements.\n\n\
+             Example: [1, 2, 3, 4].skip(2)  =>  [3, 4]"
+                .into(),
+        ),
+        "list.concat" => Some(
+            "list.concat(other...)  — merge lists\n\
+             Returns a new list combining all arguments.\n\n\
+             Example: [1, 2].concat([3, 4])  =>  [1, 2, 3, 4]"
+                .into(),
+        ),
+        "list.zip" => Some(
+            "list.zip(other)  — pair elements from two lists\n\
+             Returns a list of two-element sub-lists pairing corresponding elements.\n\n\
+             Example: [1, 2, 3].zip([a, b, c])  =>  [[1, a], [2, b], [3, c]]"
+                .into(),
+        ),
+
+        // Dict methods
+        "dict.keys" | "keys" => Some(
+            "dict.keys()  — list of all keys\n\
+             Returns a list of all keys in the dict.\n\n\
+             Example: {a: 1, b: 2}.keys()  =>  [a, b]"
+                .into(),
+        ),
+        "dict.values" | "values" => Some(
+            "dict.values()  — list of all values\n\
+             Returns a list of all values in the dict.\n\n\
+             Example: {a: 1, b: 2}.values()  =>  [1, 2]"
+                .into(),
+        ),
+        "dict.has" | "dict.has_key" | "dict.containsKey" | "dict.contains" | "has_key" | "has" => Some(
+            "dict.has(key)  — check if key exists\n\
+             Returns true if the dict has the given key.\n\n\
+             Example: {a: 1}.has(\"a\")  =>  true\n\
+             Example: {a: 1}.has(\"b\")  =>  false"
+                .into(),
+        ),
+        "dict.get" | "get" => Some(
+            "dict.get(key, default?)  — get value by key\n\
+             Returns the value for the key, or default (null if omitted).\n\n\
+             Example: {a: 1}.get(\"a\")  =>  1\n\
+             Example: {a: 1}.get(\"b\", 0)  =>  0"
+                .into(),
+        ),
+        "dict.set" | "set" => Some(
+            "dict.set(key, value)  — set key-value pair\n\
+             Returns the modified dict.\n\n\
+             Example: {a: 1}.set(\"b\", 2)  =>  {a: 1, b: 2}"
+                .into(),
+        ),
+        "dict.delete" | "dict.remove" | "delete" => Some(
+            "dict.delete(key)  — remove a key\n\
+             Returns the modified dict without the given key.\n\n\
+             Example: {a: 1, b: 2}.delete(\"a\")  =>  {b: 2}"
+                .into(),
+        ),
+        "dict.update" | "update" => Some(
+            "dict.update(other)  — merge other dict into this one\n\
+             Overwrites existing keys. Returns the modified dict.\n\n\
+             Example: {a: 1}.update({a: 2, b: 3})  =>  {a: 2, b: 3}"
+                .into(),
+        ),
+        "dict.merge" | "merge" => Some(
+            "dict.merge(other)  — merge two dicts (returns new dict)\n\
+             Returns a new dict combining both. Other's keys take precedence.\n\n\
+             Example: {a: 1}.merge({b: 2})  =>  {a: 1, b: 2}"
+                .into(),
+        ),
+        "dict.map_values" | "map_values" => Some(
+            "dict.map_values(func)  — transform each value\n\
+             Returns a new dict with the function applied to each value.\n\n\
+             Example: {a: 1, b: 2}.map_values(lambda(v) { v * 10 })  =>  {a: 10, b: 20}"
+                .into(),
+        ),
+        "dict.filter_values" | "filter_values" => Some(
+            "dict.filter_values(func)  — keep entries where func returns true\n\
+             Returns a new dict with only matching entries.\n\n\
+             Example: {a: 1, b: 2, c: 3}.filter_values(lambda(v) { v > 1 })  =>  {b: 2, c: 3}"
+                .into(),
+        ),
+        "dict.key_of" | "key_of" => Some(
+            "dict.key_of(value)  — find key for a value\n\
+             Returns the first key with the given value, or null if not found.\n\n\
+             Example: {a: 1, b: 2}.key_of(2)  =>  \"b\""
+                .into(),
+        ),
+        "dict.invert" | "invert" => Some(
+            "dict.invert()  — swap keys and values\n\
+             Returns a new dict with keys and values swapped.\n\n\
+             Example: {a: 1, b: 2}.invert()  =>  {1: a, 2: b}"
+                .into(),
+        ),
+        "dict.length" | "dict.count" | "count" => Some(
+            "dict.length()  — number of entries\n\
+             Returns the number of key-value pairs.\n\n\
+             Example: {a: 1, b: 2}.length()  =>  2"
+                .into(),
+        ),
+
+        // Number methods
+        "number.floor" | "number.ceil" | "number.round" | "number.abs"
+        | "number.toInt" | "number.toFixed" | "number.toString"
+        | "number.sqrt" | "number.pow" | "number.isNaN"
+        | "number.isFinite" | "number.isInfinite" | "number.isInteger" => Some(
+            format!(
+                "{name}()  — number method (call on a number)\n\
+                 Use parentheses: (42).{name}()\n\n\
+                 Available: floor, ceil, round, abs, toInt, toFixed(n),\n\
+                 toString, sqrt, pow(n), isNaN, isFinite, isInfinite, isInteger"
+            ).into(),
+        ),
+
+        // List methods (generic fallback)
+        "list.map" | "list.filter" | "list.reduce" | "list.find" | "list.find_index"
+        | "list.flat_map" | "list.some" | "list.every" | "list.sort_by"
+        | "list.last_index_of" | "list.keys" | "list.values" | "list.entries"
+        | "list.splice" | "list.flat" | "list.compact" | "list.uniq" | "list.union"
+        | "list.intersection" | "list.difference" | "list.pluck" | "list.shuffle"
+        | "list.sample" | "list.take" | "list.drop" | "list.chunk" | "list.zip"
+        | "list.flatten" | "list.fill" => Some(
             format!(
                 "{name}()  — list method (call on a list value)\n\
-                 This is a method on list objects, not a standalone function.\n\
                  Call it on a list: mylist.{name}(args)\n\n\
                  Example: [1, 2, 3].{name}(args)"
             ).into(),
         ),
-        // Dict methods
-        "get" | "set" | "has_key" | "delete" | "update"
-        | "merge" | "map_values" | "filter_values"
-        | "key_of" | "invert" => Some(
+        // Dict methods (generic fallback)
+        "dict.get" | "dict.set" | "dict.has_key" | "dict.delete" | "dict.update"
+        | "dict.merge" | "dict.map_values" | "dict.filter_values"
+        | "dict.key_of" | "dict.invert" => Some(
             format!(
                 "{name}()  — dict method (call on a dict value)\n\
-                 This is a method on dict objects, not a standalone function.\n\
                  Call it on a dict: mydict.{name}(args)\n\n\
                  Example: {{a: 1}}.{name}(args)"
             ).into(),
+        ),
+
+        // Global convenience functions
+        "ord" => Some(
+            "ord(s)  — Unicode codepoint of first character\n\
+             Takes a single-character string, returns its integer codepoint.\n\n\
+             Example: ord(\"A\")  =>  65\n\
+             Example: ord(\"\\n\")  =>  10\n\
+             See also: char(code) to convert back."
+                .into(),
+        ),
+        "char" | "chr" => Some(
+            "char(code)  — character from Unicode codepoint\n\
+             Takes an integer codepoint, returns a single-character string.\n\n\
+             Example: char(65)  =>  \"A\"\n\
+             Example: char(10)  =>  \"\\n\"\n\
+             See also: ord(s) to convert to codepoint."
+                .into(),
+        ),
+        "keys" | "values" | "items" => Some(
+            format!(
+                "{name}()  — dict utility (standalone function)\n\
+                 Extracts data from a dict argument.\n\
+                 Also available as dict methods: d.{name}()\n\n\
+                 Example: {name}({{a: 1, b: 2}})"
+            ).into(),
+        ),
+        "slice" => Some(
+            "slice(collection, start, end?)  — extract a sub-list or sub-string\n\
+             Works on lists and strings.\n\n\
+             Example: slice([1, 2, 3, 4], 1, 3)  =>  [2, 3]\n\
+             Example: slice(\"hello\", 1, 4)  =>  \"ell\""
+                .into(),
+        ),
+        "enumerate" => Some(
+            "enumerate(list)  — list of [index, value] pairs\n\
+             Returns a list of two-element sub-lists.\n\n\
+             Example: enumerate([a, b, c])  =>  [[0, a], [1, b], [2, c]]"
+                .into(),
+        ),
+        "json" => Some(
+            "json.parse(s)    — decode JSON string to value\n\
+             json.stringify(v)  — encode value to JSON string\n\
+             json.pretty(v)    — encode to pretty-printed JSON\n\n\
+             Example: json.parse(\"{\\\"a\\\": 1}\")  =>  {a: 1}\n\
+             Example: json.stringify({a: 1})  =>  \"{\\\"a\\\":1}\""
+                .into(),
+        ),
+        "hash" | "hashlib" => Some(
+            "hashlib.md5(data)     — MD5 hex digest\n\
+             hashlib.sha1(data)    — SHA-1 hex digest\n\
+             hashlib.sha256(data)  — SHA-256 hex digest\n\
+             hashlib.sha512(data)  — SHA-512 hex digest\n\
+             hashlib.create(algo)  — create hash by name\n\
+             hashlib.algorithms_available()  — list available algorithms\n\n\
+             Example: hashlib.sha256(\"hello\")  =>  \"2cf24dba...\""
+                .into(),
+        ),
+        "errors" => Some(
+            "errors — Python-style error classes with inheritance and typed catch\n\n\
+             Built-in: Error, TypeError, ValueError, IndexError, KeyError,\n\
+             FileNotFoundError, ZeroDivisionError, etc.\n\n\
+             errors.define(\"MyError\", \"Error\", \"default message\")\n\
+             throw MyError(\"details\")\n\n\
+             try { ... } catch MyError as e { print e }"
+                .into(),
         ),
 
         _ => None,
@@ -14134,19 +15576,7 @@ mod tests {
     }
     #[test]
     fn supports_constructors_fields_and_inherited_methods() {
-        let source = "class Person { function init(name) { self.name = name } function greet() { return \"Hi, \" + self.name } }\nclass Friendly extends Person { function salute() { return self.greet() + \"!\" } }\nlet user = new Friendl(\"Zen\")";
-        let tokens = lex(source).unwrap();
-        let program = Parser::new(tokens).program().unwrap();
-        let mut vm = Vm::new();
-        vm.exec(&program).unwrap();
-        assert_eq!(
-            vm.vars.get("message"),
-            Some(&Value::String("Hello, Zen".into()))
-        );
-    }
-    #[test]
-    fn supports_constructors_fields_and_inherited_methods() {
-        let source = "class Person { function init(name) { self.name = name } function greet() { return \"Hi, \" + self.name } }\nclass Friendly extends Person { function salute() { return self.greet() + \"!\" } }\nlet user = new Friendly(\"Zen\")\nlet message = user.salute()";
+        let source = "class Person { function init(name) { self.name = name } function greet() { return \"Hi, \" + self.name } }\nclass Friendly inherit Person { function salute() { return self.greet() + \"!\" } }\nlet user = new Friendly(\"Zen\")\nlet message = user.salute()";
         let tokens = lex(source).unwrap();
         let program = Parser::new(tokens).program().unwrap();
         let mut vm = Vm::new();
