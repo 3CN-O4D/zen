@@ -153,6 +153,8 @@ pub enum Value {
     Dict(BTreeMap<String, Value>),
     Instance(InstanceRef),
     Socket(Arc<Mutex<TcpStream>>),
+    UdpSocket(Arc<Mutex<std::net::UdpSocket>>),
+    Listener(Arc<Mutex<std::net::TcpListener>>),
     NativeFunction(String),
     Function(String),
 }
@@ -167,7 +169,9 @@ impl PartialEq for Value {
             (Self::List(a), Self::List(b)) => a == b,
             (Self::Dict(a), Self::Dict(b)) => a == b,
             (Self::Instance(a), Self::Instance(b)) => Arc::ptr_eq(a, b),
-            (Self::Socket(_), Self::Socket(_)) => false, // Sockets are not comparable
+            (Self::Socket(_), Self::Socket(_)) => false,
+            (Self::UdpSocket(_), Self::UdpSocket(_)) => false,
+            (Self::Listener(_), Self::Listener(_)) => false,
             _ => false,
         }
     }
@@ -184,6 +188,8 @@ impl Value {
             Self::Dict(_) => "dict",
             Self::Instance(_) => "object",
             Self::Socket(_) => "socket",
+            Self::UdpSocket(_) => "udp_socket",
+            Self::Listener(_) => "listener",
             Self::NativeFunction(_) | Self::Function(_) => "function",
         }
     }
@@ -195,7 +201,7 @@ impl Value {
             Self::String(v) => !v.is_empty(),
             Self::List(v) => !v.is_empty(),
             Self::Dict(v) => !v.is_empty(),
-            Self::Instance(_) | Self::Socket(_) | Self::NativeFunction(_) | Self::Function(_) => true,
+            Self::Instance(_) | Self::Socket(_) | Self::UdpSocket(_) | Self::Listener(_) | Self::NativeFunction(_) | Self::Function(_) => true,
         }
     }
 }
@@ -231,6 +237,8 @@ impl fmt::Display for Value {
                 write!(f, "<{}>", instance.lock().unwrap().class_name)
             }
             Self::Socket(_) => write!(f, "<Socket>"),
+            Self::UdpSocket(_) => write!(f, "<UdpSocket>"),
+            Self::Listener(_) => write!(f, "<Listener>"),
             Self::NativeFunction(name) => write!(f, "<native:{name}>"),
             Self::Function(name) => write!(f, "<function:{name}>"),
         }
@@ -3369,6 +3377,8 @@ self.vars.insert("re".into(), re);
             ("recv".into(), Value::NativeFunction("socket_recv".into())),
             ("recv_from".into(), Value::NativeFunction("socket_recv_from".into())),
             ("recv_all".into(), Value::NativeFunction("socket_recv_all".into())),
+            ("listen".into(), Value::NativeFunction("socket_listen".into())),
+            ("accept".into(), Value::NativeFunction("socket_accept".into())),
             ("close".into(), Value::NativeFunction("socket_close".into())),
             ("set_timeout".into(), Value::NativeFunction("socket_set_timeout".into())),
             ("scan".into(), Value::NativeFunction("socket_scan".into())),
@@ -3655,7 +3665,7 @@ self.vars.insert("re".into(), re);
         self.vars.insert("binascii".into(), binascii);
 
         // Register all core native functions eagerly
-          const NATIVES: [&str; 369] = [
+          const NATIVES: [&str; 374] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -3880,6 +3890,11 @@ self.vars.insert("re".into(), re);
             "browser_wait_for",
             "browser_close",
             "socket_close",
+            "socket_listen",
+            "socket_accept",
+            "socket_open_udp",
+            "socket_send_to",
+            "socket_recv_from",
             "ftp_connect",
             "ftp_login",
             "ftp_pwd",
@@ -7954,11 +7969,19 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
     }
     // Store the raw body in a process-wide cache so the response dict's
     // json()/text() natives (which receive the dict itself) can read it.
+    // Bodies are evicted on read (.json()/.text()) to prevent memory leaks.
+    // Cap at 256 entries to bound growth if responses are never consumed.
     let id = next_response_id();
-    response_bodies()
-        .lock()
-        .map_err(|e| format!("response cache poisoned: {e}"))?
-        .insert(id, body_text);
+    {
+        let mut cache = response_bodies()
+            .lock()
+            .map_err(|e| format!("response cache poisoned: {e}"))?;
+        cache.insert(id, body_text);
+        if cache.len() > 256 {
+            let cutoff = id.saturating_sub(256);
+            cache.retain(|&k, _| k >= cutoff);
+        }
+    }
     let mut result = BTreeMap::new();
     result.insert("status".into(), Value::Number(status));
     result.insert("ok".into(), Value::Bool(status >= 200.0 && status < 400.0));
@@ -7986,9 +8009,8 @@ fn response_body_from_args(args: &[Value]) -> Result<String, String> {
     response_bodies()
         .lock()
         .map_err(|e| format!("response cache poisoned: {e}"))?
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| "response body no longer available".into())
+        .remove(&id)
+        .ok_or_else(|| "response body no longer available (already consumed)".into())
 }
 
 fn fernet_encrypt_impl(key: &str, data: &str) -> Result<Value, String> {
@@ -8401,7 +8423,7 @@ fn imap_command(stream: &mut TcpStream, tag: &str, cmd: &str) -> Result<String, 
                 }
             }
         } else if line.starts_with(tag) {
-            if !line.contains(" OK") && !line.contains(" NO") {
+            if !line.contains("OK") && !line.contains("NO") && !line.contains("BAD") {
                 return Err(format!("IMAP {cmd}: {line}"));
             }
             return Ok(response);
@@ -8410,6 +8432,25 @@ fn imap_command(stream: &mut TcpStream, tag: &str, cmd: &str) -> Result<String, 
             response.push('\n');
         }
     }
+}
+
+fn imap_next_tag(session: &Value) -> Result<u32, String> {
+    // Use a global registry so tags persist across cloned session dicts
+    static IMAP_TAGS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u64, u32>>> =
+        std::sync::OnceLock::new();
+    let tags = IMAP_TAGS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let id = match session {
+        Value::Dict(d) => match d.get("__id") {
+            Some(Value::Number(n)) => *n as u64,
+            _ => 0,
+        },
+        _ => 0,
+    };
+    let mut map = tags.lock().unwrap();
+    let tag = map.entry(id).or_insert(2);
+    let current = *tag;
+    *tag += 1;
+    Ok(current)
 }
 
 fn strip_telnet_iac(buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
@@ -8925,6 +8966,11 @@ fn dns_query_impl(name: &str, rtype: &str) -> Result<Vec<Value>, String> {
     }
     if resp.len() < 12 {
         return Ok(Vec::new());
+    }
+    // Validate response ID matches query ID to prevent spoofing
+    let resp_id = u16::from_be_bytes([resp[0], resp[1]]);
+    if resp_id != id {
+        return Err(format!("dns: response ID {resp_id:#06x} does not match query ID {id:#06x}"));
     }
     let ancount = u16::from_be_bytes([resp[6], resp[7]]) as usize;
     let mut pos = 12usize;
@@ -9472,12 +9518,14 @@ fn native_for(name: &str) -> NativeFunc {
         "socket_recv" => |args| {
             let (socket, size) = match args.as_slice() {
                 [Value::Socket(s), Value::Number(n)] => (s, *n as usize),
-                _ => return Err("socket_recv expects (Socket, Number)".into()),
+                [Value::Socket(s)] => (s, 4096),
+                _ => return Err("socket_recv expects (Socket, size?)".into()),
             };
             let mut buffer = vec![0u8; size];
             let n = socket.lock().unwrap().read(&mut buffer)
                 .map_err(|e| format!("failed to recv: {e}"))?;
-            Ok(Value::String(String::from_utf8_lossy(&buffer[..n]).into()))
+            let data = buffer[..n].to_vec();
+            Ok(Value::List(data.iter().map(|b| Value::Number(*b as f64)).collect()))
         },
         "socket_open_udp" => |args| {
             let addr = arg_string(&args, 0)?;
@@ -9485,40 +9533,48 @@ fn native_for(name: &str) -> NativeFunc {
                 .map_err(|e| format!("failed to bind UDP socket: {e}"))?;
             socket.connect(&addr)
                 .map_err(|e| format!("failed to connect UDP: {e}"))?;
-            // Wrap in TcpStream somehow — we need a new type. Use Socket type with a flag.
-            // Actually, we'll use a dummy TcpStream trick... no, let's just use the existing Socket
-            // by converting UdpSocket to a TcpStream-like wrapper. Since we can't,
-            // we'll store it differently. For now, store UDP info in a dict.
-            Ok(Value::Dict(BTreeMap::from([
-                ("type".into(), Value::String("udp".into())),
-                ("addr".into(), Value::String(addr)),
-            ])))
+            socket.set_nonblocking(false).ok();
+            Ok(Value::UdpSocket(Arc::new(Mutex::new(socket))))
         },
         "socket_send_to" => |args| {
-            let (session, data, addr) = match args.as_slice() {
-                [Value::Dict(d), Value::String(data), Value::String(addr)] => (d, data, addr),
-                _ => return Err("socket_send_to expects (session, data, addr)".into()),
-            };
-            let socket = std::net::UdpSocket::bind("0.0.0.0:0")
-                .map_err(|e| format!("failed to bind UDP: {e}"))?;
-            socket.send_to(data.as_bytes(), addr)
-                .map_err(|e| format!("failed to send_to: {e}"))?;
-            Ok(Value::Bool(true))
+            match args.as_slice() {
+                [Value::UdpSocket(s), Value::String(data)] => {
+                    s.lock().unwrap().send(data.as_bytes())
+                        .map_err(|e| format!("failed to send: {e}"))?;
+                    Ok(Value::Bool(true))
+                }
+                [Value::UdpSocket(s), Value::String(data), Value::String(addr)] => {
+                    let sock = s.lock().unwrap();
+                    sock.send_to(data.as_bytes(), addr.as_str())
+                        .map_err(|e| format!("failed to send_to: {e}"))?;
+                    Ok(Value::Bool(true))
+                }
+                [Value::Dict(d), Value::String(data), Value::String(addr)] => {
+                    let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+                        .map_err(|e| format!("failed to bind UDP: {e}"))?;
+                    socket.send_to(data.as_bytes(), addr.as_str())
+                        .map_err(|e| format!("failed to send_to: {e}"))?;
+                    Ok(Value::Bool(true))
+                }
+                _ => return Err("socket_send_to expects (UdpSocket, data, addr?)".into()),
+            }
         },
         "socket_recv_from" => |args| {
-            let size = match args.get(1) {
-                Some(Value::Number(n)) => *n as usize,
-                _ => 1024,
+            let (socket, size) = match args.as_slice() {
+                [Value::UdpSocket(s), Value::Number(n)] => (s.clone(), *n as usize),
+                [Value::UdpSocket(s)] => (s.clone(), 4096),
+                _ => return Err("socket_recv_from expects (UdpSocket, size?)".into()),
             };
-            let addr = arg_string(&args, 0)?;
-            let socket = std::net::UdpSocket::bind("0.0.0.0:0")
-                .map_err(|e| format!("failed to bind UDP: {e}"))?;
-            socket.connect(&addr)
-                .map_err(|e| format!("failed to connect UDP: {e}"))?;
             let mut buf = vec![0u8; size];
-            let n = socket.recv(&mut buf)
+            let (n, addr) = socket.lock().unwrap().recv_from(&mut buf)
                 .map_err(|e| format!("failed to recv_from: {e}"))?;
-            Ok(Value::String(String::from_utf8_lossy(&buf[..n]).into_owned()))
+            let data = buf[..n].to_vec();
+            let bytes: Vec<Value> = data.iter().map(|b| Value::Number(*b as f64)).collect();
+            Ok(Value::Dict(BTreeMap::from([
+                ("data".into(), Value::List(bytes)),
+                ("addr".into(), Value::String(addr.to_string())),
+                ("text".into(), Value::String(String::from_utf8_lossy(&data).into_owned())),
+            ])))
         },
         "socket_recv_all" => |args| {
             let socket = match &args[0] {
@@ -9564,20 +9620,25 @@ fn native_for(name: &str) -> NativeFunc {
             let (start_port, end_port) = match args.as_slice() {
                 [_, Value::Number(s), Value::Number(e)] => (*s as u16, *e as u16),
                 [_, Value::Number(p)] => (*p as u16, *p as u16),
-                _ => {
-                    // Default: scan common ports
-                    (1, 1024)
-                }
+                _ => (1, 1024),
             };
             let timeout_ms = match args.get(3) {
                 Some(Value::Number(n)) => *n as u64,
                 _ => 200,
             };
+            // Resolve hostname to IP address
+            use std::net::ToSocketAddrs;
+            let ip_addr = format!("{host}:0")
+                .to_socket_addrs()
+                .map_err(|e| format!("DNS resolution failed for '{host}': {e}"))?
+                .next()
+                .ok_or_else(|| format!("no addresses found for '{host}'"))?
+                .ip();
+            let timeout = std::time::Duration::from_millis(timeout_ms);
             let mut open_ports = Vec::new();
             for port in start_port..=end_port {
-                let addr = format!("{host}:{port}");
-                let timeout = std::time::Duration::from_millis(timeout_ms);
-                match TcpStream::connect_timeout(&addr.parse().map_err(|e: std::net::AddrParseError| format!("{e}"))?, timeout) {
+                let addr = std::net::SocketAddr::new(ip_addr, port);
+                match TcpStream::connect_timeout(&addr, timeout) {
                     Ok(stream) => {
                         drop(stream);
                         open_ports.push(Value::Number(port as f64));
@@ -10965,16 +11026,67 @@ fn native_for(name: &str) -> NativeFunc {
         "browser_wait_for" => |args| crate::state::browser_wait_for(&args),
         "browser_close" => |_| crate::state::browser_close(),
         "socket_close" => |args| {
-            let socket = match args.first() {
-                Some(Value::Socket(s)) => s,
-                _ => return Err("socket.close expects a Socket".into()),
-            };
-            socket
-                .lock()
-                .unwrap()
-                .shutdown(std::net::Shutdown::Both)
-                .ok();
+            match args.first() {
+                Some(Value::Socket(s)) => {
+                    s.lock().unwrap().shutdown(std::net::Shutdown::Both).ok();
+                }
+                Some(Value::UdpSocket(_)) => {}
+                Some(Value::Listener(_)) => {}
+                _ => return Err("socket.close expects a Socket, UdpSocket, or Listener".into()),
+            }
             Ok(Value::Bool(true))
+        },
+        "socket_listen" => |args| {
+            let addr = arg_string(&args, 0)?;
+            let backlog = match args.get(1) {
+                Some(Value::Number(n)) => *n as u32,
+                _ => 128,
+            };
+            let listener = std::net::TcpListener::bind(&addr)
+                .map_err(|e| format!("failed to bind listener on {addr}: {e}"))?;
+            listener.set_nonblocking(false).ok();
+            // TcpListener has no set backlog method after bind; use OS default
+            Ok(Value::Listener(Arc::new(Mutex::new(listener))))
+        },
+        "socket_accept" => |args| {
+            let listener = match args.first() {
+                Some(Value::Listener(l)) => l.clone(),
+                _ => return Err("socket_accept expects a Listener".into()),
+            };
+            let timeout_ms = match args.get(1) {
+                Some(Value::Number(n)) => *n as u64,
+                _ => 0,
+            };
+            if timeout_ms > 0 {
+                listener.lock().unwrap().set_nonblocking(true)
+                    .map_err(|e| format!("set nonblocking: {e}"))?;
+                let start = std::time::Instant::now();
+                let dur = std::time::Duration::from_millis(timeout_ms);
+                loop {
+                    match listener.lock().unwrap().accept() {
+                        Ok((stream, addr)) => {
+                            stream.set_nonblocking(false).ok();
+                            let mut result = BTreeMap::new();
+                            result.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
+                            result.insert("addr".into(), Value::String(addr.to_string()));
+                            return Ok(Value::Dict(result));
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            if start.elapsed() >= dur {
+                                return Ok(Value::Null);
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(e) => return Err(format!("accept error: {e}")),
+                    }
+                }
+            }
+            let (stream, addr) = listener.lock().unwrap().accept()
+                .map_err(|e| format!("accept error: {e}"))?;
+            let mut result = BTreeMap::new();
+            result.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
+            result.insert("addr".into(), Value::String(addr.to_string()));
+            Ok(Value::Dict(result))
         },
         "ftp_connect" => |args| {
             let host = arg_string(&args, 0)?;
@@ -11426,24 +11538,21 @@ fn native_for(name: &str) -> NativeFunc {
             let _ = resp;
             tag += 1;
             let mut session = BTreeMap::new();
+            let session_id = next_response_id();
+            session.insert("__id".into(), Value::Number(session_id as f64));
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
-            session.insert("tag".into(), Value::Number(tag as f64));
+            session.insert("tag".into(), Value::Number(2.0));
             Ok(Value::Dict(session))
         },
         "imap_select" => |args| {
             let stream = session_socket(&args[0])?;
             let mailbox = arg_string(&args, 1)?;
-            let tag = match &args[0] {
-                Value::Dict(d) => match d.get("tag") {
-                    Some(Value::Number(n)) => *n as u32,
-                    _ => 2,
-                },
-                _ => 2,
-            };
+            let tag = imap_next_tag(&args[0])?;
             let mut s = stream.lock().unwrap();
             let tag_str = format!("a{tag}");
             imap_command(&mut s, &tag_str, &format!("SELECT {mailbox}"))?;
+            drop(s);
             Ok(Value::Bool(true))
         },
         "imap_search" => |args| {
@@ -11452,16 +11561,11 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::String(s)) => s.clone(),
                 _ => "ALL".into(),
             };
-            let tag = match &args[0] {
-                Value::Dict(d) => match d.get("tag") {
-                    Some(Value::Number(n)) => *n as u32,
-                    _ => 3,
-                },
-                _ => 3,
-            };
+            let tag = imap_next_tag(&args[0])?;
             let mut s = stream.lock().unwrap();
             let tag_str = format!("a{tag}");
             let resp = imap_command(&mut s, &tag_str, &format!("SEARCH {criteria}"))?;
+            drop(s);
             let mut ids = Vec::new();
             for line in resp.lines() {
                 if let Some(rest) = line.strip_prefix("* SEARCH") {
@@ -11477,18 +11581,13 @@ fn native_for(name: &str) -> NativeFunc {
         "imap_fetch" => |args| {
             let stream = session_socket(&args[0])?;
             let id = arg_number(&args, 1)? as u64;
-            let mut tag_val = 4u32;
-            if let Value::Dict(d) = &args[0] {
-                if let Some(Value::Number(n)) = d.get("tag") {
-                    tag_val = *n as u32;
-                }
-            }
+            let tag = imap_next_tag(&args[0])?;
             let mut s = stream.lock().unwrap();
-            let tag_str = format!("a{tag_val}");
+            let tag_str = format!("a{tag}");
             let resp = imap_command(&mut s, &tag_str, &format!("FETCH {id} (FLAGS BODY[])"))?;
+            drop(s);
             let mut flags = Vec::new();
             let mut body = String::new();
-            // Parse flags from the untagged response line
             for line in resp.lines() {
                 if let Some(rest) = line.strip_prefix("*") {
                     if rest.contains("FLAGS") {
@@ -11503,25 +11602,13 @@ fn native_for(name: &str) -> NativeFunc {
                     }
                 }
             }
-            // Extract body: everything after the literal marker content
-            // imap_command already read literals, so body is after the last \n
-            if let Some(body_start) = resp.find("BODY[]") {
-                let after = &resp[body_start + 6..];
-                // Skip to the literal content - it's everything after the closing paren of FLAGS
-                if let Some(paren_end) = resp.find(") BODY[]") {
-                    let literal_section = &resp[paren_end + 9..];
-                    // Find the first newline after any {N} marker
-                    if let Some(nl) = literal_section.find('\n') {
-                        body = literal_section[nl + 1..].trim_end().to_string();
-                    } else {
-                        body = literal_section.trim_end().to_string();
-                    }
+            if let Some(paren_end) = resp.find(") BODY[]") {
+                let literal_section = &resp[paren_end + 9..];
+                if let Some(nl) = literal_section.find('\n') {
+                    body = literal_section[nl + 1..].trim_end().to_string();
+                } else {
+                    body = literal_section.trim_end().to_string();
                 }
-            }
-            // Increment tag
-            drop(s);
-            if let Value::Dict(d) = &args[0] {
-                d.get("tag");
             }
             let mut out = BTreeMap::new();
             out.insert("flags".into(), Value::List(flags));
@@ -11530,16 +11617,11 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "imap_list" => |args| {
             let stream = session_socket(&args[0])?;
-            let tag = match &args[0] {
-                Value::Dict(d) => match d.get("tag") {
-                    Some(Value::Number(n)) => *n as u32,
-                    _ => 5,
-                },
-                _ => 5,
-            };
+            let tag = imap_next_tag(&args[0])?;
             let mut s = stream.lock().unwrap();
             let tag_str = format!("a{tag}");
             let resp = imap_command(&mut s, &tag_str, "LIST \"\" *")?;
+            drop(s);
             let mut boxes = Vec::new();
             for line in resp.lines() {
                 if let Some(pos) = line.find("\"") {
@@ -11556,13 +11638,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "imap_logout" => |args| {
             let stream = session_socket(&args[0])?;
-            let tag = match &args[0] {
-                Value::Dict(d) => match d.get("tag") {
-                    Some(Value::Number(n)) => *n as u32,
-                    _ => 6,
-                },
-                _ => 6,
-            };
+            let tag = imap_next_tag(&args[0])?;
             let mut s = stream.lock().unwrap();
             let tag_str = format!("a{tag}");
             stream_write_all(&mut s, format!("{tag_str} LOGOUT\r\n").as_bytes())?;
@@ -13155,7 +13231,7 @@ pub fn list_modules() -> String {
         ("decimal", "Arbitrary-precision decimal arithmetic"),
         ("threading", "Background function execution"),
         ("statistics", "Statistical functions (mean, median, stdev, etc.)"),
-        ("socket", "Low-level TCP sockets (open, send, recv, close)"),
+        ("socket", "TCP/UDP networking (open, send, recv, listen, accept, scan)"),
         ("browser", "Browser automation over CDP (Chrome DevTools Protocol)"),
         ("string", "String helpers and constants (upper, split, join, replace, etc.)"),
         ("subprocess", "Run external commands (run, call, check_output)"),
@@ -13169,7 +13245,6 @@ pub fn list_modules() -> String {
         ("itertools", "Iterators (enumerate, zip, range, product, combinations, etc.)"),
         ("tempfile", "Temporary files/dirs (dir, mkdtemp, mkstemp)"),
         ("binascii", "Binary/ASCII encoding (hexlify, unhexlify, base64)"),
-        ("socket", "Low-level networking (open, send, recv, close)"),
         ("ftp", "Pure-Rust FTP client (connect, login, list, retr, stor, etc.)"),
         ("smtp", "Pure-Rust SMTP client (connect, login, sendmail, message)"),
         ("pop3", "Pure-Rust POP3 client (connect, stat, list, retr, dele)"),
@@ -13429,11 +13504,18 @@ pub fn module_help(name: &str) -> Option<String> {
                 .into(),
         ),
         "socket" => Some(
-            "socket — Low-level TCP networking\n\n\
-             socket.open(host, port)    connect to host:port, returns session\n\
-             socket.send(session, data) send data (string or bytes)\n\
-             socket.recv(session, n?)   receive up to n bytes (default 4096)\n\
-             socket.close(session)      close connection"
+            "socket — Low-level TCP/UDP networking\n\n\
+             socket.open(host, port)         TCP connect\n\
+             socket.send(session, data)      send string data\n\
+             socket.recv(session, n?)        receive up to n bytes (default 4096), returns byte list\n\
+             socket.listen(addr, backlog?)   bind TCP server, returns listener\n\
+             socket.accept(listener, ms?)    accept connection, returns {socket, addr}\n\
+             socket.open_udp(addr)           UDP connect\n\
+             socket.send_to(udp, data, addr?)  send UDP data\n\
+             socket.recv_from(udp, n?)       receive UDP, returns {data, addr, text}\n\
+             socket.scan(host, start?, end?, timeout?)  TCP port scan\n\
+             socket.set_timeout(session, ms?)  set read/write timeout\n\
+             socket.close(session)           close connection"
                 .into(),
         ),
         "browser" => Some(
@@ -13619,17 +13701,13 @@ pub fn module_help(name: &str) -> Option<String> {
                 .into(),
         ),
         "smtp" => Some(
-            "smtp — Pure-Rust SMTP client\n\n\
+            "smtp — Pure-Rust SMTP client (plaintext)\n\n\
              smtp.connect(host, port?)          connect (default port 25)\n\
-             smtp.login(session, user, pass)    authenticate (STARTTLS)\n\
+             smtp.login(session, user, pass)    authenticate (AUTH LOGIN, plaintext)\n\
              smtp.sendmail(session, from, to, msg)  send email\n\
              smtp.message(from, to, sub, body)  build MIME message string\n\
              smtp.quit(session)                 disconnect\n\n\
-             Example:\n\
-             let s = smtp.connect(\"smtp.gmail.com\", 587)\n\
-             smtp.login(s, \"me@gmail.com\", \"app-password\")\n\
-             let msg = smtp.message(\"me@gmail.com\", \"you@gmail.com\", \"Hi\", \"Hello!\")\n\
-             smtp.sendmail(s, \"me@gmail.com\", \"you@gmail.com\", msg)"
+             Note: No TLS/STARTTLS. Use port 465 with TLS or ensure network security."
                 .into(),
         ),
         "pop3" => Some(
@@ -13665,7 +13743,7 @@ pub fn module_help(name: &str) -> Option<String> {
             "dns — DNS resolver (pure-Rust, no system resolver dependency)\n\n\
              dns.resolve(name)                 resolve to IP address list\n\
              dns.query(name, type?)            query records\n\n\
-             Record types: A, AAAA, MX, TXT, NS, CNAME, SOA, SRV, PTR\n\n\
+             Record types: A, AAAA, MX, TXT, NS, CNAME\n\n\
              Example: dns.resolve(\"example.com\")  =>  [\"93.184.216.34\"]\n\
              Example: dns.query(\"gmail.com\", \"MX\")"
                 .into(),
@@ -15219,6 +15297,8 @@ fn json_encode(v: &Value, pretty: bool) -> String {
         }
         Value::Instance(_) => "\"<object>\"".into(),
         Value::Socket(_) => "\"<socket>\"".into(),
+        Value::UdpSocket(_) => "\"<udp_socket>\"".into(),
+        Value::Listener(_) => "\"<listener>\"".into(),
         Value::NativeFunction(name) => format!("\"<native:{name}>\""),
         Value::Function(name) => format!("\"<function:{name}>\""),
     }
@@ -15264,6 +15344,8 @@ fn json_encode_pretty(v: &Value, indent: usize) -> String {
         }
         Value::Instance(_) => "\"<object>\"".into(),
         Value::Socket(_) => "\"<socket>\"".into(),
+        Value::UdpSocket(_) => "\"<udp_socket>\"".into(),
+        Value::Listener(_) => "\"<listener>\"".into(),
         Value::NativeFunction(name) => format!("\"<native:{name}>\""),
         Value::Function(name) => format!("\"<function:{name}>\""),
     }
