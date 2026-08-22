@@ -2419,6 +2419,11 @@ struct Vm {
     fn_generation: u64,
     /// Cache of the last-resolved function for repeated calls (recursion hot path).
     call_cache: Option<CallCache>,
+    /// One entry per active tree-walk function/method frame, holding the names
+    /// that were CAPTURED from enclosing scopes. A non-empty stack means we are
+    /// inside a function body, so `let` declarations bind to locals instead of
+    /// clobbering global variables; captured names propagate writes outward.
+    capture_frames: Vec<ahash::AHashSet<String>>,
 }
 
 /// Fast-path cache for repeated calls to the same compiled function.
@@ -2458,6 +2463,7 @@ impl Vm {
             compiled_functions: Vec::new(),
             fn_generation: 0,
             call_cache: None,
+            capture_frames: Vec::new(),
         };
         vm.register_builtins();
         vm.register_error_classes();
@@ -3375,6 +3381,7 @@ self.vars.insert("re".into(), re);
             ("send".into(), Value::NativeFunction("socket_send".into())),
             ("send_to".into(), Value::NativeFunction("socket_send_to".into())),
             ("recv".into(), Value::NativeFunction("socket_recv".into())),
+            ("recv_text".into(), Value::NativeFunction("socket_recv_text".into())),
             ("recv_from".into(), Value::NativeFunction("socket_recv_from".into())),
             ("recv_all".into(), Value::NativeFunction("socket_recv_all".into())),
             ("listen".into(), Value::NativeFunction("socket_listen".into())),
@@ -3384,6 +3391,36 @@ self.vars.insert("re".into(), re);
             ("scan".into(), Value::NativeFunction("socket_scan".into())),
         ]));
         self.vars.insert("socket".into(), socket);
+
+        // browser module (CDP-based browser automation)
+        let browser = Value::Dict(BTreeMap::from([
+            ("launch".into(), Value::NativeFunction("browser_launch".into())),
+            ("connect".into(), Value::NativeFunction("browser_connect".into())),
+            ("navigate".into(), Value::NativeFunction("browser_navigate".into())),
+            ("go".into(), Value::NativeFunction("browser_navigate".into())),
+            ("evaluate".into(), Value::NativeFunction("browser_evaluate".into())),
+            ("eval".into(), Value::NativeFunction("browser_evaluate".into())),
+            ("screenshot".into(), Value::NativeFunction("browser_capture_screenshot".into())),
+            ("shot".into(), Value::NativeFunction("browser_capture_screenshot".into())),
+            ("html".into(), Value::NativeFunction("browser_get_html".into())),
+            ("page".into(), Value::NativeFunction("browser_get_html".into())),
+            ("get_title".into(), Value::NativeFunction("browser_get_title".into())),
+            ("title".into(), Value::NativeFunction("browser_get_title".into())),
+            ("get_url".into(), Value::NativeFunction("browser_get_url".into())),
+            ("url".into(), Value::NativeFunction("browser_get_url".into())),
+            ("get_text".into(), Value::NativeFunction("browser_get_text".into())),
+            ("text".into(), Value::NativeFunction("browser_get_text".into())),
+            ("click".into(), Value::NativeFunction("browser_click".into())),
+            ("fill".into(), Value::NativeFunction("browser_fill".into())),
+            ("query".into(), Value::NativeFunction("browser_query".into())),
+            ("wait_for".into(), Value::NativeFunction("browser_wait_for".into())),
+            ("wait_for_ms".into(), Value::NativeFunction("browser_wait_for_ms".into())),
+            ("attr".into(), Value::NativeFunction("browser_attr".into())),
+            ("page_text".into(), Value::NativeFunction("browser_page_text".into())),
+            ("close".into(), Value::NativeFunction("browser_close".into())),
+            ("quit".into(), Value::NativeFunction("browser_close".into())),
+        ]));
+        self.vars.insert("browser".into(), browser);
 
         // ftp module (pure-Rust FTP client)
         let ftp = Value::Dict(BTreeMap::from([
@@ -3701,12 +3738,13 @@ self.vars.insert("re".into(), re);
         self.vars.insert("binascii".into(), binascii);
 
         // Register all core native functions eagerly
-          const NATIVES: [&str; 395] = [
+          const NATIVES: [&str; 402] = [
             "math_sin",
             "math_cos",
             "socket_open",
             "socket_send",
             "socket_recv",
+            "socket_recv_text",
             "time_now",
             "time_unix",
             "time_utc",
@@ -3925,12 +3963,18 @@ self.vars.insert("re".into(), re);
             "browser_query",
             "browser_wait_for",
             "browser_close",
+            "browser_attr",
+            "browser_page_text",
+            "browser_wait_for_ms",
             "socket_close",
             "socket_listen",
             "socket_accept",
             "socket_open_udp",
             "socket_send_to",
             "socket_recv_from",
+            "socket_recv_all",
+            "socket_scan",
+            "socket_set_timeout",
             "ftp_connect",
             "ftp_login",
             "ftp_pwd",
@@ -4359,7 +4403,10 @@ self.vars.insert("re".into(), re);
                 let bytecode = if has_defaults {
                     None
                 } else {
-                    crate::bytecode::compile_function(&fname, &names, &captured_names, body).ok()
+                    std::env::set_var("ZEN_DBG_FN", format!("eval:{fname}"));
+                    let bc = crate::bytecode::compile_function(&fname, &names, &captured_names, body).ok();
+                    std::env::remove_var("ZEN_DBG_FN");
+                    bc
                 };
                 let function = Function {
                     params: params.clone(),
@@ -4449,8 +4496,16 @@ self.vars.insert("re".into(), re);
                         // Mutating list methods on a bare variable (push/pop) update the var in place
                         if let Expr::Var(name) = &**object {
                             if matches!(method.as_str(), "push" | "pop") {
-                                if let Some(Value::List(current)) = self.vars.get(name).cloned() {
-                                    let mut list = current;
+                                // The target may be a global or a function-local.
+                                let local_idx = self.locals.iter().rposition(|(n, _)| n == name);
+                                let current = match local_idx {
+                                    Some(i) => match &self.locals[i].1 {
+                                        Value::List(_) => Some(self.locals[i].1.clone()),
+                                        _ => None,
+                                    },
+                                    None => self.vars.get(name).cloned(),
+                                };
+                                if let Some(Value::List(mut list)) = current {
                                     let result = match method.as_str() {
                                         "push" => {
                                             if let Some(item) = values.first() {
@@ -4460,7 +4515,13 @@ self.vars.insert("re".into(), re);
                                         }
                                         _ => list.pop().unwrap_or(Value::Null),
                                     };
-                                    self.vars.insert(name.clone(), Value::List(list));
+                                    let updated = Value::List(list);
+                                    match local_idx {
+                                        Some(i) => self.locals[i].1 = updated,
+                                        None => {
+                                            self.vars.insert(name.clone(), updated);
+                                        }
+                                    }
                                     return Ok(result);
                                 }
                             }
@@ -4705,6 +4766,15 @@ self.vars.insert("re".into(), re);
             }
         };
         match method {
+            "toNum" | "to_num" | "toNumber" | "to_number" => {
+                let trimmed = value.trim();
+                match trimmed.parse::<f64>() {
+                    Ok(n) => Ok(Value::Number(n)),
+                    Err(_) => Err(format!(
+                        "cannot convert '{trimmed}' to a number\n  \x1b[1;33m= help:\x1b[0m the string must contain a valid numeric literal (e.g. \"42\", \"3.14\", \"-7\")"
+                    )),
+                }
+            }
             "split" => {
                 let sep = one()?;
                 Ok(Value::List(
@@ -5720,7 +5790,9 @@ self.vars.insert("re".into(), re);
             for (k, v) in &function.effective_captured {
                 self.locals.push((k.clone(), v.clone()));
             }
+            self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone()).collect());
             let flow = self.exec(&body);
+            self.capture_frames.pop();
             // Restore locals stack
             self.locals.truncate(saved_len);
             let flow = flow?;
@@ -6478,12 +6550,29 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             found_in_locals = true;
         }
         // Propagate captured variable mutations back to the enclosing scope.
-        // When a lambda captures a variable from self.vars, mutations inside
-        // the lambda must be visible after the lambda returns.
-        if found_in_locals && self.vars.contains_key(resolve) {
+        // Only names actually CAPTUREED by this frame propagate; a local that
+        // merely shadows an identically-named global stays isolated so module
+        // function locals cannot clobber caller variables.
+        let captured_here = self.capture_frames.last().is_some_and(|f| f.contains(resolve));
+        if found_in_locals && (captured_here || self.capture_frames.is_empty()) && self.vars.contains_key(resolve) {
             self.vars.insert(resolve.to_string(), value);
         } else if !found_in_locals {
             self.vars.insert(resolve.to_string(), value);
+        }
+    }
+
+    /// Bind a `let`-declared name. Inside a function body the declaration is
+    /// function-local (update the innermost existing binding or push a new
+    /// one); at top level it writes to global variables as before.
+    fn bind_let(&mut self, name: &str, value: Value) {
+        if !self.capture_frames.is_empty() {
+            if let Some(idx) = self.locals.iter().rposition(|(n, _)| n == name) {
+                self.locals[idx].1 = value;
+            } else {
+                self.locals.push((name.to_string(), value));
+            }
+        } else {
+            self.vars.insert(name.to_string(), value);
         }
     }
     fn self_field_get(&mut self, name: &str) -> Option<Value> {
@@ -6871,7 +6960,9 @@ let function = self
         for (k, v) in &function.effective_captured {
             self.locals.push((k.clone(), v.clone()));
         }
+        self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone()).collect());
         let flow = self.exec(&body);
+        self.capture_frames.pop();
         self.locals.truncate(saved_len);
         let flow = flow?;
         self.current_class = prev_class;
@@ -6969,7 +7060,7 @@ let function = self
                             if *is_const && self.locked.contains(name) {
                                 return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
                             }
-                            self.vars.insert(name.clone(), v);
+                            self.bind_let(name, v);
                             names.push(name.clone());
                         }
                         LetTarget::List(patterns) => match v {
@@ -6979,7 +7070,7 @@ let function = self
                                         return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
                                     }
                                     let item = items.get(i).cloned().unwrap_or(Value::Null);
-                                    self.vars.insert(name.clone(), item);
+                                    self.bind_let(name, item);
                                     names.push(name.clone());
                                 }
                             }
@@ -6992,7 +7083,7 @@ let function = self
                                         return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
                                     }
                                     let item = map.get(name).cloned().unwrap_or(Value::Null);
-                                    self.vars.insert(name.clone(), item);
+                                    self.bind_let(name, item);
                                     names.push(name.clone());
                                 }
                             }
@@ -7123,7 +7214,7 @@ let function = self
                         return Err("for requires a list".into());
                     };
                     for item in items {
-                        self.vars.insert(n.clone(), item);
+                        self.bind_let(n, item);
                         match self.exec(body)? {
                             Flow::Normal | Flow::Continue => {}
                             Flow::Break => break,
@@ -7164,7 +7255,10 @@ let function = self
                     let bytecode = if has_defaults {
                         None
                     } else {
-                        crate::bytecode::compile_function(name, &names, &captured_names, body).ok()
+                        std::env::set_var("ZEN_DBG_FN", format!("stmt:{name}"));
+                        let bc = crate::bytecode::compile_function(name, &names, &captured_names, body).ok();
+                        std::env::remove_var("ZEN_DBG_FN");
+                        bc
                     };
                     let function = Function {
                         params: params.clone(),
@@ -7231,6 +7325,12 @@ let function = self
                 StmtKind::Import(imports) => {
                     for (module, alias) in imports {
                         let name = alias.clone().unwrap_or(module.clone());
+                        // Modules execute exactly once; repeated imports reuse
+                        // the cached exports so module-level side effects do not
+                        // re-run and exports stay stable.
+                        if self.imported_modules.contains_key(&name) {
+                            continue;
+                        }
                         // Check if already loaded as a dict in vars
                         if let Some(Value::Dict(existing)) = self.vars.get(name.as_str()).cloned() {
                             let mut map: HashMap<String, Value> = HashMap::new();
@@ -7281,9 +7381,22 @@ let function = self
                             self.vars.insert(name, mod_val);
                             continue;
                         }
+                        // Modules execute exactly once; repeated imports reuse
+                        // the cached exports so module-level side effects do not
+                        // re-run and exports stay stable.
+                        if self.imported_modules.contains_key(&name) {
+                            continue;
+                        }
                         // Resolve as file
                         let path = self.resolve_module(&module)?;
-                        let vars = self.run_module(&path, &name)?;
+                        let vars = match self.run_module(&path, &name) {
+                            Ok(v) => {
+                                v
+                            }
+                            Err(e) => {
+                                return Err(e);
+                            }
+                        };
                         // For dotted imports like mypkg.utils, also register the parent
                         if module.contains('.') {
                             let parts: Vec<&str> = module.splitn(2, '.').collect();
@@ -9714,12 +9827,15 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Number(n.cos()))
         },
         "socket_open" => |args| {
-            let addr = match args.first() {
-                Some(Value::String(s)) => s,
-                _ => return Err("socket_open expects string address".into()),
+            let addr = match (args.first(), args.get(1)) {
+                (Some(Value::String(host)), Some(Value::Number(port))) => {
+                    format!("{host}:{port}")
+                }
+                (Some(Value::String(s)), _) => s.clone(),
+                _ => return Err("socket.open expects (host, port) or (\"host:port\")\n  \x1b[1;33m= help:\x1b[0m usage: socket.open(\"192.168.1.10\", 80) or socket.open(\"192.168.1.10:80\")".into()),
             };
-            let stream = TcpStream::connect(addr)
-                .map_err(|e| format!("failed to connect: {e}"))?;
+            let stream = TcpStream::connect(&addr)
+                .map_err(|e| format!("failed to connect to {addr}: {e}"))?;
             Ok(Value::Socket(Arc::new(Mutex::new(stream))))
         },
         "socket_send" => |args| {
@@ -9735,7 +9851,7 @@ fn native_for(name: &str) -> NativeFunc {
             let (socket, size) = match args.as_slice() {
                 [Value::Socket(s), Value::Number(n)] => (s, *n as usize),
                 [Value::Socket(s)] => (s, 4096),
-                _ => return Err("socket_recv expects (Socket, size?)".into()),
+                _ => return Err("socket.recv expects (Socket, size?)".into()),
             };
             let mut buffer = vec![0u8; size];
             let n = socket.lock().unwrap().read(&mut buffer)
@@ -9743,12 +9859,29 @@ fn native_for(name: &str) -> NativeFunc {
             let data = buffer[..n].to_vec();
             Ok(Value::List(data.iter().map(|b| Value::Number(*b as f64)).collect()))
         },
+        "socket_recv_text" => |args| {
+            let (socket, size) = match args.as_slice() {
+                [Value::Socket(s), Value::Number(n)] => (s, *n as usize),
+                [Value::Socket(s)] => (s, 4096),
+                _ => return Err("socket.recv_text expects (Socket, size?)".into()),
+            };
+            let mut buffer = vec![0u8; size];
+            let n = socket.lock().unwrap().read(&mut buffer)
+                .map_err(|e| format!("failed to recv: {e}"))?;
+            Ok(Value::String(String::from_utf8_lossy(&buffer[..n]).into_owned()))
+        },
         "socket_open_udp" => |args| {
-            let addr = arg_string(&args, 0)?;
+            let addr = match (args.first(), args.get(1)) {
+                (Some(Value::String(host)), Some(Value::Number(port))) => {
+                    format!("{host}:{port}")
+                }
+                (Some(Value::String(s)), _) => s.clone(),
+                _ => return Err("socket.open_udp expects (host, port) or (\"host:port\")".into()),
+            };
             let socket = std::net::UdpSocket::bind("0.0.0.0:0")
                 .map_err(|e| format!("failed to bind UDP socket: {e}"))?;
             socket.connect(&addr)
-                .map_err(|e| format!("failed to connect UDP: {e}"))?;
+                .map_err(|e| format!("failed to connect UDP to {addr}: {e}"))?;
             socket.set_nonblocking(false).ok();
             Ok(Value::UdpSocket(Arc::new(Mutex::new(socket))))
         },
@@ -11240,6 +11373,9 @@ fn native_for(name: &str) -> NativeFunc {
         "browser_fill" => |args| crate::state::browser_fill(&args),
         "browser_query" => |args| crate::state::browser_query(&args),
         "browser_wait_for" => |args| crate::state::browser_wait_for(&args),
+        "browser_attr" => |args| crate::state::browser_attr(&args),
+        "browser_page_text" => |_| crate::state::browser_page_text(),
+        "browser_wait_for_ms" => |args| crate::state::browser_wait_for_ms(&args),
         "browser_close" => |_| crate::state::browser_close(),
         "socket_close" => |args| {
             match args.first() {
@@ -13783,6 +13919,8 @@ pub fn list_modules() -> String {
         ("bluetooth", "Bluetooth via bluetoothctl (scan, pair, connect, send)"),
         ("wifi", "WiFi via nmcli (scan, connect, disconnect, status)"),
         ("crunch", "Password wordlist generator (generate, pattern, charset)"),
+        ("hydra", "Brute-force password tester (SSH, FTP, HTTP, Telnet, SMTP)"),
+        ("browser", "Browser automation via CDP (Chromium only)"),
         ("ssh", "System SSH/SCP wrapper (run, upload, download, available)"),
         ("scapy", "Packet crafting/sniffing (ip, tcp, udp, build, parse, send, sniff)"),
     ];
@@ -14051,18 +14189,28 @@ pub fn module_help(name: &str) -> Option<String> {
                 .into(),
         ),
         "browser" => Some(
-            "browser — Browser automation (Chrome DevTools Protocol)\n\n\
-             browser.go(url)              navigate to URL\n\
-             browser.click(selector)      click element\n\
-             browser.fill(sel, val)       fill input field\n\
-             browser.text(sel?)           get text content\n\
-             browser.attr(sel, name)      get element attribute\n\
-             browser.wait_for(sel, ms?)   wait for element\n\
-             browser.shot(path?)          screenshot\n\
-             browser.title()              page title\n\
-             browser.url()                current URL\n\
-             browser.page()               page HTML\n\
-             browser.eval(js)             evaluate JavaScript"
+            "browser — Browser automation (Chrome DevTools Protocol, Chromium/Chrome only)\n\n\
+             Navigation:\n\
+               browser.go(url)              navigate + wait for load\n\
+               browser.launch(headless?, port?)  explicit launch\n\
+               browser.connect()            launch headful (visible)\n\
+               browser.close()              close and kill process\n\n\
+             Reading:\n\
+               browser.title()              page title\n\
+               browser.url()                current URL\n\
+               browser.page()               full HTML\n\
+               browser.page_text()          full page text\n\
+               browser.text(selector?)      element text\n\
+               browser.attr(sel, name)      element attribute value\n\
+               browser.query(selector)      list of texts for all matches\n\n\
+             Interaction:\n\
+               browser.click(sel)           click element\n\
+               browser.fill(sel, val)       fill input + fire events\n\
+               browser.eval(js)             evaluate JavaScript\n\n\
+             Waiting:\n\
+               browser.wait_for(sel)         wait up to 20s\n\
+               browser.wait_for_ms(sel, ms)  wait up to ms milliseconds\n\n\
+             Note: Firefox is not supported (CDP protocol limitation)."
                 .into(),
         ),
         "string" => Some(
@@ -14338,7 +14486,27 @@ pub fn module_help(name: &str) -> Option<String> {
                crunch.pattern(\"admin:d:d:d:d\")  => admin0000..admin9999\n\
                crunch.pattern(\":A:a:a:d{3}\")    => Aaa000..Zzz999\n\
                crunch.pattern(\"pass:s:d{2,4}\")   => pass!00..pass!9999\n\
-               crunch.generate(4, 6, \"digits\")    => 0000..999999"
+                crunch.generate(4, 6, \"digits\")    => 0000..999999"
+                .into(),
+        ),
+        "hydra" => Some(
+            "hydra — Brute-force password tester (SSH, FTP, HTTP, Telnet, SMTP)\n\n\
+             Single tests:\n\
+               hydra.ssh(host, user, pass)             test SSH credential\n\
+               hydra.ftp(host, user, pass)             test FTP credential\n\
+               hydra.http(host, user, pass, url?)      test HTTP basic auth\n\
+               hydra.telnet(host, user, pass)           test telnet login\n\
+               hydra.smtp(host, user, pass)             test SMTP auth\n\
+               hydra.test(proto, host, user, pass)      test by protocol name\n\n\
+             Brute-force:\n\
+               hydra.run(proto, host, user, passwords)  try password list\n\
+               hydra.run_file(proto, host, user, path)  try passwords from file\n\n\
+             Protocols: ssh, ftp, http, telnet, smtp\n\n\
+             Results: {success, password, attempts, errors, elapsed, results}\n\n\
+             Examples:\n\
+               hydra.ssh(\"10.0.0.1\", \"root\", \"toor\")\n\
+               hydra.run(\"ftp\", \"10.0.0.1\", \"admin\", [\"1234\",\"pass\",\"test\"])\n\
+               hydra.run_file(\"ssh\", \"10.0.0.1\", \"root\", \"passwords.txt\")"
                 .into(),
         ),
         "scapy" => Some(

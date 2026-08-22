@@ -283,6 +283,16 @@ impl FunctionCompiler {
             StmtKind::Let(target, e, is_const) => match target {
                 LetTarget::Var(n) => {
                     self.compile_expr(e)?;
+                    // Inside function bodies (allow_defs == false), `var`
+                    // declares a function-local: allocate a slot so this and
+                    // later references stay isolated from the caller's globals.
+                    if !self.allow_defs && !self.slots.contains_key(n) {
+                        let slot = self.next_slot;
+                        self.next_slot += 1;
+                        self.slots.insert(n.clone(), slot);
+                        self.emit(Opcode::StoreLocal, slot, 0, 0);
+                        return Ok(());
+                    }
                     if *is_const {
                         let ni = self.const_str(n);
                         self.emit(Opcode::CheckLockedRedefine, ni, 0, 0);

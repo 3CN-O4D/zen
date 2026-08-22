@@ -211,8 +211,13 @@ pub fn browser_wait_for(args: &Vec<Value>) -> Result<Value, String> {
         Some(Value::String(s)) => s,
         _ => return Err("wait_for expects a selector string".into()),
     };
+    let max_ms = match args.get(1) {
+        Some(Value::Number(n)) => (*n as u64).min(60_000),
+        _ => 20_000,
+    };
     with_session(|s| {
-        for _ in 0..200 {
+        let polls = (max_ms / 100).max(1) as u32;
+        for _ in 0..polls {
             let expr = format!("document.querySelector({sel:?}) !== null", sel = selector);
             if let Ok(result) = s.evaluate(&expr) {
                 if result.get("value").and_then(|v| v.as_bool()) == Some(true) {
@@ -222,6 +227,53 @@ pub fn browser_wait_for(args: &Vec<Value>) -> Result<Value, String> {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         Ok(Value::Bool(false))
+    })
+}
+
+pub fn browser_attr(args: &Vec<Value>) -> Result<Value, String> {
+    let selector = match args.first() {
+        Some(Value::String(s)) => s,
+        _ => return Err("attr expects a selector string as argument 1".into()),
+    };
+    let name = match args.get(1) {
+        Some(Value::String(s)) => s,
+        _ => return Err("attr expects an attribute name string as argument 2".into()),
+    };
+    with_session(|s| {
+        let expr = format!(
+            "document.querySelector({sel:?})?.getAttribute({name:?})",
+            sel = selector,
+            name = name
+        );
+        let result = s.evaluate(&expr)?;
+        Ok(js_value_to_zen(result))
+    })
+}
+
+pub fn browser_page_text() -> Result<Value, String> {
+    with_session(|s| {
+        let result = s.evaluate("document.body?.innerText ?? \"\"")?;
+        Ok(js_value_to_zen(result))
+    })
+}
+
+pub fn browser_wait_for_ms(args: &Vec<Value>) -> Result<Value, String> {
+    let selector = match args.first() {
+        Some(Value::String(s)) => s,
+        _ => return Err("wait_for_ms expects a selector string as argument 1".into()),
+    };
+    let max_ms = match args.get(1) {
+        Some(Value::Number(n)) => (*n as u64).min(60_000),
+        _ => return Err("wait_for_ms expects a timeout in ms as argument 2".into()),
+    };
+    with_session(|s| {
+        let expr = format!(
+            "new Promise(resolve => {{ const t0 = Date.now(); const check = () => {{ if (document.querySelector({sel:?})) {{ resolve(true); }} else if (Date.now() - t0 > {ms}) {{ resolve(false); }} else {{ setTimeout(check, 100); }} }}; check(); }})",
+            sel = selector,
+            ms = max_ms
+        );
+        let result = s.evaluate(&expr)?;
+        Ok(js_value_to_zen(result))
     })
 }
 
