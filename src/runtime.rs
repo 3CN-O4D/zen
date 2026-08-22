@@ -3490,6 +3490,14 @@ self.vars.insert("re".into(), re);
         ]));
         self.vars.insert("wifi".into(), wifi);
 
+        // crunch module (Rust-native password wordlist generator)
+        let crunch = Value::Dict(BTreeMap::from([
+            ("charset".into(), Value::NativeFunction("crunch_charset".into())),
+            ("generate".into(), Value::NativeFunction("crunch_generate".into())),
+            ("pattern".into(), Value::NativeFunction("crunch_pattern".into())),
+        ]));
+        self.vars.insert("crunch".into(), crunch);
+
         // scapy module (packet crafting / sniffing)
         let scapy = Value::Dict(BTreeMap::from([
             ("checksum".into(), Value::NativeFunction("scapy_checksum".into())),
@@ -3693,7 +3701,7 @@ self.vars.insert("re".into(), re);
         self.vars.insert("binascii".into(), binascii);
 
         // Register all core native functions eagerly
-          const NATIVES: [&str; 392] = [
+          const NATIVES: [&str; 395] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -3982,6 +3990,9 @@ self.vars.insert("re".into(), re);
             "wifi_forget",
             "wifi_interfaces",
             "wifi_list",
+            "crunch_charset",
+            "crunch_generate",
+            "crunch_pattern",
             "scapy_checksum",
             "scapy_ip",
             "scapy_tcp",
@@ -4797,6 +4808,7 @@ self.vars.insert("re".into(), re);
             "trimStart" | "trimLeft" | "trim_left" => Ok(Value::String(value.trim_start().into())),
             "lower" | "toLower" | "toLowerCase" => Ok(Value::String(value.to_lowercase())),
             "upper" | "toUpper" | "toUpperCase" => Ok(Value::String(value.to_uppercase())),
+            "reverse" => Ok(Value::String(value.chars().rev().collect())),
             "length" => Ok(Value::Number(value.chars().count() as f64)),
             "repeat" => {
                 let n = match args.first() {
@@ -7221,11 +7233,21 @@ let function = self
                         let name = alias.clone().unwrap_or(module.clone());
                         // Check if already loaded as a dict in vars
                         if let Some(Value::Dict(existing)) = self.vars.get(name.as_str()).cloned() {
-                            let mut map = HashMap::new();
+                            let mut map: HashMap<String, Value> = HashMap::new();
                             for (k, v) in existing {
                                 map.insert(k, v);
                             }
-                            self.imported_modules.insert(name.clone(), map);
+                            // Also try to load the .zen file and merge exports
+                            if let Ok(path) = self.resolve_module(&module) {
+                                if let Ok(module_vars) = self.run_module(&path, &name) {
+                                    for (k, v) in module_vars {
+                                        map.entry(k).or_insert(v);
+                                    }
+                                }
+                            }
+                            self.imported_modules.insert(name.clone(), map.clone());
+                            let btree: BTreeMap<String, Value> = map.into_iter().collect();
+                            self.vars.insert(name, Value::Dict(btree));
                             continue;
                         }
                         // Check if it's a dotted submodule (e.g. pkg.sub -> parent.sub)
@@ -8956,6 +8978,154 @@ fn default_dns_server() -> String {
         }
     }
     "8.8.8.8".into()
+}
+
+fn crunch_generate_len(len: usize, chars: &[char], prefix: &mut String, result: &mut Vec<String>) {
+    if len == 0 {
+        result.push(prefix.clone());
+        return;
+    }
+    for &c in chars {
+        prefix.push(c);
+        crunch_generate_len(len - 1, chars, prefix, result);
+        prefix.pop();
+    }
+}
+
+#[derive(Clone)]
+enum CrunchElem { Lit(String), Slot(Vec<char>), Range(String, usize, usize) }
+
+fn crunch_pattern_impl(template: &str) -> Result<Value, String> {
+    let resolve = |token: &str| -> Vec<char> {
+        match token {
+            "a" | "lower" => "abcdefghijklmnopqrstuvwxyz".chars().collect(),
+            "A" | "upper" => "ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect(),
+            "d" | "n" | "digits" | "numeric" => "0123456789".chars().collect(),
+            "s" | "symbols" => "!@#$%^&*()-_=+[]{}|;:',.<>?/".chars().collect(),
+            "h" | "hex" => "0123456789abcdef".chars().collect(),
+            "x" | "alnum" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".chars().collect(),
+            _ => token.chars().collect(),
+        }
+    };
+
+    // CrunchElement: literal string, fixed slot, or range slot
+    let mut elems: Vec<CrunchElem> = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = template.chars().collect();
+    let clen = chars.len();
+    let mut i = 0;
+
+    while i < clen {
+        if chars[i] == ':' && i + 1 < clen {
+            if !current.is_empty() {
+                elems.push(CrunchElem::Lit(current.clone()));
+                current.clear();
+            }
+            i += 1;
+            let mut token = String::new();
+            while i < clen && chars[i] != '{' && chars[i] != ':' && chars[i] != '?' {
+                token.push(chars[i]);
+                i += 1;
+            }
+            if i < clen && chars[i] == '{' {
+                i += 1;
+                let mut num_str = String::new();
+                while i < clen && chars[i] != ',' && chars[i] != '}' {
+                    num_str.push(chars[i]);
+                    i += 1;
+                }
+                let n: usize = num_str.parse().unwrap_or(1);
+                if i < clen && chars[i] == ',' {
+                    i += 1;
+                    let mut m_str = String::new();
+                    while i < clen && chars[i] != '}' {
+                        m_str.push(chars[i]);
+                        i += 1;
+                    }
+                    let m: usize = m_str.parse().unwrap_or(n);
+                    i += 1;
+                    elems.push(CrunchElem::Range(token, n, m));
+                } else {
+                    i += 1;
+                    let cs = resolve(&token);
+                    for _ in 0..n {
+                        elems.push(CrunchElem::Slot(cs.clone()));
+                    }
+                }
+            } else {
+                elems.push(CrunchElem::Slot(resolve(&token)));
+            }
+        } else if chars[i] == '?' {
+            if !current.is_empty() {
+                elems.push(CrunchElem::Lit(current.clone()));
+                current.clear();
+            }
+            elems.push(CrunchElem::Slot("abcdefghijklmnopqrstuvwxyz".chars().collect()));
+            i += 1;
+        } else {
+            current.push(chars[i]);
+            i += 1;
+        }
+    }
+    if !current.is_empty() {
+        elems.push(CrunchElem::Lit(current));
+    }
+
+    if elems.is_empty() {
+        return Ok(Value::List(vec![Value::String(template.to_string())]));
+    }
+
+    // Find first Range, expand it into sub-templates, recurse
+    if let Some(idx) = elems.iter().position(|e| matches!(e, CrunchElem::Range(_, _, _))) {
+        if let CrunchElem::Range(token, n, m) = elems[idx].clone() {
+            let mut all = Vec::new();
+            for rep in n..=m {
+                // Build sub-template: expand this range into `rep` fixed slots
+                let mut sub_elems = elems[..idx].to_vec();
+                let cs = resolve(&token);
+                for _ in 0..rep {
+                    sub_elems.push(CrunchElem::Slot(cs.clone()));
+                }
+                sub_elems.extend_from_slice(&elems[idx + 1..]);
+                // Recurse on the sub-template (which may have more ranges)
+                let sub = crunch_expand_elems(&sub_elems)?;
+                all.extend(sub);
+            }
+            return Ok(Value::List(all));
+        }
+    }
+
+    // No ranges — single cartesian product
+    Ok(Value::List(crunch_expand_elems(&elems)?))
+}
+
+fn crunch_expand_elems(elems: &[CrunchElem]) -> Result<Vec<Value>, String> {
+    // Flat cartesian product of all slots with literals interleaved
+    let mut result: Vec<String> = vec![String::new()];
+    for elem in elems {
+        match elem {
+            CrunchElem::Lit(s) => {
+                for r in &mut result {
+                    r.push_str(s);
+                }
+            }
+            CrunchElem::Slot(cs) => {
+                let mut next = Vec::new();
+                for r in &result {
+                    for &c in cs {
+                        let mut s = r.clone();
+                        s.push(c);
+                        next.push(s);
+                    }
+                }
+                result = next;
+            }
+            CrunchElem::Range(_, _, _) => {
+                return Err("internal: unresolved range in crunch_expand_elems".into());
+            }
+        }
+    }
+    Ok(result.into_iter().map(Value::String).collect())
 }
 
 fn dns_query_impl(name: &str, rtype: &str) -> Result<Vec<Value>, String> {
@@ -12249,10 +12419,10 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::List(networks))
         },
         "wifi_status" => |_| {
-            let out = Command::new("nmcli").args(["-t", "-f", "TYPE,VALUE", "general", "wifi"]).output()
-                .map_err(|e| format!("nmcli general wifi: {e}"))?;
+            let out = Command::new("nmcli").args(["-t", "-f", "WIFI", "general"]).output()
+                .map_err(|e| format!("nmcli general: {e}"))?;
             let stdout = String::from_utf8_lossy(&out.stdout);
-            let enabled = stdout.trim().contains("enabled");
+            let enabled = stdout.trim() == "enabled";
             let conn = Command::new("nmcli").args(["-t", "-f", "NAME,DEVICE,TYPE", "connection", "show", "--active"]).output()
                 .map_err(|e| format!("nmcli connection show: {e}"))?;
             let conn_out = String::from_utf8_lossy(&conn.stdout);
@@ -12337,6 +12507,50 @@ fn native_for(name: &str) -> NativeFunc {
                 conns.push(Value::Dict(d));
             }
             Ok(Value::List(conns))
+        },
+
+        // ── crunch module (Rust-native for speed) ─────────────────────
+        "crunch_charset" => |args| {
+            let name = arg_string(&args, 0)?;
+            let cs = match name.as_str() {
+                "a" | "lower" => "abcdefghijklmnopqrstuvwxyz",
+                "A" | "upper" => "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                "d" | "n" | "digits" | "numeric" => "0123456789",
+                "s" | "symbols" => "!@#$%^&*()-_=+[]{}|;:',.<>?/",
+                "h" | "hex" => "0123456789abcdef",
+                "x" | "alnum" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+                "p" | "print" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}|;:',.<>?/ ",
+                "all" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}|;:',.<>?/",
+                _ => &name,
+            };
+            Ok(Value::String(cs.to_string()))
+        },
+        "crunch_generate" => |args| {
+            let min_len = arg_number(&args, 0)? as usize;
+            let max_len = arg_number(&args, 1)? as usize;
+            let charset_name = arg_string(&args, 2)?;
+            let charset = match charset_name.as_str() {
+                "a" | "lower" => "abcdefghijklmnopqrstuvwxyz",
+                "A" | "upper" => "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                "d" | "n" | "digits" | "numeric" => "0123456789",
+                "s" | "symbols" => "!@#$%^&*()-_=+[]{}|;:',.<>?/",
+                "h" | "hex" => "0123456789abcdef",
+                "x" | "alnum" => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+                _ => &charset_name,
+            };
+            let chars: Vec<char> = charset.chars().collect();
+            let mut result = Vec::new();
+            for len in min_len..=max_len {
+                crunch_generate_len(len, &chars, &mut String::new(), &mut result);
+                if result.len() > 1_000_000 {
+                    break;
+                }
+            }
+            Ok(Value::List(result.into_iter().map(|s| Value::String(s)).collect()))
+        },
+        "crunch_pattern" => |args| {
+            let template = arg_string(&args, 0)?;
+            crunch_pattern_impl(&template)
         },
 
         "str_upper" => |args| Ok(Value::String(arg_string(&args, 0)?.to_uppercase())),
@@ -13568,6 +13782,7 @@ pub fn list_modules() -> String {
         ("dns", "DNS resolver (resolve, query)"),
         ("bluetooth", "Bluetooth via bluetoothctl (scan, pair, connect, send)"),
         ("wifi", "WiFi via nmcli (scan, connect, disconnect, status)"),
+        ("crunch", "Password wordlist generator (generate, pattern, charset)"),
         ("ssh", "System SSH/SCP wrapper (run, upload, download, available)"),
         ("scapy", "Packet crafting/sniffing (ip, tcp, udp, build, parse, send, sniff)"),
     ];
@@ -14104,6 +14319,26 @@ pub fn module_help(name: &str) -> Option<String> {
              wifi.interfaces()                 list wireless interfaces\n\
              wifi.list()                       list saved connections\n\n\
              Example: wifi.connect(\"MyNetwork\", \"password\")"
+                .into(),
+        ),
+        "crunch" => Some(
+            "crunch — Password wordlist generator (Rust-native, fast)\n\n\
+             crunch.charset(name)              get charset string\n\
+             crunch.generate(min, max, charset) generate all combos\n\
+             crunch.pattern(template)          pattern-based generation\n\n\
+             Charset shortcuts:\n\
+               :a = lower   :A = upper   :d = digits   :s = symbols\n\
+               :n = digits  :x = alnum   :h = hex      :p = printable\n\n\
+             Pattern syntax:\n\
+               :X     = single char from charset X\n\
+               :X{N}  = repeat charset X exactly N times\n\
+               :X{N,M} = repeat X between N and M times\n\
+               ?      = single lowercase char (legacy)\n\n\
+             Examples:\n\
+               crunch.pattern(\"admin:d:d:d:d\")  => admin0000..admin9999\n\
+               crunch.pattern(\":A:a:a:d{3}\")    => Aaa000..Zzz999\n\
+               crunch.pattern(\"pass:s:d{2,4}\")   => pass!00..pass!9999\n\
+               crunch.generate(4, 6, \"digits\")    => 0000..999999"
                 .into(),
         ),
         "scapy" => Some(
@@ -14984,6 +15219,12 @@ pub fn help_builtin(name: &str) -> Option<String> {
             "s.upper()  — convert to uppercase\n\
              Returns a new uppercase string.\n\n\
              Example: \"hello\".upper()  =>  \"HELLO\""
+                .into(),
+        ),
+        "reverse" => Some(
+            "s.reverse()  — reverse string\n\
+             Returns a new string with characters in reverse order.\n\n\
+             Example: \"hello\".reverse()  =>  \"olleh\""
                 .into(),
         ),
         "length" => Some(
