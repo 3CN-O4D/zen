@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_hashlib_module(vm: &mut Vm) {
-let hashlib = Value::Dict(BTreeMap::from([
+let hashlib = Value::Dict(Arc::new(BTreeMap::from([
     ("sha256".into(), Value::NativeFunction("crypto_sha256".into())),
     ("sha1".into(), Value::NativeFunction("crypto_sha1".into())),
     ("md5".into(), Value::NativeFunction("crypto_md5".into())),
@@ -17,7 +18,7 @@ let hashlib = Value::Dict(BTreeMap::from([
     ("blake2s".into(), Value::NativeFunction("crypto_blake2s".into())),
     ("pbkdf2_hmac".into(), Value::NativeFunction("crypto_pbkdf2".into())),
     ("create".into(), Value::NativeFunction("hashlib_new".into())),
-    ("algorithms_available".into(), Value::List(vec![
+    ("algorithms_available".into(), Value::List(Arc::new(vec![
         Value::String("md5".into()),
         Value::String("sha1".into()),
         Value::String("sha224".into()),
@@ -28,7 +29,7 @@ let hashlib = Value::Dict(BTreeMap::from([
         Value::String("sha3_512".into()),
         Value::String("blake2b".into()),
         Value::String("blake2s".into()),
-    ])),
-]));
+    ]))),
+])));
 vm.vars.insert("hashlib".into(), hashlib);
 }

@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_os_module(vm: &mut Vm) {
-let os = Value::Dict(BTreeMap::from([
+let os = Value::Dict(Arc::new(BTreeMap::from([
     ("env".into(), Value::NativeFunction("os_getenv".into())),
     ("getenv".into(), Value::NativeFunction("os_getenv".into())),
     ("setenv".into(), Value::NativeFunction("os_setenv".into())),
@@ -28,6 +29,6 @@ let os = Value::Dict(BTreeMap::from([
     ("pids".into(), Value::NativeFunction("os_pids".into())),
     ("kill".into(), Value::NativeFunction("os_kill".into())),
     ("home".into(), Value::NativeFunction("os_home".into())),
-]));
+])));
 vm.vars.insert("os".into(), os);
 }

@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_math_module(vm: &mut Vm) {
-let math = Value::Dict(BTreeMap::from([
+let math = Value::Dict(Arc::new(BTreeMap::from([
     ("pi".into(), Value::Number(std::f64::consts::PI)),
     ("e".into(), Value::Number(std::f64::consts::E)),
     ("inf".into(), Value::Number(f64::INFINITY)),
@@ -47,6 +48,6 @@ let math = Value::Dict(BTreeMap::from([
     ("round".into(), Value::NativeFunction("math_round".into())),
     ("min".into(), Value::NativeFunction("math_min".into())),
     ("max".into(), Value::NativeFunction("math_max".into())),
-]));
+])));
 vm.vars.insert("math".into(), math);
 }

@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_time_module(vm: &mut Vm) {
-let time = Value::Dict(BTreeMap::from([
+let time = Value::Dict(Arc::new(BTreeMap::from([
     ("now".into(), Value::NativeFunction("time_now".into())),
     ("unix".into(), Value::NativeFunction("time_unix".into())),
     ("utc".into(), Value::NativeFunction("time_utc".into())),
@@ -21,6 +22,6 @@ let time = Value::Dict(BTreeMap::from([
     ("second".into(), Value::NativeFunction("time_second".into())),
     ("weekday".into(), Value::NativeFunction("time_weekday".into())),
     ("timestamp".into(), Value::NativeFunction("time_unix".into())),
-]));
+])));
 vm.vars.insert("time".into(), time);
 }

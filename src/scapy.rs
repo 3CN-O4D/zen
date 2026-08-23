@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_scapy_module(vm: &mut Vm) {
-let scapy = Value::Dict(BTreeMap::from([
+let scapy = Value::Dict(Arc::new(BTreeMap::from([
     ("checksum".into(), Value::NativeFunction("scapy_checksum".into())),
     ("ip".into(), Value::NativeFunction("scapy_ip".into())),
     ("tcp".into(), Value::NativeFunction("scapy_tcp".into())),
@@ -19,6 +20,6 @@ let scapy = Value::Dict(BTreeMap::from([
     ("int_to_ip".into(), Value::NativeFunction("scapy_int_to_ip".into())),
     ("cidr_expand".into(), Value::NativeFunction("scapy_cidr_expand".into())),
     ("subnet_hosts".into(), Value::NativeFunction("scapy_subnet_hosts".into())),
-]));
+])));
 vm.vars.insert("scapy".into(), scapy);
 }

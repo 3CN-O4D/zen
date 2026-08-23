@@ -1,0 +1,50 @@
+[
+  {
+    "round": 1,
+    "bets": [
+      {
+        "id": "1407067599",
+        "home": "Vipers VUL",
+        "away": "VUL Mbarara",
+        "league": "Virtual Football League Mode England",
+        "pick": "1",
+        "odd_value": 1.45,
+        "confidence": 64.6,
+        "bet_id": "452453719",
+        "stake": 5.0,
+        "result": "WON",
+        "placed_at": "2026-07-31T07:10:31.659261",
+        "settled_at": "2026-07-31T07:17:47.919811"
+      },
+      {
+        "id": "1407068318",
+        "home": "Taken FC",
+        "away": "Kumerica FC",
+        "league": "Virtual Football German League",
+        "pick": "2",
+        "odd_value": 1.5,
+        "confidence": 62.3,
+        "bet_id": "452453720",
+        "stake": 5.0,
+        "result": "WON",
+        "placed_at": "2026-07-31T07:10:32.245739",
+        "settled_at": "2026-07-31T07:20:53.240200"
+      },
+      {
+        "id": "1407068312",
+        "home": "Great Oli FC",
+        "away": "Bech FC",
+        "league": "Virtual Football German League",
+        "pick": "1",
+        "odd_value": 1.45,
+        "confidence": 64.3,
+        "bet_id": "452453722",
+        "stake": 5.0,
+        "result": "LOST",
+        "placed_at": "2026-07-31T07:10:32.762063",
+        "settled_at": "2026-07-31T07:17:06.784166"
+      }
+    ],
+    "balance": 22.35
+  }
+]

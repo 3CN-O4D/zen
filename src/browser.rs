@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_browser_module(vm: &mut Vm) {
-let browser = Value::Dict(BTreeMap::from([
+let browser = Value::Dict(Arc::new(BTreeMap::from([
     ("launch".into(), Value::NativeFunction("browser_launch".into())),
     ("connect".into(), Value::NativeFunction("browser_connect".into())),
     ("navigate".into(), Value::NativeFunction("browser_navigate".into())),
@@ -30,6 +31,6 @@ let browser = Value::Dict(BTreeMap::from([
     ("page_text".into(), Value::NativeFunction("browser_page_text".into())),
     ("close".into(), Value::NativeFunction("browser_close".into())),
     ("quit".into(), Value::NativeFunction("browser_close".into())),
-]));
+])));
 vm.vars.insert("browser".into(), browser);
 }

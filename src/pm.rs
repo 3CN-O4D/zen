@@ -190,7 +190,7 @@ fn install_single_file(path: &str, force: bool) -> Result<String, String> {
     // Auto-generate a zen.json manifest
     let manifest = serde_json::json!({
         "name": name,
-        "version": "0.1.0",
+        "version": "2.0.0",
         "description": format!("Installed from {path}"),
         "entry": format!("{name}.z"),
     });
@@ -305,7 +305,7 @@ pub fn init(name: Option<&str>, description: Option<&str>) -> Result<String, Str
 
     let manifest = serde_json::json!({
         "name": module_name,
-        "version": "0.1.0",
+        "version": "2.0.0",
         "description": desc,
         "entry": "main.z",
     });

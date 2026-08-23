@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_string_module(vm: &mut Vm) {
-let string = Value::Dict(BTreeMap::from([
+let string = Value::Dict(Arc::new(BTreeMap::from([
     ("upper".into(), Value::NativeFunction("str_upper".into())),
     ("lower".into(), Value::NativeFunction("str_lower".into())),
     ("title".into(), Value::NativeFunction("str_title".into())),
@@ -43,6 +44,6 @@ let string = Value::Dict(BTreeMap::from([
     ("punctuation".into(), Value::String("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".into())),
     ("whitespace".into(), Value::String(" \t\n\r\x0b\x0c".into())),
     ("printable".into(), Value::String("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r\x0b\x0c".into())),
-]));
+])));
 vm.vars.insert("string".into(), string);
 }

@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_crypto_module(vm: &mut Vm) {
-let crypto = Value::Dict(BTreeMap::from([
+let crypto = Value::Dict(Arc::new(BTreeMap::from([
     ("sha256".into(), Value::NativeFunction("crypto_sha256".into())),
     ("sha1".into(), Value::NativeFunction("crypto_sha1".into())),
     ("md5".into(), Value::NativeFunction("crypto_md5".into())),
@@ -23,6 +24,6 @@ let crypto = Value::Dict(BTreeMap::from([
     ("pbkdf2".into(), Value::NativeFunction("crypto_pbkdf2".into())),
     ("aes_encrypt".into(), Value::NativeFunction("crypto_aes_encrypt".into())),
     ("aes_decrypt".into(), Value::NativeFunction("crypto_aes_decrypt".into())),
-]));
+])));
 vm.vars.insert("crypto".into(), crypto);
 }

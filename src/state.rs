@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use crate::cdp::{CdpBrowser, CdpSession};
 use crate::runtime::Value;
 use base64::Engine;
+use std::sync::Arc;
 
 thread_local! {
     static BROWSER: RefCell<Option<CdpBrowser>> = RefCell::new(None);
@@ -318,14 +319,14 @@ fn js_value_to_zen(result: serde_json::Value) -> Value {
         serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
         serde_json::Value::String(s) => Value::String(s),
         serde_json::Value::Array(items) => {
-            Value::List(items.into_iter().map(js_json_to_zen).collect())
+            Value::List(Arc::new(items.into_iter().map(js_json_to_zen).collect::<Vec<_>>()))
         }
         serde_json::Value::Object(map) => {
             let mut dict = BTreeMap::new();
             for (k, v) in map {
                 dict.insert(k, js_json_to_zen(v));
             }
-            Value::Dict(dict)
+            Value::Dict(Arc::new(dict))
         }
     }
 }
@@ -336,13 +337,13 @@ fn js_json_to_zen(v: serde_json::Value) -> Value {
         serde_json::Value::Bool(b) => Value::Bool(b),
         serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
         serde_json::Value::String(s) => Value::String(s),
-        serde_json::Value::Array(items) => Value::List(items.into_iter().map(js_json_to_zen).collect()),
+        serde_json::Value::Array(items) => Value::List(Arc::new(items.into_iter().map(js_json_to_zen).collect::<Vec<_>>())),
         serde_json::Value::Object(map) => {
             let mut dict = BTreeMap::new();
             for (k, v) in map {
                 dict.insert(k, js_json_to_zen(v));
             }
-            Value::Dict(dict)
+            Value::Dict(Arc::new(dict))
         }
     }
 }

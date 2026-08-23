@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_shutil_module(vm: &mut Vm) {
-let shutil = Value::Dict(BTreeMap::from([
+let shutil = Value::Dict(Arc::new(BTreeMap::from([
     ("copy".into(), Value::NativeFunction("shutil_copy".into())),
     ("copy2".into(), Value::NativeFunction("shutil_copy2".into())),
     ("move".into(), Value::NativeFunction("shutil_move".into())),
@@ -12,6 +13,6 @@ let shutil = Value::Dict(BTreeMap::from([
     ("copytree".into(), Value::NativeFunction("shutil_copytree".into())),
     ("which".into(), Value::NativeFunction("shutil_which".into())),
     ("disk_usage".into(), Value::NativeFunction("shutil_disk_usage".into())),
-]));
+])));
 vm.vars.insert("shutil".into(), shutil);
 }

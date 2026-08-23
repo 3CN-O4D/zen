@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_socket_module(vm: &mut Vm) {
-let socket = Value::Dict(BTreeMap::from([
+let socket = Value::Dict(Arc::new(BTreeMap::from([
     ("open".into(), Value::NativeFunction("socket_open".into())),
     ("open_udp".into(), Value::NativeFunction("socket_open_udp".into())),
     ("send".into(), Value::NativeFunction("socket_send".into())),
@@ -18,6 +19,6 @@ let socket = Value::Dict(BTreeMap::from([
     ("close".into(), Value::NativeFunction("socket_close".into())),
     ("set_timeout".into(), Value::NativeFunction("socket_set_timeout".into())),
     ("scan".into(), Value::NativeFunction("socket_scan".into())),
-]));
+])));
 vm.vars.insert("socket".into(), socket);
 }

@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_decimal_module(vm: &mut Vm) {
-let decimal = Value::Dict(BTreeMap::from([
+let decimal = Value::Dict(Arc::new(BTreeMap::from([
     ("Decimal".into(), Value::NativeFunction("decimal_decimal".into())),
     ("getcontext".into(), Value::NativeFunction("decimal_getcontext".into())),
     ("setcontext".into(), Value::NativeFunction("decimal_setcontext".into())),
@@ -17,6 +18,6 @@ let decimal = Value::Dict(BTreeMap::from([
     ("ROUND_FLOOR".into(), Value::String("ROUND_FLOOR".into())),
     ("ROUND_HALF_DOWN".into(), Value::String("ROUND_HALF_DOWN".into())),
     ("ROUND_05UP".into(), Value::String("ROUND_05UP".into())),
-]));
+])));
 vm.vars.insert("decimal".into(), decimal);
 }

@@ -1,0 +1,9 @@
+import url
+var parts = url.parse("http://example.com:80/path?q=1#frag")
+print("scheme:", parts.scheme)
+print("host:", parts.host)
+print("port:", parts.port)
+print("path:", parts.path)
+print("query:", parts.query)
+print("fragment:", parts.fragment)
+print("build:", url.build(parts))

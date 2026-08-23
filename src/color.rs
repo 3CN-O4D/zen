@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_color_module(vm: &mut Vm) {
-let color = Value::Dict(BTreeMap::from([
+let color = Value::Dict(Arc::new(BTreeMap::from([
     ("reset".into(), Value::String("\x1b[0m".into())),
     ("bold".into(), Value::NativeFunction("color_style_bold".into())),
     ("dim".into(), Value::NativeFunction("color_style_dim".into())),
@@ -42,6 +43,6 @@ let color = Value::Dict(BTreeMap::from([
     ("bright_magenta".into(), Value::NativeFunction("color_fg_bright_magenta".into())),
     ("bright_cyan".into(), Value::NativeFunction("color_fg_bright_cyan".into())),
     ("bright_white".into(), Value::NativeFunction("color_fg_bright_white".into())),
-]));
+])));
 vm.vars.insert("color".into(), color);
 }

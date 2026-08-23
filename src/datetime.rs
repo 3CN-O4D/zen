@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_datetime_module(vm: &mut Vm) {
-let datetime = Value::Dict(BTreeMap::from([
+let datetime = Value::Dict(Arc::new(BTreeMap::from([
     ("now".into(), Value::NativeFunction("time_now".into())),
     ("utcnow".into(), Value::NativeFunction("time_utc".into())),
     ("today".into(), Value::NativeFunction("time_date".into())),
@@ -27,6 +28,6 @@ let datetime = Value::Dict(BTreeMap::from([
     ("FRIDAY".into(), Value::Number(4.0)),
     ("SATURDAY".into(), Value::Number(5.0)),
     ("SUNDAY".into(), Value::Number(6.0)),
-]));
+])));
 vm.vars.insert("datetime".into(), datetime);
 }

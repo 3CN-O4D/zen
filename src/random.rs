@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_random_module(vm: &mut Vm) {
-let random = Value::Dict(BTreeMap::from([
+let random = Value::Dict(Arc::new(BTreeMap::from([
     ("random".into(), Value::NativeFunction("random_random".into())),
     ("randint".into(), Value::NativeFunction("random_randint".into())),
     ("randrange".into(), Value::NativeFunction("random_randrange".into())),
@@ -15,6 +16,6 @@ let random = Value::Dict(BTreeMap::from([
     ("uniform".into(), Value::NativeFunction("random_uniform".into())),
     ("hex".into(), Value::NativeFunction("random_hex".into())),
     ("seed".into(), Value::NativeFunction("random_seed".into())),
-]));
+])));
 vm.vars.insert("random".into(), random);
 }

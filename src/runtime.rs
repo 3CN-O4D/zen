@@ -1,4 +1,5 @@
 use std::{
+    sync::Arc,
     collections::{BTreeMap, HashMap},
     env,
     fmt,
@@ -8,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     process::{self, Command},
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -149,8 +150,11 @@ pub enum Value {
     Bool(bool),
     Number(f64),
     String(String),
-    List(Vec<Value>),
-    Dict(BTreeMap<String, Value>),
+    // Reference-counted with copy-on-write semantics: cloning a Value::List
+    // or Value::Dict is O(1); mutations go through Arc::make_mut which clones
+    // only when the container is shared.
+    List(Arc<Vec<Value>>),
+    Dict(Arc<BTreeMap<String, Value>>),
     Instance(InstanceRef),
     Socket(Arc<Mutex<TcpStream>>),
     UdpSocket(Arc<Mutex<std::net::UdpSocket>>),
@@ -2563,7 +2567,7 @@ impl Vm {
         ] {
             errors_map.insert(leaf.into(), Value::String(leaf.into()));
         }
-        self.vars.insert("errors".into(), Value::Dict(errors_map));
+        self.vars.insert("errors".into(), Value::Dict(Arc::new(errors_map)));
 
         // Register errors_define as a native function so errors.define() works
     }
@@ -2605,7 +2609,7 @@ impl Vm {
                     values.push(Value::Number(i as f64));
                     i += 1;
                 }
-                Ok(Value::List(values))
+                Ok(Value::List(Arc::new(values)))
             },
         );
         self.native_functions.insert(
@@ -2725,7 +2729,7 @@ impl Vm {
                                         }
                                         if let Some(Value::Dict(funcs)) = doc.get("functions") {
                                             println!("\nfunctions:");
-                                            for (name, info) in funcs {
+                                            for (name, info) in (**funcs).clone() {
                                                 match info {
                                                     Value::Dict(fi) => {
                                                         let params = fi.get("params")
@@ -2754,7 +2758,7 @@ impl Vm {
                                         }
                                         if let Some(Value::Dict(classes)) = doc.get("classes") {
                                             println!("\nclasses:");
-                                            for (name, info) in classes {
+                                            for (name, info) in (**classes).clone() {
                                                 match info {
                                                     Value::Dict(ci) => {
                                                         let desc = ci.get("description")
@@ -2836,7 +2840,7 @@ impl Vm {
             "keys".into(),
             |args| {
                 match args.first() {
-                    Some(Value::Dict(d)) => Ok(Value::List(d.keys().map(|k| Value::String(k.clone())).collect())),
+                    Some(Value::Dict(d)) => Ok(Value::List(Arc::new(d.keys().map(|k| Value::String(k.clone())).collect::<Vec<Value>>()))),
                     _ => Err("keys expects a dict".into()),
                 }
             },
@@ -2845,7 +2849,7 @@ impl Vm {
             "values".into(),
             |args| {
                 match args.first() {
-                    Some(Value::Dict(d)) => Ok(Value::List(d.values().cloned().collect())),
+                    Some(Value::Dict(d)) => Ok(Value::List(Arc::new(d.values().cloned().collect::<Vec<Value>>()))),
                     _ => Err("values expects a dict".into()),
                 }
             },
@@ -2854,9 +2858,9 @@ impl Vm {
             "items".into(),
             |args| {
                 match args.first() {
-                    Some(Value::Dict(d)) => Ok(Value::List(
-                        d.iter().map(|(k, v)| Value::List(vec![Value::String(k.clone()), v.clone()])).collect(),
-                    )),
+                    Some(Value::Dict(d)) => Ok(Value::List(Arc::new(
+                        d.iter().map(|(k, v)| Value::List(Arc::new(vec![Value::String(k.clone()), v.clone()]))).collect::<Vec<Value>>(),
+                    ))),
                     _ => Err("items expects a dict".into()),
                 }
             },
@@ -2893,9 +2897,9 @@ impl Vm {
                 };
                 match list_val {
                     Value::List(l) => {
-                        let mut l = l.clone();
+                        let mut l = (**l).clone();
                         l.push(item.clone());
-                        Ok(Value::List(l))
+                        Ok(Value::List(Arc::new(l)))
                     }
                     _ => Err("push expects a list as first argument".into()),
                 }
@@ -2907,7 +2911,7 @@ impl Vm {
             |args| {
                 match args.first() {
                     Some(Value::List(l)) => {
-                        let mut l = l.clone();
+                        let mut l = (**l).clone();
                         Ok(l.pop().unwrap_or(Value::Null))
                     }
                     _ => Err("pop expects a list".into()),
@@ -2919,16 +2923,16 @@ impl Vm {
             "enumerate".into(),
             |args| {
                 match args.first() {
-                    Some(Value::List(l)) => Ok(Value::List(
+                    Some(Value::List(l)) => Ok(Value::List(Arc::new(
                         l.iter().enumerate().map(|(i, v)| {
-                            Value::List(vec![Value::Number(i as f64), v.clone()])
-                        }).collect(),
-                    )),
-                    Some(Value::String(s)) => Ok(Value::List(
+                            Value::List(Arc::new(vec![Value::Number(i as f64), v.clone()]))
+                        }).collect::<Vec<Value>>(),
+                    ))),
+                    Some(Value::String(s)) => Ok(Value::List(Arc::new(
                         s.chars().enumerate().map(|(i, c)| {
-                            Value::List(vec![Value::Number(i as f64), Value::String(c.to_string())])
-                        }).collect(),
-                    )),
+                            Value::List(Arc::new(vec![Value::Number(i as f64), Value::String(c.to_string())]))
+                        }).collect::<Vec<Value>>(),
+                    ))),
                     _ => Err("enumerate expects a list or string".into()),
                 }
             },
@@ -2946,7 +2950,7 @@ impl Vm {
                     Value::List(l) => {
                         let start = start.min(l.len());
                         let end = end.unwrap_or(l.len()).min(l.len());
-                        Ok(Value::List(l[start..end].to_vec()))
+                        Ok(Value::List(Arc::new(l[start..end].to_vec())))
                     }
                     Value::String(s) => {
                         let chars: Vec<char> = s.chars().collect();
@@ -2963,13 +2967,13 @@ impl Vm {
             "list".into(),
             |args| {
                 match args.first() {
-                    Some(Value::String(s)) => Ok(Value::List(s.chars().map(|c| Value::String(c.to_string())).collect())),
+                    Some(Value::String(s)) => Ok(Value::List(Arc::new(s.chars().map(|c| Value::String(c.to_string())).collect::<Vec<Value>>()))),
                     Some(Value::List(l)) => Ok(Value::List(l.clone())),
-                    Some(Value::Dict(d)) => Ok(Value::List(
-                        d.iter().map(|(k, v)| Value::List(vec![Value::String(k.clone()), v.clone()])).collect(),
-                    )),
-                    Some(v) => Ok(Value::List(vec![v.clone()])),
-                    None => Ok(Value::List(vec![])),
+                    Some(Value::Dict(d)) => Ok(Value::List(Arc::new(
+                        d.iter().map(|(k, v)| Value::List(Arc::new(vec![Value::String(k.clone()), v.clone()]))).collect::<Vec<Value>>(),
+                    ))),
+                    Some(v) => Ok(Value::List(Arc::new(vec![v.clone()]))),
+                    None => Ok(Value::List(Arc::new(vec![]))),
                 }
             },
         );
@@ -2980,7 +2984,7 @@ impl Vm {
                 match args.first() {
                     Some(Value::List(pairs)) => {
                         let mut map = BTreeMap::new();
-                        for pair in pairs {
+                        for pair in pairs.iter().cloned() {
                             if let Value::List(kv) = pair {
                                 if kv.len() >= 2 {
                                     if let Value::String(k) = &kv[0] {
@@ -2989,10 +2993,10 @@ impl Vm {
                                 }
                             }
                         }
-                        Ok(Value::Dict(map))
+                        Ok(Value::Dict(Arc::new(map)))
                     }
                     Some(Value::Dict(d)) => Ok(Value::Dict(d.clone())),
-                    _ => Ok(Value::Dict(BTreeMap::new())),
+                    _ => Ok(Value::Dict(Arc::new(BTreeMap::new()))),
                 }
             },
         );
@@ -3602,7 +3606,7 @@ impl Vm {
                     return Ok(if let Some(Value::Dict(module_dict)) = vars.get(n) {
                         Value::Dict(module_dict.clone())
                     } else {
-                        Value::Dict(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<BTreeMap<String, Value>>()))
                     });
                 }
                 if let Some(v) = self.self_field_get(n) {
@@ -3622,14 +3626,14 @@ impl Vm {
                 for x in items {
                     match x {
                         Expr::Spread(inner) => match self.eval(inner)? {
-                            Value::List(items) => list.extend(items),
-                            Value::Dict(map) => list.extend(map.into_values()),
+                            Value::List(items) => list.extend(items.iter().cloned()),
+                            Value::Dict(map) => list.extend(Arc::unwrap_or_clone(map).into_values()),
                             other => return Err(format!("cannot spread {other} into a list")),
                         },
                         other => list.push(self.eval(other)?),
                     }
                 }
-                Ok(Value::List(list))
+                Ok(Value::List(Arc::new(list)))
             }
             Expr::Dict(entries) => {
                 let mut dict = BTreeMap::new();
@@ -3640,7 +3644,7 @@ impl Vm {
                         }
                         DictEntry::Spread(expr) => match self.eval(expr)? {
                             Value::Dict(map) => {
-                                for (k, v) in map {
+                                for (k, v) in Arc::unwrap_or_clone(map) {
                                     dict.insert(k, v);
                                 }
                             }
@@ -3648,7 +3652,7 @@ impl Vm {
                         },
                     }
                 }
-                Ok(Value::Dict(dict))
+                Ok(Value::Dict(Arc::new(dict)))
             }
             Expr::Range(start, end, exclusive) => {
                 let (Value::Number(start), Value::Number(end)) =
@@ -3671,7 +3675,7 @@ impl Vm {
                     values.push(Value::Number(value as f64));
                     value += step;
                 }
-                Ok(Value::List(values))
+                Ok(Value::List(Arc::new(values)))
             }
             Expr::Index(object, index) => {
                 let object = self.eval(object)?;
@@ -3728,7 +3732,7 @@ impl Vm {
                         let b = if e < 0 { len + e } else { e };
                         let a = a.max(0).min(len) as usize;
                         let b = b.max(0).min(len) as usize;
-                        Ok(Value::List(values.get(a..b).unwrap_or(&[]).to_vec()))
+                        Ok(Value::List(Arc::new(values.get(a..b).unwrap_or(&[]).to_vec())))
                     }
                     _ => Err("slice requires a string or list".into()),
                 }
@@ -3817,7 +3821,10 @@ impl Vm {
                     None
                 } else {
                     std::env::set_var("ZEN_DBG_FN", format!("eval:{fname}"));
-                    let bc = crate::bytecode::compile_function(&fname, &names, &captured_names, body).ok();
+                    let bc = match crate::bytecode::compile_function(&fname, &names, &captured_names, body) {
+                        Ok(b) => Some(b),
+                        Err(_) => None
+                    };
                     std::env::remove_var("ZEN_DBG_FN");
                     bc
                 };
@@ -3899,7 +3906,7 @@ impl Vm {
                     }
                 }
                 if !named.is_empty() {
-                    values.push(Value::Dict(named));
+                    values.push(Value::Dict(Arc::new(named)));
                 }
                 match callee.as_ref() {
                     Expr::Var(name) => match self.call(name, values)? {
@@ -3921,14 +3928,15 @@ impl Vm {
                                     None => self.vars.get(name).cloned(),
                                 };
                                 if let Some(Value::List(mut list)) = current {
+                                    let slot = Arc::make_mut(&mut list);
                                     let result = match method.as_str() {
                                         "push" => {
                                             if let Some(item) = values.first() {
-                                                list.push(item.clone());
+                                                slot.push(item.clone());
                                             }
                                             Value::Null
                                         }
-                                        _ => list.pop().unwrap_or(Value::Null),
+                                        _ => slot.pop().unwrap_or(Value::Null),
                                     };
                                     let updated = Value::List(list);
                                     match local_idx {
@@ -3942,63 +3950,8 @@ impl Vm {
                             }
                         }
                         let obj = self.eval(object)?;
-                        match obj {
-                            Value::Instance(instance) => match self.call_method(instance, method, values)? {
-                                Flow::Return(v) => Ok(v),
-                                Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
-                                _ => unreachable!(),
-                            },
-                            Value::Dict(dict) => {
-                                if let Some(Value::NativeFunction(native_name)) = dict.get(method) {
-                                    if let Some(native_fn) = self.native_functions.get(native_name).cloned() {
-                                        let mut call_args = values;
-                                        // Native methods prefixed with __ receive the dict as `self`.
-                                        if native_name.starts_with("__") {
-                                            call_args.insert(0, Value::Dict(dict.clone()));
-                                        }
-                                        return Ok(native_fn(call_args)?);
-                                    }
-                                }
-                                if let Some(Value::Function(fname)) = dict.get(method) {
-                                    match self.call(fname, values)? {
-                                        Flow::Return(v) => return Ok(v),
-                                        Flow::Throw(v) => return Err(format!("unhandled exception: {v}")),
-                                        _ => unreachable!(),
-                                    }
-                                }
-                                self.dict_method(dict, method, values)
-                            }
-                            Value::String(value) => self.string_method(value, method, values),
-                            Value::List(list) => {
-                                if matches!(method.as_str(), "push" | "pop") {
-                                    if let Some((inst, field)) = self.list_target_field(object) {
-                                        let result = self.list_method(list.clone(), method, values.clone())?;
-                                        let mut new_list = list;
-                                        match method.as_str() {
-                                            "push" => {
-                                                if let Some(item) = values.first() {
-                                                    new_list.push(item.clone());
-                                                }
-                                            }
-                                            _ => {
-                                                new_list.pop();
-                                            }
-                                        }
-                                        inst.lock().unwrap().fields.insert(field, Value::List(new_list));
-                                        return Ok(result);
-                                    }
-                                }
-                                self.list_method(list, method, values)
-                            }
-                            Value::Number(n) => self.number_method(n, method, values),
-                            Value::Bool(b) => {
-                                match method.as_str() {
-                                    "toString" | "to_string" => Ok(Value::String(b.to_string())),
-                                    _ => Err(format!("bool has no method: {method}")),
-                                }
-                            }
-                            _ => Err("only instance methods and dicts are supported currently".into()),
-                        }
+                        let v = self.invoke_member(obj, method, values, Some(object))?;
+                        Ok(v)
                     }
                     _ => {
                         return Err(
@@ -4196,9 +4149,9 @@ impl Vm {
             }
             "split" => {
                 let sep = one()?;
-                Ok(Value::List(
-                    value.split(&sep).map(|s| Value::String(s.into())).collect(),
-                ))
+                Ok(Value::List(Arc::new(
+                    value.split(&sep).map(|s| Value::String(s.into())).collect::<Vec<Value>>(),
+                )))
             }
             "contains" => {
                 let needle = one()?;
@@ -4315,9 +4268,9 @@ impl Vm {
             }
             "split" => {
                 let sep = one()?;
-                Ok(Value::List(
-                    value.split(&sep).map(|s| Value::String(s.into())).collect(),
-                ))
+                Ok(Value::List(Arc::new(
+                    value.split(&sep).map(|s| Value::String(s.into())).collect::<Vec<Value>>(),
+                )))
             }
             "replace" => {
                 let (from, to) = match args.as_slice() {
@@ -4344,9 +4297,9 @@ impl Vm {
                 let end = end.unwrap_or(chars.len()).min(chars.len());
                 Ok(Value::String(chars[start..end].iter().collect()))
             }
-            "toList" => Ok(Value::List(
-                value.chars().map(|c| Value::String(c.to_string())).collect(),
-            )),
+            "toList" => Ok(Value::List(Arc::new(
+                value.chars().map(|c| Value::String(c.to_string())).collect::<Vec<Value>>(),
+            ))),
             _ => Err(format!("string has no method: {method}")),
         }
     }
@@ -4359,7 +4312,7 @@ impl Vm {
                 };
                 let mut list = list;
                 list.push(item);
-                Ok(Value::List(list))
+                Ok(Value::List(Arc::new(list)))
             }
             "pop" => {
                 let mut list = list;
@@ -4396,31 +4349,31 @@ impl Vm {
             "reverse" => {
                 let mut list = list;
                 list.reverse();
-                Ok(Value::List(list))
+                Ok(Value::List(Arc::new(list)))
             }
             "sort" => {
                 let mut list = list;
                 list.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
-                Ok(Value::List(list))
+                Ok(Value::List(Arc::new(list)))
             }
             "skip" => {
                 let n = match args.first() {
                     Some(Value::Number(n)) => *n as usize,
                     _ => return Err("skip expects a number".into()),
                 };
-                Ok(Value::List(list.into_iter().skip(n).collect()))
+                Ok(Value::List(Arc::new(list.iter().cloned().skip(n).collect::<Vec<Value>>())))
             }
             "concat" => {
                 let extra: Vec<Value> = args
                     .iter()
                     .flat_map(|a| match a {
-                        Value::List(items) => items.clone(),
+                        Value::List(items) => items.iter().cloned().collect::<Vec<Value>>(),
                         other => vec![other.clone()],
                     })
                     .collect();
                 let mut list = list;
                 list.extend(extra);
-                Ok(Value::List(list))
+                Ok(Value::List(Arc::new(list)))
             }
             "sum" => {
                 let mut total = 0.0;
@@ -4441,7 +4394,7 @@ impl Vm {
                         out.push(item);
                     }
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(Arc::new(out)))
             }
             "shift" => {
                 let mut list = list;
@@ -4459,7 +4412,7 @@ impl Vm {
                 };
                 let mut list = list;
                 list.insert(0, item);
-                Ok(Value::List(list))
+                Ok(Value::List(Arc::new(list)))
             }
             "map" => {
                 let f = match args.first().cloned() {
@@ -4470,7 +4423,7 @@ impl Vm {
                 for item in list {
                     out.push(self.apply_func(&f, vec![item])?);
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(Arc::new(out)))
             }
             "filter" => {
                 let f = match args.first().cloned() {
@@ -4483,7 +4436,7 @@ impl Vm {
                         out.push(item);
                     }
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(Arc::new(out)))
             }
             "each" => {
                 let f = match args.first().cloned() {
@@ -4510,15 +4463,15 @@ impl Vm {
                 let mut out = Vec::new();
                 for item in list {
                     if let Value::List(sub) = item {
-                        out.extend(sub);
+                        out.extend(sub.iter().cloned());
                     } else {
                         out.push(item);
                     }
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(Arc::new(out)))
             }
             "compact" => {
-                Ok(Value::List(list.into_iter().filter(|v| v.truthy()).collect()))
+                Ok(Value::List(Arc::new(list.iter().cloned().filter(|v| v.truthy()).collect::<Vec<Value>>())))
             }
             "uniq" | "unique" => {
                 let mut seen = Vec::new();
@@ -4529,7 +4482,7 @@ impl Vm {
                         out.push(item);
                     }
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(Arc::new(out)))
             }
             "shuffle" => {
                 let mut list = list;
@@ -4537,7 +4490,7 @@ impl Vm {
                     let j = (rand::random::<f64>() * (i + 1) as f64) as usize;
                     list.swap(i, j);
                 }
-                Ok(Value::List(list))
+                Ok(Value::List(Arc::new(list)))
             }
             "sample" => {
                 if list.is_empty() {
@@ -4552,14 +4505,14 @@ impl Vm {
                     Some(Value::Number(n)) => *n as usize,
                     _ => return Err("take expects a number".into()),
                 };
-                Ok(Value::List(list.into_iter().take(n).collect()))
+                Ok(Value::List(Arc::new(list.iter().cloned().take(n).collect::<Vec<Value>>())))
             }
             "drop" => {
                 let n = match args.first() {
                     Some(Value::Number(n)) => *n as usize,
                     _ => return Err("drop expects a number".into()),
                 };
-                Ok(Value::List(list.into_iter().skip(n).collect()))
+                Ok(Value::List(Arc::new(list.iter().cloned().skip(n).collect::<Vec<Value>>())))
             }
             "chunk" => {
                 let size = match args.first() {
@@ -4571,12 +4524,12 @@ impl Vm {
                 let mut i = 0;
                 while i < list.len() {
                     let end = (i + size).min(list.len());
-                    out.push(Value::List(list[i..end].to_vec()));
+                    out.push(Value::List(Arc::new(list[i..end].to_vec())));
                     i += size;
                 }
-                Ok(Value::List(out))
+                Ok(Value::List(Arc::new(out)))
             }
-            "copy" => Ok(Value::List(list)),
+            "copy" => Ok(Value::List(Arc::new(list))),
             "slice" => {
                 let (start, end) = match args.as_slice() {
                     [Value::Number(s), Value::Number(e)] => (*s as usize, Some(*e as usize)),
@@ -4585,7 +4538,7 @@ impl Vm {
                 };
                 let start = start.min(list.len());
                 let end = end.unwrap_or(list.len()).min(list.len());
-                Ok(Value::List(list[start..end].to_vec()))
+                Ok(Value::List(Arc::new(list[start..end].to_vec())))
             }
             "splice" => {
                 let (start, delete_count) = match args.as_slice() {
@@ -4601,7 +4554,7 @@ impl Vm {
                 for (i, item) in insert.into_iter().enumerate() {
                     list.insert(start + i, item);
                 }
-                Ok(Value::List(removed))
+                Ok(Value::List(Arc::new(removed)))
             }
             "zip" => {
                 let other = match args.first() {
@@ -4610,9 +4563,9 @@ impl Vm {
                 };
                 let len = list.len().min(other.len());
                 let out: Vec<Value> = (0..len)
-                    .map(|i| Value::List(vec![list[i].clone(), other[i].clone()]))
+                    .map(|i| Value::List(Arc::new(vec![list[i].clone(), other[i].clone()])))
                     .collect();
-                Ok(Value::List(out))
+                Ok(Value::List(Arc::new(out)))
             }
             "reduce" => {
                 let f = match args.first().cloned() {
@@ -4682,7 +4635,7 @@ impl Vm {
                     Some(v) => v.clone(),
                     None => return Err("fill expects a value".into()),
                 };
-                Ok(Value::List(vec![val; list.len()]))
+                Ok(Value::List(Arc::new(vec![val; list.len()])))
             }
             _ => Err(format!("list has no method: {method}")),
         }
@@ -4709,13 +4662,13 @@ impl Vm {
                     },
                 }
             }
-            "keys" => Ok(Value::List(
-                dict.keys().map(|k| Value::String(k.clone())).collect(),
-            )),
-            "values" => Ok(Value::List(dict.into_values().collect())),
-            "items" => Ok(Value::List(
-                dict.iter().map(|(k, v)| Value::List(vec![Value::String(k.clone()), v.clone()])).collect(),
-            )),
+            "keys" => Ok(Value::List(Arc::new(
+                dict.keys().map(|k| Value::String(k.clone())).collect::<Vec<Value>>(),
+            ))),
+            "values" => Ok(Value::List(Arc::new(dict.into_values().collect::<Vec<Value>>()))),
+            "items" => Ok(Value::List(Arc::new(
+                dict.iter().map(|(k, v)| Value::List(Arc::new(vec![Value::String(k.clone()), v.clone()]))).collect::<Vec<Value>>(),
+            ))),
             "set" => {
                 let (key, value) = match args.as_slice() {
                     [Value::String(k), v] => (k.clone(), v.clone()),
@@ -4723,7 +4676,7 @@ impl Vm {
                 };
                 let mut dict = dict;
                 dict.insert(key, value);
-                Ok(Value::Dict(dict))
+                Ok(Value::Dict(Arc::new(dict)))
             }
             "delete" | "remove" => {
                 let key = match args.first() {
@@ -4732,21 +4685,21 @@ impl Vm {
                 };
                 let mut dict = dict;
                 dict.remove(&key);
-                Ok(Value::Dict(dict))
+                Ok(Value::Dict(Arc::new(dict)))
             }
             "update" | "merge" => {
                 let mut dict = dict;
                 for arg in args {
                     match arg {
                         Value::Dict(other) => {
-                            for (k, v) in other {
+                            for (k, v) in Arc::unwrap_or_clone(other) {
                                 dict.insert(k, v);
                             }
                         }
                         _ => return Err(format!("{method} expects a dictionary argument")),
                     }
                 }
-                Ok(Value::Dict(dict))
+                Ok(Value::Dict(Arc::new(dict)))
             }
             "length" => Ok(Value::Number(dict.len() as f64)),
             _ => Err(format!("dictionary has no method: {method}")),
@@ -4798,7 +4751,7 @@ impl Vm {
             Kind::Plus => match (a, b) {
                 (Value::Number(x), Value::Number(y)) => Ok(Value::Number(x + y)),
                 (Value::List(mut x), Value::List(y)) => {
-                    x.extend(y);
+                    Arc::make_mut(&mut x).extend(y.iter().cloned());
                     Ok(Value::List(x))
                 }
                 (x, y) => Ok(Value::String(format!("{x}{y}"))),
@@ -5371,7 +5324,7 @@ impl Vm {
                         let val = if let Some(Value::Dict(module_dict)) = vars.get(name.as_str()) {
                             Value::Dict(module_dict.clone())
                         } else {
-                            Value::Dict(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<BTreeMap<String, Value>>()))
                         };
                         stack.push(val);
                     } else {
@@ -5844,7 +5797,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         list.push(stack.pop().unwrap_or(Value::Null));
                     }
                     list.reverse();
-                    stack.push(Value::List(list));
+                    stack.push(Value::List(Arc::new(list)));
                 }
                 Opcode::BuildDict => {
                     let count = inst.arg1 as usize;
@@ -5856,7 +5809,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                             dict.insert(k, val);
                         }
                     }
-                    stack.push(Value::Dict(dict));
+                    stack.push(Value::Dict(Arc::new(dict)));
                 }
                 Opcode::Index => {
                     let index = stack.pop().unwrap_or(Value::Null);
@@ -5892,6 +5845,66 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         return Err("bad constant in GetMember".into());
                     };
                     let v = self.member(obj, name)?;
+                    stack.push(v);
+                }
+                Opcode::PushSlot => {
+                    let idx = base + inst.arg1 as usize;
+                    let v = stack.pop().unwrap_or(Value::Null);
+                    match locals.get_mut(idx) {
+                        Some(Value::List(list)) => Arc::make_mut(list).push(v),
+                        Some(Value::Null) => {
+                            locals[idx] = Value::List(Arc::new(vec![v]));
+                        }
+                        _ => return Err("push target is not a list".into()),
+                    }
+                }
+                Opcode::PopSlot => {
+                    let idx = base + inst.arg1 as usize;
+                    match locals.get_mut(idx) {
+                        Some(Value::List(list)) => {
+                            let popped = Arc::make_mut(list).pop().unwrap_or(Value::Null);
+                            stack.push(popped);
+                        }
+                        _ => return Err("pop target is not a list".into()),
+                    }
+                }
+                Opcode::PushGlobal => {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
+                        return Err("bad constant in PushGlobal".into());
+                    };
+                    let v = stack.pop().unwrap_or(Value::Null);
+                    match self.vars.get_mut(name.as_str()) {
+                        Some(Value::List(list)) => Arc::make_mut(list).push(v),
+                        _ => {
+                            let name = name.clone();
+                            self.vars.insert(name, Value::List(Arc::new(vec![v])));
+                        }
+                    }
+                }
+                Opcode::PopGlobal => {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
+                        return Err("bad constant in PopGlobal".into());
+                    };
+                    match self.vars.get_mut(name.as_str()) {
+                        Some(Value::List(list)) => {
+                            let popped = Arc::make_mut(list).pop().unwrap_or(Value::Null);
+                            stack.push(popped);
+                        }
+                        _ => return Err("pop target is not a list".into()),
+                    }
+                }
+                Opcode::CallMethod => {
+                    let argc = inst.arg2 as usize;
+                    if stack.len() < argc + 1 {
+                        return Err("stack underflow in CallMethod".into());
+                    }
+                    let args: Vec<Value> = stack.split_off(stack.len() - argc);
+                    let target = stack.pop().unwrap_or(Value::Null);
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
+                        return Err("bad constant in CallMethod".into());
+                    };
+                    let name = name.clone();
+                    let v = self.invoke_member(target, &name, args, None)?;
                     stack.push(v);
                 }
                 Opcode::Typeof => {
@@ -6324,6 +6337,121 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             _ => Err("expected a function".into()),
         }
     }
+
+    /// Dispatch `obj.method(args)` for any value type. Shared by the tree-walk
+    /// interpreter and the bytecode VM's CallMethod opcode. `object_expr` is the
+    /// original expression when available (needed for push/pop field mutation).
+    fn invoke_member(
+        &mut self,
+        obj: Value,
+        method: &str,
+        values: Vec<Value>,
+        object_expr: Option<&Expr>,
+    ) -> Result<Value, String> {
+        match obj {
+            Value::Instance(instance) => match self.call_method(instance, method, values)? {
+                Flow::Return(v) => Ok(v),
+                Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
+                _ => unreachable!(),
+            },
+            Value::Dict(dict) => {
+                if let Some(Value::NativeFunction(native_name)) = dict.get(method) {
+                    if let Some(native_fn) = self.native_functions.get(native_name).cloned() {
+                        let mut call_args = values;
+                        // Native methods prefixed with __ receive the dict as `self`.
+                        if native_name.starts_with("__") {
+                            call_args.insert(0, Value::Dict(dict.clone()));
+                        }
+                        return native_fn(call_args);
+                    }
+                }
+                if let Some(Value::Function(fname)) = dict.get(method) {
+                    return match self.call(fname, values)? {
+                        Flow::Return(v) => Ok(v),
+                        Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
+                        _ => unreachable!(),
+                    };
+                }
+                match method {
+                    "length" | "len" => return Ok(Value::Number(dict.len() as f64)),
+                    "has" | "containsKey" | "has_key" | "contains" => {
+                        let key = values.first().cloned().unwrap_or(Value::Null);
+                        let hit = match key {
+                            Value::String(k) => dict.contains_key(&k),
+                            _ => false,
+                        };
+                        return Ok(Value::Bool(hit));
+                    }
+                    "get" => {
+                        let key = values.first().cloned().unwrap_or(Value::Null);
+                        if let Value::String(k) = key {
+                            return Ok(dict.get(&k).cloned().unwrap_or(Value::Null));
+                        }
+                        return Ok(Value::Null);
+                    }
+                    "keys" => {
+                        return Ok(Value::List(Arc::new(
+                            dict.keys().map(|k| Value::String(k.clone())).collect::<Vec<Value>>(),
+                        )));
+                    }
+                    "values" => {
+                        return Ok(Value::List(Arc::new(
+                            dict.values().cloned().collect::<Vec<Value>>(),
+                        )));
+                    }
+                    _ => {}
+                }
+                self.dict_method(Arc::unwrap_or_clone(dict), method, values)
+            }
+            Value::String(value) => self.string_method(value, method, values),
+            Value::List(list) => {
+                // Borrowing fast paths for hot read-only methods: avoids
+                // deep-cloning shared containers on every call.
+                match method {
+                    "length" | "len" => return Ok(Value::Number(list.len() as f64)),
+                    "isEmpty" | "is_empty" => return Ok(Value::Bool(list.is_empty())),
+                    "first" => return Ok(list.first().cloned().unwrap_or(Value::Null)),
+                    "last" => return Ok(list.last().cloned().unwrap_or(Value::Null)),
+                    "contains" => {
+                        let needle = values.first().cloned().unwrap_or(Value::Null);
+                        return Ok(Value::Bool(list.iter().any(|v| *v == needle)));
+                    }
+                    _ => {}
+                }
+                if matches!(method, "push" | "pop") {
+                    if let (Some(expr), Some((inst, field))) =
+                        (object_expr, object_expr.and_then(|e2| self.list_target_field(e2)))
+                    {
+                        let result = self.list_method(list.as_ref().clone(), method, values.clone())?;
+                        let mut new_list = Arc::unwrap_or_clone(list);
+                        match method {
+                            "push" => {
+                                if let Some(item) = values.first() {
+                                    new_list.push(item.clone());
+                                }
+                            }
+                            _ => {
+                                new_list.pop();
+                            }
+                        }
+                        inst.lock().unwrap().fields.insert(field, Value::List(Arc::new(new_list)));
+                        return Ok(result);
+                    }
+                }
+                self.list_method(Arc::unwrap_or_clone(list), method, values)
+            }
+            Value::Number(n) => self.number_method(n, method, values),
+            Value::Bool(b) => match method {
+                "toString" | "to_string" => Ok(Value::String(b.to_string())),
+                _ => Err(format!("bool has no method: {method}")),
+            },
+            other => Err(format!(
+                "{} has no method: {method}",
+                other.type_name()
+            )),
+        }
+    }
+
     fn call_method(
         &mut self,
         instance: InstanceRef,
@@ -6474,6 +6602,7 @@ let function = self
             self.classes.insert(qualified, class);
             // Also add to the errors dict so errors.MyErr works
             if let Some(Value::Dict(errors_dict)) = self.vars.get_mut("errors") {
+                let errors_dict = Arc::make_mut(errors_dict);
                 errors_dict.insert(name, Value::String(message));
             }
         }
@@ -6641,7 +6770,7 @@ let function = self
                     let Value::List(items) = self.eval(e)? else {
                         return Err("for requires a list".into());
                     };
-                    for item in items {
+                    for item in items.iter().cloned() {
                         self.bind_let(n, item);
                         match self.exec(body)? {
                             Flow::Normal | Flow::Continue => {}
@@ -6684,9 +6813,10 @@ let function = self
                         None
                     } else {
                         std::env::set_var("ZEN_DBG_FN", format!("stmt:{name}"));
-                        let bc = crate::bytecode::compile_function(name, &names, &captured_names, body).ok();
-                        std::env::remove_var("ZEN_DBG_FN");
-                        bc
+                        match crate::bytecode::compile_function(name, &names, &captured_names, body) {
+                            Ok(b) => Some(b),
+                            Err(_) => None
+                        }
                     };
                     let function = Function {
                         params: params.clone(),
@@ -6764,7 +6894,7 @@ let function = self
                         // must find vars["string"], not vars["st"]).
                         if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned() {
                             let mut map: HashMap<String, Value> = HashMap::new();
-                            for (k, v) in existing {
+                            for (k, v) in Arc::unwrap_or_clone(existing) {
                                 map.insert(k, v);
                             }
                             // Also try to load the .zen file and merge exports
@@ -6777,7 +6907,7 @@ let function = self
                             }
                             self.imported_modules.insert(name.clone(), map.clone());
                             let btree: BTreeMap<String, Value> = map.into_iter().collect();
-                            self.vars.insert(name, Value::Dict(btree));
+                            self.vars.insert(name, Value::Dict(Arc::new(btree)));
                             continue;
                         }
                         // Check if it's a dotted submodule (e.g. pkg.sub -> parent.sub)
@@ -6789,7 +6919,7 @@ let function = self
                                 if let Some(child_val) = parent_mod.get(child) {
                                     if let Value::Dict(d) = child_val {
                                         let mut map = HashMap::new();
-                                        for (k, v) in d.clone() {
+                                        for (k, v) in (**d).clone() {
                                             map.insert(k, v);
                                         }
                                         self.imported_modules.insert(name, map);
@@ -6803,7 +6933,7 @@ let function = self
                             let mod_val = factory();
                             if let Value::Dict(d) = &mod_val {
                                 let mut map = HashMap::new();
-                                for (k, v) in d {
+                                for (k, v) in (**d).clone() {
                                     map.insert(k.clone(), v.clone());
                                 }
                                 self.imported_modules.insert(name.clone(), map);
@@ -6833,24 +6963,24 @@ let function = self
                             let parts: Vec<&str> = module.split('.').collect();
                             let leaf: BTreeMap<String, Value> =
                                 vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            let mut acc = Value::Dict(leaf);
+                            let mut acc = Value::Dict(Arc::new(leaf));
                             // Nest every segment after the root var name,
                             // left-to-right: pkg.sub.mod -> {sub: {mod: exports}}.
                             for p in parts.iter().skip(1).rev() {
                                 let mut m = BTreeMap::new();
                                 m.insert(p.to_string(), acc);
-                                acc = Value::Dict(m);
+                                acc = Value::Dict(Arc::new(m));
                             }
                             let root = parts[0];
                             match self.vars.get(root).cloned() {
                                 Some(Value::Dict(existing)) => {
-                                    let mut merged = existing;
+                                    let mut merged = Arc::unwrap_or_clone(existing);
                                     if let Value::Dict(newm) = &acc {
-                                        for (k, v) in newm {
+                                        for (k, v) in (**newm).clone() {
                                             merged.entry(k.clone()).or_insert(v.clone());
                                         }
                                     }
-                                    self.vars.insert(root.to_string(), Value::Dict(merged));
+                                    self.vars.insert(root.to_string(), Value::Dict(Arc::new(merged)));
                                 }
                                 _ => {
                                     self.vars.insert(root.to_string(), acc);
@@ -6859,14 +6989,14 @@ let function = self
                             if let Some(a) = &alias {
                                 let dict: BTreeMap<String, Value> =
                                     vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                                self.vars.insert(a.clone(), Value::Dict(dict));
+                                self.vars.insert(a.clone(), Value::Dict(Arc::new(dict)));
                             }
                         } else if alias.is_some() {
                             // Bind the loaded module under the alias so direct
                             // member access (`alias.func()`) works.
                             let dict: BTreeMap<String, Value> =
                                 vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            self.vars.insert(name.clone(), Value::Dict(dict));
+                            self.vars.insert(name.clone(), Value::Dict(Arc::new(dict)));
                         }
                         self.imported_modules.insert(name, vars);
                     }
@@ -6875,13 +7005,13 @@ let function = self
                 StmtKind::FromImport(module, items) => {
                     let vars = if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned()
                     {
-                        existing.into_iter().collect()
+                        Arc::unwrap_or_clone(existing).into_iter().collect()
                     } else if let Some(map) = self.imported_modules.get(module.as_str()).cloned() {
                         map.into_iter().collect()
                     } else if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
                         let mod_val = factory();
                         if let Value::Dict(d) = &mod_val {
-                            d.clone().into_iter().collect()
+                            (**d).clone().into_iter().collect()
                         } else {
                             HashMap::new()
                         }
@@ -6909,7 +7039,7 @@ let function = self
                                         map.insert(k.clone(), v.clone());
                                     }
                                     self.imported_modules.insert(sub_name.clone(), map);
-                                    Value::Dict(sub_vars.into_iter().collect())
+                                    Value::Dict(Arc::new(sub_vars.into_iter().collect::<BTreeMap<String, Value>>()))
                                 }
                                 Err(_) => {
                                     return Err(format!("item '{}' not found in module '{}'\n  \x1b[1;33m= help:\x1b[0m check the module's available exports with `from {} import *`", item, module, module));
@@ -6924,13 +7054,13 @@ let function = self
                 StmtKind::StarImport(module) => {
                     let vars = if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned()
                     {
-                        existing.into_iter().collect()
+                        Arc::unwrap_or_clone(existing).into_iter().collect()
                     } else if let Some(map) = self.imported_modules.get(module.as_str()).cloned() {
                         map.into_iter().collect()
                     } else if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
                         let mod_val = factory();
                         if let Value::Dict(d) = &mod_val {
-                            d.clone().into_iter().collect()
+                            (**d).clone().into_iter().collect()
                         } else {
                             HashMap::new()
                         }
@@ -7039,7 +7169,7 @@ let function = self
                         }
                         Value::Dict(dict) => {
                             let mut dict = dict;
-                            dict.insert(member.clone(), self.eval(value)?);
+                            Arc::make_mut(&mut dict).insert(member.clone(), self.eval(value)?);
                             // Only persist if assigned to a named variable
                             if let Expr::Var(name) = object {
                                 self.vars.insert(name.clone(), Value::Dict(dict));
@@ -7059,7 +7189,7 @@ let function = self
                                 Value::String(s) => s,
                                 _ => return Err("dictionary index must be a string".into()),
                             };
-                            dict.insert(key, new_val);
+                            Arc::make_mut(&mut dict).insert(key, new_val);
                             if let Expr::Var(name) = object {
                                 self.vars.insert(name.clone(), Value::Dict(dict));
                             }
@@ -7075,7 +7205,7 @@ let function = self
                             if i < 0 || i as usize >= list.len() {
                                 return Err("list index out of bounds".into());
                             }
-                            list[i as usize] = new_val;
+                            Arc::make_mut(&mut list)[i as usize] = new_val;
                             if let Expr::Var(name) = object {
                                 self.vars.insert(name.clone(), Value::List(list));
                             }
@@ -7191,11 +7321,12 @@ let function = self
         map.insert("file".into(), Value::String(self.file.clone()));
         map.insert("line".into(), Value::Number(0.0));
         map.insert("col".into(), Value::Number(0.0));
-        Value::Dict(map)
+        Value::Dict(Arc::new(map))
     }
     fn to_error(&self, value: Value, line: usize, col: usize) -> Value {
         match value {
             Value::Dict(mut map) => {
+                let mut map = (*map).clone();
                 map.entry("type".into())
                     .or_insert_with(|| Value::String("Error".into()));
                 map.entry("message".into())
@@ -7206,7 +7337,7 @@ let function = self
                     .or_insert_with(|| Value::Number(line as f64));
                 map.entry("col".into())
                     .or_insert_with(|| Value::Number(col as f64));
-                Value::Dict(map)
+                Value::Dict(Arc::new(map))
             }
             Value::Instance(instance) => {
                 // `throw new MyError("msg")` — carry the class name and message.
@@ -7226,7 +7357,7 @@ let function = self
                 map.insert("file".into(), Value::String(self.file.clone()));
                 map.insert("line".into(), Value::Number(line as f64));
                 map.insert("col".into(), Value::Number(col as f64));
-                Value::Dict(map)
+                Value::Dict(Arc::new(map))
             }
             other => {
                 let mut map = BTreeMap::new();
@@ -7235,7 +7366,7 @@ let function = self
                 map.insert("file".into(), Value::String(self.file.clone()));
                 map.insert("line".into(), Value::Number(line as f64));
                 map.insert("col".into(), Value::Number(col as f64));
-                Value::Dict(map)
+                Value::Dict(Arc::new(map))
             }
         }
     }
@@ -7348,7 +7479,7 @@ fn numbers_from_args(args: Vec<Value>) -> Result<Vec<f64>, String> {
         match arg {
             Value::Number(n) => values.push(n),
             Value::List(items) => {
-                for item in items {
+                for item in items.iter().cloned() {
                     match item {
                         Value::Number(n) => values.push(n),
                         _ => return Err("statistics expects numbers".into()),
@@ -7565,7 +7696,7 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
             Value::String(s) => body = Some(s.clone()),
             Value::Dict(opts) => {
                 if let Some(Value::Dict(h)) = opts.get("headers") {
-                    for (k, v) in h {
+                    for (k, v) in (**h).clone() {
                         headers.insert(k.clone(), v.to_string());
                     }
                 }
@@ -7626,11 +7757,11 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
     let mut result = BTreeMap::new();
     result.insert("status".into(), Value::Number(status));
     result.insert("ok".into(), Value::Bool(status >= 200.0 && status < 400.0));
-    result.insert("headers".into(), Value::Dict(header_dict));
+    result.insert("headers".into(), Value::Dict(Arc::new(header_dict)));
     result.insert("__id".into(), Value::Number(id as f64));
     result.insert("json".into(), Value::NativeFunction("__http_response_json".into()));
     result.insert("text".into(), Value::NativeFunction("__http_response_text".into()));
-    Ok(Value::Dict(result))
+    Ok(Value::Dict(Arc::new(result)))
 }
 
 fn next_response_id() -> u64 {
@@ -7853,7 +7984,7 @@ fn csv_parse_impl(text: &str) -> Value {
                 }
                 row.push(Value::String(std::mem::take(&mut field)));
                 if !(row.len() == 1 && row[0].to_string().is_empty()) {
-                    rows.push(Value::List(std::mem::take(&mut row)));
+                    rows.push(Value::List(Arc::new(std::mem::take(&mut row))));
                 } else {
                     row.clear();
                 }
@@ -7863,9 +7994,9 @@ fn csv_parse_impl(text: &str) -> Value {
     }
     if !field.is_empty() || !row.is_empty() {
         row.push(Value::String(field));
-        rows.push(Value::List(row));
+        rows.push(Value::List(Arc::new(row)));
     }
-    Value::List(rows)
+    Value::List(Arc::new(rows))
 }
 
 fn csv_field(v: &Value) -> String {
@@ -7924,14 +8055,14 @@ fn arg_number(args: &[Value], i: usize) -> Result<f64, String> {
 
 fn arg_dict(args: &[Value], i: usize) -> Result<BTreeMap<String, Value>, String> {
     match args.get(i) {
-        Some(Value::Dict(d)) => Ok(d.clone()),
+        Some(Value::Dict(d)) => Ok((**d).clone()),
         _ => Err(format!("argument {} must be a dict", i + 1)),
     }
 }
 
 fn arg_list(args: &[Value], i: usize) -> Result<Vec<Value>, String> {
     match args.get(i) {
-        Some(Value::List(l)) => Ok(l.clone()),
+        Some(Value::List(l)) => Ok((**l).clone()),
         _ => Err(format!("argument {} must be a list", i + 1)),
     }
 }
@@ -8645,7 +8776,7 @@ fn crunch_pattern_impl(template: &str) -> Result<Value, String> {
     }
 
     if elems.is_empty() {
-        return Ok(Value::List(vec![Value::String(template.to_string())]));
+        return Ok(Value::List(Arc::new(vec![Value::String(template.to_string())])));
     }
 
     // Find first Range, expand it into sub-templates, recurse
@@ -8664,12 +8795,12 @@ fn crunch_pattern_impl(template: &str) -> Result<Value, String> {
                 let sub = crunch_expand_elems(&sub_elems)?;
                 all.extend(sub);
             }
-            return Ok(Value::List(all));
+            return Ok(Value::List(Arc::new(all)));
         }
     }
 
     // No ranges — single cartesian product
-    Ok(Value::List(crunch_expand_elems(&elems)?))
+    Ok(Value::List(Arc::new(crunch_expand_elems(&elems)?)))
 }
 
 fn crunch_expand_elems(elems: &[CrunchElem]) -> Result<Vec<Value>, String> {
@@ -8812,7 +8943,7 @@ fn dns_query_impl(name: &str, rtype: &str) -> Result<Vec<Value>, String> {
         rec.insert("type".into(), Value::String(dns_type_name(rtype).into()));
         rec.insert("ttl".into(), Value::Number(ttl as f64));
         rec.insert("data".into(), Value::String(data));
-        results.push(Value::Dict(rec));
+        results.push(Value::Dict(Arc::new(rec)));
     }
     Ok(results)
 }
@@ -8858,7 +8989,7 @@ fn parse_packet(data: &[u8]) -> Value {
                         Value::String(String::from_utf8_lossy(&payload[data_offset..]).into_owned()),
                     );
                 }
-                Value::Dict(tcp_layer)
+                Value::Dict(Arc::new(tcp_layer))
             }
         }
         17 => {
@@ -8878,7 +9009,7 @@ fn parse_packet(data: &[u8]) -> Value {
                         Value::String(String::from_utf8_lossy(&payload[8..]).into_owned()),
                     );
                 }
-                Value::Dict(udp_layer)
+                Value::Dict(Arc::new(udp_layer))
             }
         }
         1 => {
@@ -8896,7 +9027,7 @@ fn parse_packet(data: &[u8]) -> Value {
                         Value::String(String::from_utf8_lossy(&payload[4..]).into_owned()),
                     );
                 }
-                Value::Dict(icmp_layer)
+                Value::Dict(Arc::new(icmp_layer))
             }
         }
         _ => {
@@ -8905,7 +9036,7 @@ fn parse_packet(data: &[u8]) -> Value {
                 let mut raw = BTreeMap::new();
                 raw.insert("type".into(), Value::String("Raw".into()));
                 raw.insert("data".into(), Value::String(hexlify(payload)));
-                Value::Dict(raw)
+                Value::Dict(Arc::new(raw))
             } else {
                 Value::Null
             }
@@ -8914,7 +9045,7 @@ fn parse_packet(data: &[u8]) -> Value {
     if !matches!(inner, Value::Null) {
         ip_layer.insert("payload".into(), inner);
     }
-    Value::Dict(ip_layer)
+    Value::Dict(Arc::new(ip_layer))
 }
 
 fn sniff_packets(count: u32, timeout_secs: u64) -> Result<Value, String> {
@@ -8961,7 +9092,7 @@ fn sniff_packets(count: u32, timeout_secs: u64) -> Result<Value, String> {
         }
     }
     unsafe { libc::close(fd) };
-    Ok(Value::List(packets))
+    Ok(Value::List(Arc::new(packets)))
 }
 
 fn pack_value(values: &[Value], vi: &mut usize) -> Result<f64, String> {
@@ -9106,7 +9237,7 @@ fn unpack_impl(fmt: &str, data: &[u8]) -> Result<Value, String> {
             }
         }
     }
-    Ok(Value::List(out))
+    Ok(Value::List(Arc::new(out)))
 }
 
 fn crypto_digest(data: &str, algo: &str) -> String {
@@ -9201,7 +9332,7 @@ fn permutations(
     out: &mut Vec<Value>,
 ) {
     if current.len() == r {
-        out.push(Value::List(current.clone()));
+        out.push(Value::List(Arc::new(current.clone())));
         return;
     }
     for i in 0..list.len() {
@@ -9218,7 +9349,7 @@ fn permutations(
 
 fn combinations(list: &[Value], r: usize, start: usize, current: &mut Vec<Value>, out: &mut Vec<Value>) {
     if current.len() == r {
-        out.push(Value::List(current.clone()));
+        out.push(Value::List(Arc::new(current.clone())));
         return;
     }
     for i in start..list.len() {
@@ -9317,7 +9448,7 @@ fn native_for(name: &str) -> NativeFunc {
             let n = socket.lock().unwrap().read(&mut buffer)
                 .map_err(|e| format!("failed to recv: {e}"))?;
             let data = buffer[..n].to_vec();
-            Ok(Value::List(data.iter().map(|b| Value::Number(*b as f64)).collect()))
+            Ok(Value::List(Arc::new(data.iter().map(|b| Value::Number(*b as f64)).collect::<Vec<Value>>())))
         },
         "socket_recv_text" => |args| {
             let (socket, size) = match args.as_slice() {
@@ -9379,11 +9510,11 @@ fn native_for(name: &str) -> NativeFunc {
                 .map_err(|e| format!("failed to recv_from: {e}"))?;
             let data = buf[..n].to_vec();
             let bytes: Vec<Value> = data.iter().map(|b| Value::Number(*b as f64)).collect();
-            Ok(Value::Dict(BTreeMap::from([
-                ("data".into(), Value::List(bytes)),
+            Ok(Value::Dict(Arc::new(BTreeMap::from([
+                ("data".into(), Value::List(Arc::new(bytes))),
                 ("addr".into(), Value::String(addr.to_string())),
                 ("text".into(), Value::String(String::from_utf8_lossy(&data).into_owned())),
-            ])))
+            ]))))
         },
         "socket_recv_all" => |args| {
             let socket = match &args[0] {
@@ -9455,7 +9586,7 @@ fn native_for(name: &str) -> NativeFunc {
                     Err(_) => {}
                 }
             }
-            Ok(Value::List(open_ports))
+            Ok(Value::List(Arc::new(open_ports)))
         },
         "time_now" => |_| {
             let start = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();
@@ -9463,7 +9594,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "cli_args" => |_| {
             let args: Vec<Value> = env::args().map(|s| Value::String(s)).collect();
-            Ok(Value::List(args))
+            Ok(Value::List(Arc::new(args)))
         },
         "fs_read" => |args| {
             let path = match args.first() {
@@ -9501,7 +9632,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .filter_map(|e| e.ok())
                 .map(|e| Value::String(e.file_name().to_string_lossy().into()))
                 .collect();
-            Ok(Value::List(items))
+            Ok(Value::List(Arc::new(items)))
         },
         "fs_append" => |args| {
             let (path, content) = match args.as_slice() {
@@ -9592,7 +9723,7 @@ fn native_for(name: &str) -> NativeFunc {
             };
             let results = regex_find_all(pattern, text);
             let items: Vec<Value> = results.into_iter().map(Value::String).collect();
-            Ok(Value::List(items))
+            Ok(Value::List(Arc::new(items)))
         },
         "regex_replace" => |args| {
             let (pattern, text, replacement) = match args.as_slice() {
@@ -9654,7 +9785,7 @@ fn native_for(name: &str) -> NativeFunc {
                 _ => return Err("random.shuffle expects a list".into()),
             };
             let mut items = items;
-            items.shuffle(&mut rand::rng());
+            Arc::make_mut(&mut items).shuffle(&mut rand::rng());
             Ok(Value::List(items))
         },
         "random_seed" => |_args| Ok(Value::Null),
@@ -9692,7 +9823,7 @@ fn native_for(name: &str) -> NativeFunc {
             let result: Vec<Value> = (0..k)
                 .map(|_| items[rng.random_range(0..items.len())].clone())
                 .collect();
-            Ok(Value::List(result))
+            Ok(Value::List(Arc::new(result)))
         },
         "random_sample" => |args| {
             use rand::seq::SliceRandom;
@@ -9700,10 +9831,10 @@ fn native_for(name: &str) -> NativeFunc {
                 [Value::List(items), Value::Number(k)] => (items, *k as usize),
                 _ => return Err("random.sample expects (sequence, k)".into()),
             };
-            let mut pool = items.clone();
+            let mut pool = (**items).clone();
             pool.shuffle(&mut rand::rng());
             pool.truncate(k);
-            Ok(Value::List(pool))
+            Ok(Value::List(Arc::new(pool)))
         },
         "random_uniform" => |args| {
             use rand::Rng;
@@ -9775,7 +9906,7 @@ fn native_for(name: &str) -> NativeFunc {
                 match v {
                     Value::Number(n) => nums.push(n),
                     Value::List(items) => {
-                        for item in items {
+                        for item in items.iter().cloned() {
                             if let Value::Number(n) = item {
                                 nums.push(n);
                             }
@@ -9795,7 +9926,7 @@ fn native_for(name: &str) -> NativeFunc {
                 match v {
                     Value::Number(n) => nums.push(n),
                     Value::List(items) => {
-                        for item in items {
+                        for item in items.iter().cloned() {
                             if let Value::Number(n) = item {
                                 nums.push(n);
                             }
@@ -9985,7 +10116,7 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::Number(n)) => n,
                 _ => return Err("math.modf expects number".into()),
             };
-            Ok(Value::List(vec![Value::Number(n.fract()), Value::Number(n.trunc())]))
+            Ok(Value::List(Arc::new(vec![Value::Number(n.fract()), Value::Number(n.trunc())])))
         },
         "math_frexp" => |args| {
             let n = match args.first() {
@@ -9993,11 +10124,11 @@ fn native_for(name: &str) -> NativeFunc {
                 _ => return Err("math.frexp expects number".into()),
             };
             if *n == 0.0 {
-                return Ok(Value::List(vec![Value::Number(0.0), Value::Number(0.0)]));
+                return Ok(Value::List(Arc::new(vec![Value::Number(0.0), Value::Number(0.0)])));
             }
             let exponent = n.abs().log2().floor() as i32 + 1;
             let mantissa = n / 2f64.powi(exponent);
-            Ok(Value::List(vec![Value::Number(mantissa), Value::Number(exponent as f64)]))
+            Ok(Value::List(Arc::new(vec![Value::Number(mantissa), Value::Number(exponent as f64)])))
         },
         "math_ldexp" => |args| {
             let (x, exp) = match args.as_slice() {
@@ -10142,7 +10273,7 @@ fn native_for(name: &str) -> NativeFunc {
             result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
             result.insert("stdout".into(), Value::String(stdout));
             result.insert("stderr".into(), Value::String(stderr));
-            Ok(Value::Dict(result))
+            Ok(Value::Dict(Arc::new(result)))
         },
         "os_run" => |args| {
             let cmd = match args.first() {
@@ -10180,13 +10311,13 @@ fn native_for(name: &str) -> NativeFunc {
             result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
             result.insert("stdout".into(), Value::String(String::from_utf8_lossy(&output.stdout).to_string()));
             result.insert("stderr".into(), Value::String(String::from_utf8_lossy(&output.stderr).to_string()));
-            Ok(Value::Dict(result))
+            Ok(Value::Dict(Arc::new(result)))
         },
         "os_args" => |_| {
             let args: Vec<Value> = std::env::args().skip(1)
                 .map(|a| Value::String(a))
                 .collect();
-            Ok(Value::List(args))
+            Ok(Value::List(Arc::new(args)))
         },
         "os_pids" => |_| {
             let mut pids = Vec::new();
@@ -10201,7 +10332,7 @@ fn native_for(name: &str) -> NativeFunc {
                     }
                 }
             }
-            Ok(Value::List(pids))
+            Ok(Value::List(Arc::new(pids)))
         },
         "os_kill" => |args| {
             let pid = arg_number(&args, 0)? as i32;
@@ -10506,7 +10637,7 @@ fn native_for(name: &str) -> NativeFunc {
             let re = regex::Regex::new(pattern)
                 .map_err(|e| format!("invalid regex: {e}"))?;
             let parts: Vec<Value> = re.split(text).map(|s| Value::String(s.to_string())).collect();
-            Ok(Value::List(parts))
+            Ok(Value::List(Arc::new(parts)))
         },
         "fs_read_binary" => |args| {
             let path = match args.first() {
@@ -10619,7 +10750,7 @@ fn native_for(name: &str) -> NativeFunc {
                     }
                 }
             }
-            Ok(Value::List(results))
+            Ok(Value::List(Arc::new(results)))
         },
         "fs_join" => |args| {
             let parts: Vec<String> = args
@@ -10769,7 +10900,7 @@ fn native_for(name: &str) -> NativeFunc {
                 }
                 _ => return Err("csv.write expects (path, rows, headers?)".into()),
             };
-            let encoded = csv_encode_impl(rows, headers);
+            let encoded = csv_encode_impl(rows.as_ref(), headers.map(|h| h.as_ref()));
             fs::write(path, encoded).map_err(|e| format!("csv.write {path}: {e}"))?;
             Ok(Value::Bool(true))
         },
@@ -10779,7 +10910,7 @@ fn native_for(name: &str) -> NativeFunc {
                 [Value::List(rows), Value::List(headers)] => (rows, Some(headers)),
                 _ => return Err("csv.encode expects (rows, headers?)".into()),
             };
-            Ok(Value::String(csv_encode_impl(rows, headers)))
+            Ok(Value::String(csv_encode_impl(rows.as_ref(), headers.map(|h| h.as_ref()))))
         },
         "decimal_decimal" => |args| {
             let v = match args.first() {
@@ -10787,16 +10918,16 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::String(s)) => s.clone(),
                 _ => return Err("decimal.Decimal expects a number".into()),
             };
-            Ok(Value::Dict(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(BTreeMap::from([
                 ("value".into(), Value::String(v.clone())),
                 ("__repr__".into(), Value::String(format!("Decimal({v})"))),
-            ])))
+            ]))))
         },
         "decimal_getcontext" => |_| {
-            Ok(Value::Dict(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(BTreeMap::from([
                 ("prec".into(), Value::Number(28.0)),
                 ("rounding".into(), Value::String("ROUND_HALF_EVEN".into())),
-            ])))
+            ]))))
         },
         "decimal_setcontext" | "decimal_localcontext" => |_| Ok(Value::Null),
         "threading_start" => |args| {
@@ -10815,10 +10946,10 @@ fn native_for(name: &str) -> NativeFunc {
                 }
                 let _ = vm.call(&name_clone, Vec::new());
             });
-            Ok(Value::Dict(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(BTreeMap::from([
                 ("name".into(), Value::String(format!("Thread-{name}"))),
                 ("daemon".into(), Value::Bool(true)),
-            ])))
+            ]))))
         },
         "browser_launch" => |args| crate::state::browser_launch(&args),
         "browser_connect" => |_| crate::state::browser_connect(),
@@ -10881,7 +11012,7 @@ fn native_for(name: &str) -> NativeFunc {
                             let mut result = BTreeMap::new();
                             result.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
                             result.insert("addr".into(), Value::String(addr.to_string()));
-                            return Ok(Value::Dict(result));
+                            return Ok(Value::Dict(Arc::new(result)));
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             if start.elapsed() >= dur {
@@ -10898,7 +11029,7 @@ fn native_for(name: &str) -> NativeFunc {
             let mut result = BTreeMap::new();
             result.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             result.insert("addr".into(), Value::String(addr.to_string()));
-            Ok(Value::Dict(result))
+            Ok(Value::Dict(Arc::new(result)))
         },
         "ftp_connect" => |args| {
             let host = arg_string(&args, 0)?;
@@ -10919,7 +11050,7 @@ fn native_for(name: &str) -> NativeFunc {
             let mut session = BTreeMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
-            Ok(Value::Dict(session))
+            Ok(Value::Dict(Arc::new(session)))
         },
         "ftp_login" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11003,7 +11134,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .filter(|l| !l.trim().is_empty())
                 .map(|l| Value::String(l.to_string()))
                 .collect();
-            Ok(Value::List(names))
+            Ok(Value::List(Arc::new(names)))
         },
         "ftp_cwd" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11135,7 +11266,7 @@ fn native_for(name: &str) -> NativeFunc {
             let mut session = BTreeMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
-            Ok(Value::Dict(session))
+            Ok(Value::Dict(Arc::new(session)))
         },
         "smtp_login" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11247,7 +11378,7 @@ fn native_for(name: &str) -> NativeFunc {
             let mut session = BTreeMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
-            Ok(Value::Dict(session))
+            Ok(Value::Dict(Arc::new(session)))
         },
         "pop3_stat" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11263,7 +11394,7 @@ fn native_for(name: &str) -> NativeFunc {
             let mut out = BTreeMap::new();
             out.insert("count".into(), Value::Number(count));
             out.insert("size".into(), Value::Number(size));
-            Ok(Value::Dict(out))
+            Ok(Value::Dict(Arc::new(out)))
         },
         "pop3_list" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11282,10 +11413,10 @@ fn native_for(name: &str) -> NativeFunc {
                 if parts.len() >= 2 && parts[0] != "+OK" {
                     let id = parts[0].parse::<f64>().unwrap_or(0.0);
                     let size = parts.get(1).and_then(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
-                    items.push(Value::List(vec![Value::Number(id), Value::Number(size)]));
+                    items.push(Value::List(Arc::new(vec![Value::Number(id), Value::Number(size)])));
                 }
             }
-            Ok(Value::List(items))
+            Ok(Value::List(Arc::new(items)))
         },
         "pop3_retr" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11355,7 +11486,7 @@ fn native_for(name: &str) -> NativeFunc {
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             session.insert("tag".into(), Value::Number(2.0));
-            Ok(Value::Dict(session))
+            Ok(Value::Dict(Arc::new(session)))
         },
         "imap_select" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11388,7 +11519,7 @@ fn native_for(name: &str) -> NativeFunc {
                     }
                 }
             }
-            Ok(Value::List(ids))
+            Ok(Value::List(Arc::new(ids)))
         },
         "imap_fetch" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11423,9 +11554,9 @@ fn native_for(name: &str) -> NativeFunc {
                 }
             }
             let mut out = BTreeMap::new();
-            out.insert("flags".into(), Value::List(flags));
+            out.insert("flags".into(), Value::List(Arc::new(flags)));
             out.insert("body".into(), Value::String(body));
-            Ok(Value::Dict(out))
+            Ok(Value::Dict(Arc::new(out)))
         },
         "imap_list" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11446,7 +11577,7 @@ fn native_for(name: &str) -> NativeFunc {
                     }
                 }
             }
-            Ok(Value::List(boxes))
+            Ok(Value::List(Arc::new(boxes)))
         },
         "imap_logout" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11472,7 +11603,7 @@ fn native_for(name: &str) -> NativeFunc {
             let mut session = BTreeMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
-            Ok(Value::Dict(session))
+            Ok(Value::Dict(Arc::new(session)))
         },
         "telnet_write" => |args| {
             let stream = session_socket(&args[0])?;
@@ -11533,7 +11664,7 @@ fn native_for(name: &str) -> NativeFunc {
                     }
                 }
             }
-            Ok(Value::List(ips))
+            Ok(Value::List(Arc::new(ips)))
         },
         "dns_query" => |args| {
             let name = arg_string(&args, 0)?;
@@ -11541,7 +11672,7 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::String(s)) => s.clone(),
                 _ => "A".into(),
             };
-            Ok(Value::List(dns_query_impl(&name, &rtype)?))
+            Ok(Value::List(Arc::new(dns_query_impl(&name, &rtype)?)))
         },
         "ssh_run" => |args| {
             let opts = arg_dict(&args, 0)?;
@@ -11659,7 +11790,7 @@ fn native_for(name: &str) -> NativeFunc {
             if let Some(Value::Dict(p)) = args.get(3) {
                 layer.insert("payload".into(), Value::Dict(p.clone()));
             }
-            Ok(Value::Dict(layer))
+            Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_tcp" => |args| {
             let mut layer = BTreeMap::new();
@@ -11673,7 +11804,7 @@ fn native_for(name: &str) -> NativeFunc {
             if let Some(Value::Dict(p)) = args.get(2) {
                 layer.insert("payload".into(), Value::Dict(p.clone()));
             }
-            Ok(Value::Dict(layer))
+            Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_udp" => |args| {
             let mut layer = BTreeMap::new();
@@ -11687,7 +11818,7 @@ fn native_for(name: &str) -> NativeFunc {
             if let Some(Value::Dict(p)) = args.get(2) {
                 layer.insert("payload".into(), Value::Dict(p.clone()));
             }
-            Ok(Value::Dict(layer))
+            Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_icmp" => |args| {
             let mut layer = BTreeMap::new();
@@ -11701,31 +11832,31 @@ fn native_for(name: &str) -> NativeFunc {
             if let Some(Value::Dict(p)) = args.get(2) {
                 layer.insert("payload".into(), Value::Dict(p.clone()));
             }
-            Ok(Value::Dict(layer))
+            Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_raw" => |args| {
             let data = arg_string(&args, 0)?;
             let mut layer = BTreeMap::new();
             layer.insert("type".into(), Value::String("Raw".into()));
             layer.insert("data".into(), Value::String(data));
-            Ok(Value::Dict(layer))
+            Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_build" => |args| {
             let layer = arg_dict(&args, 0)?;
             let bytes = layer_bytes(&layer)?;
-            Ok(Value::List(bytes.iter().map(|b| Value::Number(*b as f64)).collect()))
+            Ok(Value::List(Arc::new(bytes.iter().map(|b| Value::Number(*b as f64)).collect::<Vec<Value>>())))
         },
         "scapy_parse" => |args| {
             let data: Vec<u8> = match args.first() {
                 Some(Value::List(items)) => {
                     let mut bytes = Vec::with_capacity(items.len());
-                    for item in items {
+                    for item in items.iter().cloned() {
                         match item {
                             Value::Number(n) => {
-                                if *n < 0.0 || *n > 255.0 || n.fract() != 0.0 {
+                                if n < 0.0 || n > 255.0 || n.fract() != 0.0 {
                                     return Err(format!("scapy.parse byte out of range (0-255): {n}"));
                                 }
-                                bytes.push(*n as u8);
+                                bytes.push(n as u8);
                             }
                             other => {
                                 return Err(format!("scapy.parse expects a list of byte numbers, got {other:?}"))
@@ -11747,13 +11878,13 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::Dict(_)) => layer_bytes(&arg_dict(&args, 0)?)?,
                 Some(Value::List(items)) => {
                     let mut bytes = Vec::with_capacity(items.len());
-                    for item in items {
+                    for item in items.iter().cloned() {
                         match item {
                             Value::Number(n) => {
-                                if *n < 0.0 || *n > 255.0 || n.fract() != 0.0 {
+                                if n < 0.0 || n > 255.0 || n.fract() != 0.0 {
                                     return Err(format!("scapy.send byte out of range (0-255): {n}"));
                                 }
-                                bytes.push(*n as u8);
+                                bytes.push(n as u8);
                             }
                             other => {
                                 return Err(format!("scapy.send expects a packet dict or a list of bytes, got {other:?}"))
@@ -11814,7 +11945,7 @@ fn native_for(name: &str) -> NativeFunc {
             for i in 0..count {
                 out.push(Value::String(u32_to_ip(network.wrapping_add(i as u32))));
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "scapy_subnet_hosts" => |args| {
             let network = arg_string(&args, 0)?;
@@ -11834,7 +11965,7 @@ fn native_for(name: &str) -> NativeFunc {
             for i in first..=last {
                 out.push(Value::String(u32_to_ip(i)));
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
 
         // ── bluetooth module ──────────────────────────────────────────
@@ -11859,7 +11990,7 @@ fn native_for(name: &str) -> NativeFunc {
             result.insert("up".into(), Value::Bool(up));
             result.insert("address".into(), Value::String(addr));
             result.insert("name".into(), Value::String(name));
-            Ok(Value::Dict(result))
+            Ok(Value::Dict(Arc::new(result)))
         },
         "bt_power" => |args| {
             let on = match args.first() {
@@ -11893,11 +12024,11 @@ fn native_for(name: &str) -> NativeFunc {
                         let mut d = BTreeMap::new();
                         d.insert("address".into(), Value::String(parts[0].to_string()));
                         d.insert("name".into(), Value::String(parts[1].trim().to_string()));
-                        devices.push(Value::Dict(d));
+                        devices.push(Value::Dict(Arc::new(d)));
                     }
                 }
             }
-            Ok(Value::List(devices))
+            Ok(Value::List(Arc::new(devices)))
         },
         "bt_scan_stop" => |_| {
             Command::new("bluetoothctl").arg("scan").arg("off").output()
@@ -11927,10 +12058,10 @@ fn native_for(name: &str) -> NativeFunc {
                     let mut d = BTreeMap::new();
                     d.insert("address".into(), Value::String(addr.to_string()));
                     d.insert("name".into(), Value::String(name.to_string()));
-                    devices.push(Value::Dict(d));
+                    devices.push(Value::Dict(Arc::new(d)));
                 }
             }
-            Ok(Value::List(devices))
+            Ok(Value::List(Arc::new(devices)))
         },
         "bt_pair" => |args| {
             let addr = arg_string(&args, 0)?;
@@ -12010,9 +12141,9 @@ fn native_for(name: &str) -> NativeFunc {
                 net.insert("speed".into(), Value::String(rate));
                 net.insert("signal".into(), Value::String(signal));
                 net.insert("security".into(), Value::String(security));
-                networks.push(Value::Dict(net));
+                networks.push(Value::Dict(Arc::new(net)));
             }
-            Ok(Value::List(networks))
+            Ok(Value::List(Arc::new(networks)))
         },
         "wifi_status" => |_| {
             let out = Command::new("nmcli").args(["-t", "-f", "WIFI", "general"]).output()
@@ -12035,7 +12166,7 @@ fn native_for(name: &str) -> NativeFunc {
                     }
                 }
             }
-            Ok(Value::Dict(result))
+            Ok(Value::Dict(Arc::new(result)))
         },
         "wifi_connect" => |args| {
             let ssid = arg_string(&args, 0)?;
@@ -12083,9 +12214,9 @@ fn native_for(name: &str) -> NativeFunc {
                 d.insert("type".into(), Value::String(parts[1].to_string()));
                 d.insert("state".into(), Value::String(parts[2].to_string()));
                 d.insert("connection".into(), Value::String(parts[3].to_string()));
-                ifaces.push(Value::Dict(d));
+                ifaces.push(Value::Dict(Arc::new(d)));
             }
-            Ok(Value::List(ifaces))
+            Ok(Value::List(Arc::new(ifaces)))
         },
         "wifi_list" => |_| {
             let out = Command::new("nmcli").args(["-t", "-f", "NAME,UUID,TYPE,DEVICE", "connection", "show"]).output()
@@ -12100,9 +12231,9 @@ fn native_for(name: &str) -> NativeFunc {
                 d.insert("name".into(), Value::String(parts[0].to_string()));
                 d.insert("uuid".into(), Value::String(parts[1].to_string()));
                 d.insert("device".into(), Value::String(parts[3].to_string()));
-                conns.push(Value::Dict(d));
+                conns.push(Value::Dict(Arc::new(d)));
             }
-            Ok(Value::List(conns))
+            Ok(Value::List(Arc::new(conns)))
         },
 
         // ── crunch module (Rust-native for speed) ─────────────────────
@@ -12142,7 +12273,7 @@ fn native_for(name: &str) -> NativeFunc {
                     break;
                 }
             }
-            Ok(Value::List(result.into_iter().map(|s| Value::String(s)).collect()))
+            Ok(Value::List(Arc::new(result.into_iter().map(|s| Value::String(s)).collect::<Vec<Value>>())))
         },
         "crunch_pattern" => |args| {
             let template = arg_string(&args, 0)?;
@@ -12214,7 +12345,7 @@ fn native_for(name: &str) -> NativeFunc {
             } else {
                 s.split(&sep).map(|p| Value::String(p.to_string())).collect()
             };
-            Ok(Value::List(parts))
+            Ok(Value::List(Arc::new(parts)))
         },
         "str_splitlines" => |args| {
             let s = arg_string(&args, 0)?;
@@ -12222,7 +12353,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .lines()
                 .map(|l| Value::String(l.to_string()))
                 .collect();
-            Ok(Value::List(parts))
+            Ok(Value::List(Arc::new(parts)))
         },
         "str_join" => |args| {
             let sep = arg_string(&args, 0)?;
@@ -12392,7 +12523,7 @@ fn native_for(name: &str) -> NativeFunc {
                 Value::String(s) => (s.clone(), None),
                 Value::List(l) => {
                     let mut parts = Vec::new();
-                    for v in l {
+                    for v in l.iter().cloned() {
                         parts.push(match v {
                             Value::String(s) => s.clone(),
                             other => other.to_string(),
@@ -12433,7 +12564,7 @@ fn native_for(name: &str) -> NativeFunc {
                 "stderr".into(),
                 Value::String(String::from_utf8_lossy(&output.stderr).into_owned()),
             );
-            Ok(Value::Dict(result))
+            Ok(Value::Dict(Arc::new(result)))
         },
         "subprocess_call" => |args| {
             let cmd_arg = args.first().cloned().ok_or("subprocess.call: missing command")?;
@@ -12530,10 +12661,10 @@ fn native_for(name: &str) -> NativeFunc {
                 "blake2s" => crypto_digest(&data, "blake2s"),
                 _ => return Err(format!("hashlib.new: unknown algorithm {algo}")),
             };
-            Ok(Value::Dict(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(BTreeMap::from([
                 ("hexdigest".into(), Value::String(digest)),
                 ("name".into(), Value::String(algo)),
-            ])))
+            ]))))
         },
         "shutil_copy" => |args| {
             let src = arg_string(&args, 0)?;
@@ -12611,7 +12742,7 @@ fn native_for(name: &str) -> NativeFunc {
                 out.insert("total".into(), Value::Number(total));
                 out.insert("used".into(), Value::Number(used));
                 out.insert("free".into(), Value::Number(free));
-                return Ok(Value::Dict(out));
+                return Ok(Value::Dict(Arc::new(out)));
             }
             #[cfg(not(unix))]
             {
@@ -12681,7 +12812,7 @@ fn native_for(name: &str) -> NativeFunc {
                 suffixes.insert(0, Value::String(rest[pos..].to_string()));
                 rest = &rest[..pos];
             }
-            Ok(Value::List(suffixes))
+            Ok(Value::List(Arc::new(suffixes)))
         },
         "pathlib_is_absolute" => |args| {
             let s = arg_string(&args, 0)?;
@@ -12741,7 +12872,7 @@ fn native_for(name: &str) -> NativeFunc {
                     }
                 }
             }
-            Ok(Value::List(results))
+            Ok(Value::List(Arc::new(results)))
         },
         "pathlib_touch" => |args| {
             let path = arg_string(&args, 0)?;
@@ -12846,7 +12977,7 @@ fn native_for(name: &str) -> NativeFunc {
             if !query.is_empty() {
                 out.insert("query".into(), Value::String(query.to_string()));
             }
-            Ok(Value::Dict(out))
+            Ok(Value::Dict(Arc::new(out)))
         },
         "urllib_parse_qs" => |args| {
             let query = arg_string(&args, 0)?;
@@ -12862,14 +12993,14 @@ fn native_for(name: &str) -> NativeFunc {
                 out.entry(url_unquote(k))
                     .and_modify(|e| {
                         if let Value::List(l) = e {
-                            l.push(Value::String(url_unquote(v)));
+                            Arc::make_mut(l).push(Value::String(url_unquote(v)));
                         }
                     })
                     .or_insert_with(|| {
-                        Value::List(vec![Value::String(url_unquote(v))])
+                        Value::List(Arc::new(vec![Value::String(url_unquote(v))]))
                     });
             }
-            Ok(Value::Dict(out))
+            Ok(Value::Dict(Arc::new(out)))
         },
         "collections_counter" => |args| {
             let items = arg_list(&args, 0)?;
@@ -12883,7 +13014,7 @@ fn native_for(name: &str) -> NativeFunc {
             for (k, v) in counts {
                 out.insert(k, Value::Number(v));
             }
-            Ok(Value::Dict(out))
+            Ok(Value::Dict(Arc::new(out)))
         },
         "collections_chain" => |args| {
             let mut out = Vec::new();
@@ -12894,21 +13025,21 @@ fn native_for(name: &str) -> NativeFunc {
                     out.push(arg.clone());
                 }
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "collections_flatten" => |args| {
             let list = arg_list(&args, 0)?;
             let mut out = Vec::new();
             flatten_list(&list, &mut out);
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "itertools_enumerate" => |args| {
             let list = arg_list(&args, 0)?;
             let mut out = Vec::new();
             for (i, item) in list.into_iter().enumerate() {
-                out.push(Value::List(vec![Value::Number(i as f64), item]));
+                out.push(Value::List(Arc::new(vec![Value::Number(i as f64), item])));
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "itertools_zip" => |args| {
             let a = arg_list(&args, 0)?;
@@ -12916,9 +13047,9 @@ fn native_for(name: &str) -> NativeFunc {
             let mut out = Vec::new();
             let n = a.len().min(b.len());
             for i in 0..n {
-                out.push(Value::List(vec![a[i].clone(), b[i].clone()]));
+                out.push(Value::List(Arc::new(vec![a[i].clone(), b[i].clone()])));
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "itertools_chain" => |args| {
             let mut out = Vec::new();
@@ -12927,7 +13058,7 @@ fn native_for(name: &str) -> NativeFunc {
                     out.extend(l.iter().cloned());
                 }
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "itertools_repeat" => |args| {
             let value = args.first().cloned().ok_or("itertools.repeat: missing value")?;
@@ -12935,7 +13066,7 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::Number(x)) => *x as usize,
                 _ => return Err("itertools.repeat: needs a count".into()),
             };
-            Ok(Value::List(vec![value; n]))
+            Ok(Value::List(Arc::new(vec![value; n])))
         },
         "itertools_product" => |args| {
             let a = arg_list(&args, 0)?;
@@ -12943,10 +13074,10 @@ fn native_for(name: &str) -> NativeFunc {
             let mut out = Vec::new();
             for x in &a {
                 for y in &b {
-                    out.push(Value::List(vec![x.clone(), y.clone()]));
+                    out.push(Value::List(Arc::new(vec![x.clone(), y.clone()])));
                 }
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "itertools_permutations" => |args| {
             let list = arg_list(&args, 0)?;
@@ -12956,14 +13087,14 @@ fn native_for(name: &str) -> NativeFunc {
             };
             let mut out = Vec::new();
             permutations(&list, r, &mut vec![], &mut vec![false; list.len()], &mut out);
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "itertools_combinations" => |args| {
             let list = arg_list(&args, 0)?;
             let r = arg_number(&args, 1)? as usize;
             let mut out = Vec::new();
             combinations(&list, r, 0, &mut vec![], &mut out);
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "itertools_accumulate" => |args| {
             let list = arg_list(&args, 0)?;
@@ -12982,17 +13113,17 @@ fn native_for(name: &str) -> NativeFunc {
                 }
                 out.push(Value::Number(acc));
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "itertools_take" => |args| {
             let n = arg_number(&args, 0)? as usize;
             let list = arg_list(&args, 1)?;
-            Ok(Value::List(list.into_iter().take(n).collect()))
+            Ok(Value::List(Arc::new(list.into_iter().take(n).collect::<Vec<Value>>())))
         },
         "itertools_drop" => |args| {
             let n = arg_number(&args, 0)? as usize;
             let list = arg_list(&args, 1)?;
-            Ok(Value::List(list.into_iter().skip(n).collect()))
+            Ok(Value::List(Arc::new(list.into_iter().skip(n).collect::<Vec<Value>>())))
         },
         "itertools_range" => |args| {
             let start = match args.first() {
@@ -13025,7 +13156,7 @@ fn native_for(name: &str) -> NativeFunc {
                     i += step;
                 }
             }
-            Ok(Value::List(out))
+            Ok(Value::List(Arc::new(out)))
         },
         "tempfile_dir" => |_| {
             Ok(Value::String(env::temp_dir().to_string_lossy().into_owned()))
@@ -15747,7 +15878,7 @@ impl<'a> JsonParser<'a> {
         let mut map = BTreeMap::new();
         if self.peek() == Some('}') {
             self.pos += 1;
-            return Ok(Value::Dict(map));
+            return Ok(Value::Dict(Arc::new(map)));
         }
         loop {
             let key = self.string()?;
@@ -15766,7 +15897,7 @@ impl<'a> JsonParser<'a> {
                 _ => return Err("expected ',' or '}}' in JSON object".into()),
             }
         }
-        Ok(Value::Dict(map))
+        Ok(Value::Dict(Arc::new(map)))
     }
 
     fn array(&mut self) -> Result<Value, String> {
@@ -15775,7 +15906,7 @@ impl<'a> JsonParser<'a> {
         let mut items = vec![];
         if self.peek() == Some(']') {
             self.pos += 1;
-            return Ok(Value::List(items));
+            return Ok(Value::List(Arc::new(items)));
         }
         loop {
             items.push(self.value()?);
@@ -15791,7 +15922,7 @@ impl<'a> JsonParser<'a> {
                 _ => return Err("expected ',' or ']' in JSON array".into()),
             }
         }
-        Ok(Value::List(items))
+        Ok(Value::List(Arc::new(items)))
     }
 }
 
@@ -15824,19 +15955,19 @@ mod tests {
         vm.exec(&program).unwrap();
         assert_eq!(
             vm.vars.get("up"),
-            Some(&Value::List(vec![
+            Some(&Value::List(Arc::new(vec![
                 Value::Number(1.0),
                 Value::Number(2.0),
                 Value::Number(3.0)
-            ]))
+            ])))
         );
         assert_eq!(
             vm.vars.get("down"),
-            Some(&Value::List(vec![
+            Some(&Value::List(Arc::new(vec![
                 Value::Number(2.0),
                 Value::Number(1.0),
                 Value::Number(0.0)
-            ]))
+            ])))
         );
     }
     #[test]

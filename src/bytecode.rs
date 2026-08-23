@@ -74,6 +74,18 @@ pub enum Opcode {
 
     // Functions
     Call,
+    // Method call on a stack target (arg1 = method-name const, arg2 = argc;
+    // pops target then args, pushes result). Enables obj.method(...) in
+    // compiled code.
+    CallMethod,
+    // Statement-position list mutation on a variable slot so the caller sees
+    // the change: arg1 = local slot. PushSlot pops the element to append;
+    // PopSlot pushes the removed element back onto the stack.
+    PushSlot,
+    PopSlot,
+    // Same, for globals (arg1 = name const).
+    PushGlobal,
+    PopGlobal,
     Return,
 
     // Print (arg1=count, arg2=sep const idx|u16::MAX, arg3=end const idx|u16::MAX)
@@ -496,6 +508,54 @@ impl FunctionCompiler {
                 Ok(())
             }
             StmtKind::Expr(e) => {
+                // Statement-position push/pop on a named variable must mutate
+                // the variable itself; route through dedicated slot opcodes.
+                if let Expr::Call(callee, args) = e {
+                    if let Expr::Member(obj, method) = callee.as_ref() {
+                        if matches!(method.as_str(), "push" | "pop") {
+                            if let Expr::Var(name) = obj.as_ref() {
+                                if let Some(&slot) = self.slots.get(name) {
+                                    match method.as_str() {
+                                        "push" => {
+                                            if args.len() != 1 {
+                                                return Err("push expects exactly one argument".into());
+                                            }
+                                            self.compile_expr(&args[0])?;
+                                            self.emit(Opcode::PushSlot, slot, 0, 0);
+                                        }
+                                        _ => {
+                                            if !args.is_empty() {
+                                                return Err("pop expects no arguments".into());
+                                            }
+                                            self.emit(Opcode::PopSlot, slot, 0, 0);
+                                            self.emit(Opcode::Pop, 0, 0, 0);
+                                        }
+                                    }
+                                    return Ok(());
+                                } else {
+                                    let ci = self.const_str(name);
+                                    match method.as_str() {
+                                        "push" => {
+                                            if args.len() != 1 {
+                                                return Err("push expects exactly one argument".into());
+                                            }
+                                            self.compile_expr(&args[0])?;
+                                            self.emit(Opcode::PushGlobal, ci, 0, 0);
+                                        }
+                                        _ => {
+                                            if !args.is_empty() {
+                                                return Err("pop expects no arguments".into());
+                                            }
+                                            self.emit(Opcode::PopGlobal, ci, 0, 0);
+                                            self.emit(Opcode::Pop, 0, 0, 0);
+                                        }
+                                    }
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
                 self.compile_expr(e)?;
                 self.emit(Opcode::Pop, 0, 0, 0);
                 Ok(())
@@ -679,8 +739,24 @@ fn local_opcode(&self, op: &Kind) -> Result<Opcode, String> {
                 Ok(())
             }
             Expr::Call(callee, args) => {
+                // Method call: compile target object, then args, then invoke.
+                if let Expr::Member(obj, method) = callee.as_ref() {
+                    // Stack order: target object first, then args.
+                    for arg in args {
+                        if matches!(arg, Expr::Named(_, _)) {
+                            return Err("named arguments not supported in bytecode".into());
+                        }
+                    }
+                    self.compile_expr(obj)?;
+                    for arg in args {
+                        self.compile_expr(arg)?;
+                    }
+                    let ci = self.const_str(method);
+                    self.emit(Opcode::CallMethod, ci, args.len() as u16, 0);
+                    return Ok(());
+                }
                 let Expr::Var(name) = callee.as_ref() else {
-                    return Err("only named function calls are supported in bytecode".into());
+                    return Err("unsupported call target in bytecode".into());
                 };
                 for arg in args {
                     if matches!(arg, Expr::Named(_, _)) {

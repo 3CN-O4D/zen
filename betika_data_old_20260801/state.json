@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-07-31T07:20:53.519478",
+  "round": 1,
+  "balance": 22.35,
+  "peak": 22.6,
+  "config": {
+    "bets_per_round": 3,
+    "stake": 5.0,
+    "min_odds": 1.4,
+    "min_confidence": 55,
+    "min_edge": -0.1,
+    "max_exposure": 0.8,
+    "recovery": true,
+    "recovery_multiplier": 3.0
+  },
+  "rounds": 1
+}

@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_pathlib_module(vm: &mut Vm) {
-let pathlib = Value::Dict(BTreeMap::from([
+let pathlib = Value::Dict(Arc::new(BTreeMap::from([
     ("join".into(), Value::NativeFunction("pathlib_join".into())),
     ("name".into(), Value::NativeFunction("pathlib_name".into())),
     ("parent".into(), Value::NativeFunction("pathlib_parent".into())),
@@ -25,6 +26,6 @@ let pathlib = Value::Dict(BTreeMap::from([
     ("rename".into(), Value::NativeFunction("pathlib_rename".into())),
     ("read_text".into(), Value::NativeFunction("pathlib_read_text".into())),
     ("write_text".into(), Value::NativeFunction("pathlib_write_text".into())),
-]));
+])));
 vm.vars.insert("pathlib".into(), pathlib);
 }

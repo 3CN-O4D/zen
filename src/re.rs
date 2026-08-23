@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_re_module(vm: &mut Vm) {
-let re = Value::Dict(BTreeMap::from([
+let re = Value::Dict(Arc::new(BTreeMap::from([
     ("match".into(), Value::NativeFunction("regex_match".into())),
     ("matches".into(), Value::NativeFunction("regex_match".into())),
     ("search".into(), Value::NativeFunction("regex_search".into())),
@@ -13,6 +14,6 @@ let re = Value::Dict(BTreeMap::from([
     ("split".into(), Value::NativeFunction("regex_split".into())),
     ("replace".into(), Value::NativeFunction("regex_replace".into())),
     ("sub".into(), Value::NativeFunction("regex_replace".into())),
-]));
+])));
 vm.vars.insert("re".into(), re);
 }

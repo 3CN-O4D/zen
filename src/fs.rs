@@ -2,9 +2,10 @@
 
 use crate::runtime::{Vm, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn init_fs_module(vm: &mut Vm) {
-let fs = Value::Dict(BTreeMap::from([
+let fs = Value::Dict(Arc::new(BTreeMap::from([
     ("list".into(), Value::NativeFunction("fs_list_dir".into())),
     ("read".into(), Value::NativeFunction("fs_read".into())),
     ("write".into(), Value::NativeFunction("fs_write".into())),
@@ -34,6 +35,6 @@ let fs = Value::Dict(BTreeMap::from([
     ("dirname".into(), Value::NativeFunction("fs_dirname".into())),
     ("cwd".into(), Value::NativeFunction("os_cwd".into())),
     ("cd".into(), Value::NativeFunction("fs_cd".into())),
-]));
+])));
 vm.vars.insert("fs".into(), fs);
 }
