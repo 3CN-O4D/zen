@@ -69,7 +69,15 @@ pub enum Opcode {
     // Control flow (absolute instruction index target in arg1)
     Jmp,
     JmpIfFalse,
+    // Superinstructions for counting loops (locals only):
     JmpIfTrue,
+    // locals[a] <  locals[b] ? fall through : jump arg3
+    JmpLtLocal,
+    // locals[a] <= locals[b] ? fall through : jump arg3
+    JmpLeLocal,
+    // locals[arg1] += constants[arg2] (Number fast path, generic fallback)
+    AddLocalImm,
+    SubLocalImm,
     JmpIfNotNull,
 
     // Functions
@@ -324,12 +332,48 @@ impl FunctionCompiler {
                 if let Some(&slot) = self.slots.get(n) {
                     match op {
                         Kind::Assign => {
+                            // Fusion: i = i + <num> / i = i - <num>
+                            if let Expr::Binary(l, k2, r) = e {
+                                let imm = match (k2, l.as_ref(), r.as_ref()) {
+                                    (Kind::Plus, Expr::Var(ln), Expr::Value(Value::Number(m))) if ln == n => Some((*m)),
+                                    // Store the positive magnitude; the
+                                    // SubLocalImm handler negates it once.
+                                    (Kind::Minus, Expr::Var(ln), Expr::Value(Value::Number(m))) if ln == n => Some((*m)),
+                                    _ => None,
+                                };
+                                if let Some(m) = imm {
+                                    let ci = self.const_num(m);
+                                    self.emit(
+                                        if matches!(k2, Kind::Plus) { Opcode::AddLocalImm } else { Opcode::SubLocalImm },
+                                        slot, ci, 0,
+                                    );
+                                    return Ok(());
+                                }
+                            }
                             self.compile_expr(e)?;
                             self.emit(Opcode::StoreLocal, slot, 0, 0);
                         }
-                        Kind::PlusAssign
-                        | Kind::MinusAssign
-                        | Kind::StarAssign
+                        Kind::PlusAssign => {
+                            // Fusion: i += <num>
+                            if let Expr::Value(Value::Number(m)) = e {
+                                let ci = self.const_num(*m);
+                                self.emit(Opcode::AddLocalImm, slot, ci, 0);
+                                return Ok(());
+                            }
+                            self.compile_expr(e)?;
+                            self.emit(self.local_opcode(op)?, slot, 0, 0);
+                        }
+                        Kind::MinusAssign => {
+                            // Fusion: i -= <num>
+                            if let Expr::Value(Value::Number(m)) = e {
+                                let ci = self.const_num(*m);
+                                self.emit(Opcode::SubLocalImm, slot, ci, 0);
+                                return Ok(());
+                            }
+                            self.compile_expr(e)?;
+                            self.emit(self.local_opcode(op)?, slot, 0, 0);
+                        }
+                        Kind::StarAssign
                         | Kind::SlashAssign
                         | Kind::PercentAssign => {
                             self.compile_expr(e)?;
@@ -410,9 +454,38 @@ impl FunctionCompiler {
                 Ok(())
             }
             StmtKind::While(c, body) => {
+                // Superinstruction: fuse `while a < b` / `while a <= b` on two
+                // locals into a single compare-and-branch opcode.
+                // `a > b` / `a >= b` are normalized to the swapped
+                // Lt/Le forms so all four comparisons reuse the two
+                // fused compare-jump opcodes.
+                let fused = match c {
+                    Expr::Binary(l, Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge, r) => {
+                        if let (Expr::Var(an), Expr::Var(bn)) = (l.as_ref(), r.as_ref()) {
+                            if let (Some(&sa), Some(&sb)) =
+                                (self.slots.get(an), self.slots.get(bn))
+                            {
+                                let (fop, fa, fb) = match c {
+                                    Expr::Binary(_, Kind::Lt, _) => (Opcode::JmpLtLocal, sa, sb),
+                                    Expr::Binary(_, Kind::Le, _) => (Opcode::JmpLeLocal, sa, sb),
+                                    Expr::Binary(_, Kind::Gt, _) => (Opcode::JmpLtLocal, sb, sa),
+                                    _ => (Opcode::JmpLeLocal, sb, sa),
+                                };
+                                Some((fop, fa, fb))
+                            } else { None }
+                        } else { None }
+                    }
+                    _ => None,
+                };
                 let cond = self.instructions.len();
-                self.compile_expr(c)?;
-                let jf = self.emit(Opcode::JmpIfFalse, 0, 0, 0);
+                let jf = if let Some((fop, sa, sb)) = fused {
+                    // Target goes in arg1 so the standard patch() applies;
+                    // operand slots ride in arg2/arg3.
+                    self.emit(fop, 0, sa, sb)
+                } else {
+                    self.compile_expr(c)?;
+                    self.emit(Opcode::JmpIfFalse, 0, 0, 0)
+                };
                 self.loops.push(LoopCtx {
                     continue_target: Some(cond),
                     continue_fixups: Vec::new(),
@@ -462,11 +535,8 @@ impl FunctionCompiler {
                 for c in ctx.continue_fixups {
                     self.patch(c, inc);
                 }
-                self.emit(Opcode::LoadLocal, idx_t, 0, 0);
                 let one = self.const_num(1.0);
-                self.emit(Opcode::Const, one, 0, 0);
-                self.emit(Opcode::Add, 0, 0, 0);
-                self.emit(Opcode::StoreLocal, idx_t, 0, 0);
+                self.emit(Opcode::AddLocalImm, idx_t, one, 0);
                 self.emit(Opcode::Jmp, start as u16, 0, 0);
                 let end = self.instructions.len();
                 self.patch(jf, end);

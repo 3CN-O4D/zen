@@ -5244,7 +5244,8 @@ impl Vm {
                 }
             }
         }
-        let mut stack: Vec<Value> = Vec::new();
+        // Pre-size the operand stack: avoids repeated reallocation in hot loops.
+        let mut stack: Vec<Value> = Vec::with_capacity(64);
         let mut ip: usize = 0;
         let mut frames: Vec<(
             Arc<crate::bytecode::CompiledFunction>,
@@ -5585,6 +5586,43 @@ impl Vm {
                 }
                 Opcode::Jmp => {
                     ip = inst.arg1 as usize;
+                }
+                Opcode::JmpLtLocal | Opcode::JmpLeLocal => {
+                    let ia = base + inst.arg2 as usize;
+                    let ib = base + inst.arg3 as usize;
+                    let taken = match (locals.get(ia), locals.get(ib)) {
+                        (Some(Value::Number(x)), Some(Value::Number(y))) => {
+                            if inst.opcode == Opcode::JmpLtLocal { x >= y } else { x > y }
+                        }
+                        (Some(a), Some(b)) => {
+                            let k = if inst.opcode == Opcode::JmpLtLocal { Kind::Lt } else { Kind::Le };
+                            match self.binary(a.clone(), &k, b.clone())? {
+                                Value::Bool(t) => !t,
+                                other => !other.truthy(),
+                            }
+                        }
+                        _ => return Err("bad slots in fused compare".into()),
+                    };
+                    if taken {
+                        ip = inst.arg1 as usize;
+                    }
+                }
+                Opcode::AddLocalImm | Opcode::SubLocalImm => {
+                    let idx = base + inst.arg1 as usize;
+                    let imm = match cur.constants.get(inst.arg2 as usize) {
+                        Some(Value::Number(n)) => *n,
+                        _ => return Err("bad constant in Add/SubLocalImm".into()),
+                    };
+                    let imm = if inst.opcode == Opcode::AddLocalImm { imm } else { -imm };
+                    match locals.get_mut(idx) {
+                        Some(Value::Number(x)) => *x += imm,
+                        Some(slot_val) => {
+                            let old = std::mem::replace(slot_val, Value::Null);
+                            let nv = self.binary(old, &Kind::Plus, Value::Number(imm))?;
+                            locals[idx] = nv;
+                        }
+                        None => return Err("bad slot in Add/SubLocalImm".into()),
+                    }
                 }
                 Opcode::JmpIfFalse => {
                     let top = stack.pop().unwrap_or(Value::Null);
