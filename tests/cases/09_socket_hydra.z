@@ -1,0 +1,43 @@
+# Socket + hydra against tests/mock_ftp.py (127.0.0.1:2121, admin/s3cret99).
+# The test runner starts the server; if it is down this suite fails by design.
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import socket
+
+# raw socket round-trip against the mock FTP banner
+var s = socket.open("127.0.0.1", 2121)
+check(s != null, "socket.open returns handle")
+socket.set_timeout(s, 3000)
+var banner = socket.recv_text(s, 1024)
+check(banner.contains("220"), "ftp banner received")
+socket.send(s, "QUIT\r\n")
+socket.close(s)
+
+# hydra single attempts
+import hydra
+var bad = hydra.test("ftp", "127.0.0.1:2121", "admin", "nope")
+check(bad["status"] == "fail", "wrong password classified fail")
+var good = hydra.test("ftp", "127.0.0.1:2121", "admin", "s3cret99")
+check(good["status"] == "success", "correct password classified success")
+
+# hydra.run walks the full list and finds the password
+var r = hydra.run("ftp", "127.0.0.1:2121", "admin", ["wrong1", "wrong2", "s3cret99"])
+check(r.success == true, "run succeeds")
+check(r.password == "s3cret99", "run reports password")
+check(r.attempts == 3, "run attempts count")
+check(r.results.length() == 3, "run records every attempt")
+
+# hydra.run_file reads candidates from disk
+fs_write_ok = true
+import fs
+fs.write("/tmp/opencode/zen_suite_pw.txt", "bad1\ns3cret99\nbad2\n")
+var rf = hydra.run_file("ftp", "127.0.0.1:2121", "admin", "/tmp/opencode/zen_suite_pw.txt")
+check(rf.success == true && rf.password == "s3cret99" && rf.attempts == 2, "run_file finds password")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

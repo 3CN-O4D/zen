@@ -1,0 +1,79 @@
+# Scoping regression: function frames must be isolated
+# (guards the cross-frame bind_let bug that broke hydra.run)
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+# 1. Callee local with SAME NAME as caller loop counter must not clobber it.
+#    This is the exact shape of _split_host_port vs hydra.run.
+func extract_port(host) {
+    var pi = 0
+    var colon = -1
+    while pi < host.length() {
+        if host[pi] == ":" {
+            colon = pi
+            break
+        }
+        pi = pi + 1
+    }
+    return colon
+}
+func iterate_hosts(hosts) {
+    var attempts = 0
+    var pi = 0
+    while pi < hosts.length() {
+        var r = extract_port(hosts[pi])
+        if r < 0 {
+            check(false, "extract found colon for " + hosts[pi])
+        }
+        attempts = attempts + 1
+        pi = pi + 1
+    }
+    return attempts
+}
+check(iterate_hosts(["127.0.0.1:2121", "10.0.0.1:80", "x:22"]) == 3, "caller counter survives callee same-name local")
+
+# 2. Global variable must not be shadow-clobbered by callee locals.
+var pi = 99
+var ret = extract_port("abc:def")
+check(pi == 99, "global pi untouched by callee")
+check(ret == 3, "callee returns own result")
+
+# 3. Captured globals propagate writes from inside functions.
+var counter = 0
+func bump() {
+    counter = counter + 1
+}
+bump()
+bump()
+bump()
+check(counter == 3, "captured global write propagates")
+
+# 4. Deep nesting: three levels each declaring same-named locals.
+func level3(v) {
+    var n = v * 100
+    return n
+}
+func level2(v) {
+    var n = level3(v) + 20
+    return n
+}
+func level1(v) {
+    var n = level2(v) + 3
+    return n
+}
+check(level1(1) == 123, "three-level same-name locals")
+
+# 5. Loop-local declarations re-bind fresh each iteration.
+var seen = []
+for item in [1, 2, 3] {
+    var doubled = item * 2
+    seen.push(doubled)
+}
+check(seen.length() == 3 && seen[2] == 6, "per-iteration local bind")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

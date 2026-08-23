@@ -1,0 +1,96 @@
+# Core builtin modules
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+# math
+import math
+check(math.floor(3.7) == 3, "math.floor")
+check(math.ceil(3.2) == 4, "math.ceil")
+check(math.sqrt(144) == 12, "math.sqrt")
+check(math.abs(-5) == 5, "math.abs")
+check(math.pow(2, 10) == 1024, "math.pow")
+check(math.gcd(12, 18) == 6, "math.gcd")
+check(math.max(3, 9) == 9, "math.max")
+check(math.min(3, 9) == 3, "math.min")
+check(math.pi > 3.14 && math.pi < 3.15, "math.pi")
+
+# statistics
+import statistics
+check(statistics.mean([1, 2, 3]) == 2, "statistics.mean")
+check(statistics.median([1, 9, 2]) == 2, "statistics.median")
+check(statistics.sum([1, 2, 3, 4]) == 10, "statistics.sum")
+
+# json round-trip
+import json
+var obj = {name: "zen", n: 42, tags: [1, 2]}
+var encoded = json.encode(obj)
+var decoded = json.parse(encoded)
+check(decoded.name == "zen", "json string field")
+check(decoded.n == 42, "json number field")
+check(decoded.tags[1] == 2, "json list field")
+check(json.parse("[10,20]")[0] == 10, "json top-level list")
+
+# base64 / binascii
+import base64
+import binascii
+check(base64.encode("hi") == "aGk=", "base64.encode")
+check(base64.decode("aGk=") == "hi", "base64.decode")
+check(binascii.hexlify("AB") == "4142", "binascii.hexlify")
+
+# hashlib
+import hashlib
+check(hashlib.sha256("abc").substring(0, 6) == "ba7816", "sha256 known vector")
+check(hashlib.md5("abc") == "900150983cd24fb0d6963f7d28e17f72", "md5 known vector")
+check(hashlib.sha1("abc") == "a9993e364706816aba3e25717850c26c9cd0d89d", "sha1 known vector")
+
+# re
+import re
+check(re.findall("[0-9]+", "ab12cd34").length() == 2, "re.findall count")
+check(re.findall("[0-9]+", "ab12cd34")[0] == "12", "re.findall value")
+check(re.sub("[0-9]+", "a1b22c3", "-") == "a-b-c-", "re.sub (pattern, text, repl)")
+
+# os
+import os
+check(os.name == "linux" || os.name == "macos" || os.name == "windows", "os.name sane")
+check(os.getenv("HOME") != null && os.getenv("HOME").length() > 0, "os.getenv HOME")
+check(os.cpu_count() >= 1, "cpu_count")
+
+# fs (in /tmp/opencode only)
+import fs
+var tp = "/tmp/opencode/zen_suite_fs.txt"
+fs.write(tp, "suite-data")
+check(fs.read(tp) == "suite-data", "fs write/read roundtrip")
+check(fs.exists(tp), "fs.exists true")
+fs.remove(tp)
+check(!fs.exists(tp), "fs.remove deletes")
+
+# time
+import time
+check(time.unix() > 1700000000, "time.unix plausible")
+var t0 = time.now()
+time.sleep(0.02)
+check(time.now() - t0 >= 0.02, "sleep advances clock")
+
+# random bounded
+import random
+var r = random.randint(1, 6)
+check(r >= 1 && r <= 6, "randint in range")
+
+# uuid unique-ish
+import uuid
+var u1 = str(uuid.uuid4())
+var u2 = str(uuid.uuid4())
+check(u1 != "" && u1 != u2, "uuid4 distinct")
+
+# struct / itertools / collections smoke
+import struct
+check(struct.calcsize("<I") == 4, "struct.calcsize <I")
+import itertools
+check(itertools.product([1, 2], [3]).length() == 2, "itertools.product size")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

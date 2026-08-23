@@ -1,0 +1,55 @@
+# Import forms: alias, from-imports, star, dotted packages, caching
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+# import ... as ...
+import string as st
+check(st.upper("alias works") == "ALIAS WORKS", "aliased import usable")
+
+# original builtin still importable under its own name afterwards
+import string
+check(string.lower("OK") == "ok", "original name unaffected")
+
+# from <builtin> import a, b
+from math import floor, ceil
+check(floor(3.9) == 3 && ceil(3.1) == 4, "from-import binds names")
+
+# from <builtin> import x as y
+from string import upper as uc
+check(uc("aliased item") == "ALIASED ITEM", "from-import with alias")
+
+# star import brings public members in bare
+from math import *
+check(floor(9.8) == 9, "star import exposes functions")
+
+# from-import inside a function stays local and does not leak
+var leaked = "untouched"
+func scoped_import() {
+    from math import sqrt
+    return sqrt(16)
+}
+check(scoped_import() == 4, "from-import inside function")
+check(leaked == "untouched", "no global side effects from scoped import")
+
+# repeated aliased imports are idempotent (cached)
+var n = 0
+while n < 5 {
+    import json as j
+    n = n + 1
+}
+check(j.parse("[7]").length() == 1 && n == 5, "aliased re-import cached in loop")
+
+# dotted package: pkg.sub.mod (created by the runner next to this file)
+import pkg.sub.mod as m2
+check(m2.hello() == "pkg-hello", "dotted alias import callable")
+from pkg.sub.mod import util
+check(util() == "pkg-util", "from dotted module import")
+import pkg.sub.mod
+check(pkg.sub.mod.util() == "pkg-util", "chained member access pkg.sub.mod.fn")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

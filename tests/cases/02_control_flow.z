@@ -1,0 +1,87 @@
+# Control flow: if/elif/else, while, for, break/continue
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+var x = 5
+if x > 10 { check(false, "if taken wrongly") }
+elif x == 5 { check(true, "elif branch") }
+else { check(false, "else taken wrongly") }
+
+# while with accumulator
+var i = 0
+var acc = 0
+while i < 100 {
+    acc = acc + i
+    i = i + 1
+}
+check(acc == 4950, "while sum 0..99")
+
+# break
+var found = -1
+i = 0
+while i < 10 {
+    if i * i > 30 {
+        found = i
+        break
+    }
+    i = i + 1
+}
+check(found == 6, "break on condition")
+
+# continue
+i = 0
+var odd_sum = 0
+while i < 10 {
+    i = i + 1
+    if i % 2 == 0 { continue }
+    odd_sum = odd_sum + i
+}
+check(odd_sum == 25, "continue skips evens")
+
+# for over list
+var total = 0
+for v in [1, 2, 3, 4] {
+    total = total + v
+}
+check(total == 10, "for list sum")
+
+# for with break
+var first_big = 0
+for v in [1, 50, 500] {
+    if v > 100 { break }
+    first_big = v
+}
+check(first_big == 50, "for break keeps last value")
+
+# nested loops
+var pairs = 0
+for a in [1, 2, 3] {
+    for b in [1, 2, 3] {
+        if b > a { continue }
+        pairs = pairs + 1
+    }
+}
+check(pairs == 6, "nested loop count")
+
+# try / catch
+var caught = false
+try {
+    var boom = 1 / 0
+} catch {
+    caught = true
+}
+check(caught, "catch on division by zero")
+
+try {
+    var ok = 10 / 2
+    check(ok == 5, "try body executes")
+} catch {
+    check(false, "catch fired wrongly")
+}
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

@@ -3609,7 +3609,7 @@ impl Vm {
                     return Ok(v);
                 }
                 let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
-                candidates.extend(self.functions.keys().map(|s| s.as_str()));
+                candidates.extend(self.functions.keys().map(|s| s.as_str()).filter(|k| !k.contains("::")));
                 let hint = suggest_name(n, &candidates, 3)
                     .map(|s| format!("\n  \x1b[1;33m= help:\x1b[0m a variable named `{}` is in scope\n  \x1b[1;33m= help:\x1b[0m did you mean `{}` instead of `{}`?", s, s, n))
                     .unwrap_or_else(|| format!("\n  \x1b[1;33m= note:\x1b[0m  `{n}` has not been defined yet. Use `let {n} = ...` to declare it."));
@@ -3769,7 +3769,7 @@ impl Vm {
                     .cloned()
                     .ok_or_else(|| {
                         let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
-                        candidates.extend(self.functions.keys().map(|s| s.as_str()));
+                        candidates.extend(self.functions.keys().map(|s| s.as_str()).filter(|k| !k.contains("::")));
                         let hint = suggest_name(name, &candidates, 3)
                             .map(|s| format!("\n  \x1b[1;33m= help:\x1b[0m did you mean `{s}` instead of `{name}`?"))
                             .unwrap_or_else(|| format!("\n  \x1b[1;33m= note:\x1b[0m  `{name}` has not been defined yet"));
@@ -4112,7 +4112,11 @@ impl Vm {
                     }
                 })
                 .ok_or_else(|| {
-                    let mut keys: Vec<&str> = values.keys().map(|s| s.as_str()).collect();
+                    // Hide compiler-internal namespaced keys (`mod::func`)
+                    // from user-facing suggestions; they are not callable syntax.
+                    let mut keys: Vec<&str> = values.keys().map(|s| s.as_str())
+                        .filter(|k| !k.contains("::"))
+                        .collect();
                     let hint = suggest_name(name, &keys, 4)
                         .map(|s| format!("\nnote: did you mean `{}`? available: {}", s, keys.iter().take(8).map(|s| *s).collect::<Vec<_>>().join(", ")))
                         .unwrap_or_else(|| {
@@ -4896,6 +4900,13 @@ impl Vm {
     fn run_module(&mut self, path: &str, namespace: &str) -> Result<HashMap<String, Value>, String> {
         let stmts = parse_file(path).map_err(|e| format!("\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n \x1b[1;34m-->\x1b[0m {}:1\n  \x1b[1;34m|\x1b[0m\n  \x1b[1;31m= {}\x1b[0m", e, path, e))?;
         let mut module_vm = Vm::new();
+        // Snapshot the pristine baseline BEFORE seeding from the parent, so
+        // names the parent happens to share with this module (e.g. plain-name
+        // function registrations left by an earlier `from mod import fn`) are
+        // not mistaken for pre-existing builtins and filtered out of exports.
+        let initial_keys: std::collections::HashSet<String> = module_vm.vars.keys().cloned().collect();
+        let initial_fns: std::collections::HashSet<String> = module_vm.functions.keys().cloned().collect();
+        let initial_classes: std::collections::HashSet<String> = module_vm.classes.keys().cloned().collect();
         module_vm.functions = self.functions.clone();
         module_vm.native_functions = self.native_functions.clone();
         module_vm.classes = self.classes.clone();
@@ -4903,9 +4914,6 @@ impl Vm {
         if let Ok(source) = fs::read_to_string(path) {
             module_vm.lines = source.lines().map(|l| l.to_string()).collect();
         }
-        let initial_keys: std::collections::HashSet<String> = module_vm.vars.keys().cloned().collect();
-        let initial_fns: std::collections::HashSet<String> = module_vm.functions.keys().cloned().collect();
-        let initial_classes: std::collections::HashSet<String> = module_vm.classes.keys().cloned().collect();
         module_vm.exec_module(&stmts)?;
         // Register the module's functions under a namespaced key in the caller so
         // `module.func(...)` calls resolve through self.functions.
@@ -6751,8 +6759,10 @@ let function = self
                         if self.imported_modules.contains_key(&name) {
                             continue;
                         }
-                        // Check if already loaded as a dict in vars
-                        if let Some(Value::Dict(existing)) = self.vars.get(name.as_str()).cloned() {
+                        // Check if the module is already loaded as a dict in
+                        // vars under its REAL name (`import string as st`
+                        // must find vars["string"], not vars["st"]).
+                        if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned() {
                             let mut map: HashMap<String, Value> = HashMap::new();
                             for (k, v) in existing {
                                 map.insert(k, v);
@@ -6817,16 +6827,46 @@ let function = self
                                 return Err(e);
                             }
                         };
-                        // For dotted imports like mypkg.utils, also register the parent
                         if module.contains('.') {
-                            let parts: Vec<&str> = module.splitn(2, '.').collect();
-                            let parent = parts[0];
-                            let child = parts[1];
-                            let parent_map = self.imported_modules.entry(parent.to_string()).or_insert_with(HashMap::new);
-                            let child_dict: BTreeMap<String, Value> = vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            parent_map.insert(child.to_string(), Value::Dict(child_dict.clone()));
-                            // Also register child as a dict var so `child.func()` member calls work
-                            self.vars.insert(child.to_string(), Value::Dict(child_dict));
+                            // Register nested dicts so chained member access
+                            // `pkg.sub.mod.func` resolves through vars.
+                            let parts: Vec<&str> = module.split('.').collect();
+                            let leaf: BTreeMap<String, Value> =
+                                vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                            let mut acc = Value::Dict(leaf);
+                            // Nest every segment after the root var name,
+                            // left-to-right: pkg.sub.mod -> {sub: {mod: exports}}.
+                            for p in parts.iter().skip(1).rev() {
+                                let mut m = BTreeMap::new();
+                                m.insert(p.to_string(), acc);
+                                acc = Value::Dict(m);
+                            }
+                            let root = parts[0];
+                            match self.vars.get(root).cloned() {
+                                Some(Value::Dict(existing)) => {
+                                    let mut merged = existing;
+                                    if let Value::Dict(newm) = &acc {
+                                        for (k, v) in newm {
+                                            merged.entry(k.clone()).or_insert(v.clone());
+                                        }
+                                    }
+                                    self.vars.insert(root.to_string(), Value::Dict(merged));
+                                }
+                                _ => {
+                                    self.vars.insert(root.to_string(), acc);
+                                }
+                            }
+                            if let Some(a) = &alias {
+                                let dict: BTreeMap<String, Value> =
+                                    vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                                self.vars.insert(a.clone(), Value::Dict(dict));
+                            }
+                        } else if alias.is_some() {
+                            // Bind the loaded module under the alias so direct
+                            // member access (`alias.func()`) works.
+                            let dict: BTreeMap<String, Value> =
+                                vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                            self.vars.insert(name.clone(), Value::Dict(dict));
                         }
                         self.imported_modules.insert(name, vars);
                     }
@@ -6877,7 +6917,7 @@ let function = self
                             }
                         };
                         let name = alias.clone().unwrap_or(item.clone());
-                        self.vars.insert(name, value);
+                        self.bind_let(&name, value);
                     }
                     Ok(Flow::Normal)
                 }
@@ -6900,7 +6940,7 @@ let function = self
                     };
                     for (name, value) in vars {
                         if !name.starts_with('_') {
-                            self.vars.insert(name, value);
+                            self.bind_let(&name, value);
                         }
                     }
                     Ok(Flow::Normal)

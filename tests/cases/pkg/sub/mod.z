@@ -1,0 +1,3 @@
+# Fixture package module used by 10_import_forms.z
+func hello() { return "pkg-hello" }
+func util() { return "pkg-util" }
