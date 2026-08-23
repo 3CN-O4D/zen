@@ -1,16 +1,13 @@
-//! Crunch module for Zen — Rust-native password wordlist generator.
-//! 
-//! Provides: charset, generate, pattern.
+//! Zen `crunch` module.
 
-use crate::runtime::Vm;
-use crate::runtime::native_functions::NativeFunctions;
+use crate::runtime::{Vm, Value};
+use std::collections::BTreeMap;
 
-/// Initialize the crunch module by creating the crunch dict and registering natives.
-pub fn init_crunch_module(vm: &mut crate::runtime::Vm) {
-    let crunch = Value::Dict(crate::runtime::BTreeMap::from([
-        ("charset".into(), Value::NativeFunction("crunch_charset".into())),
-        ("generate".into(), Value::NativeFunction("crunch_generate".into())),
-        ("pattern".into(), Value::NativeFunction("crunch_pattern".into())),
-    ]));
-    vm.vars.insert("crunch".into(), crunch);
+pub fn init_crunch_module(vm: &mut Vm) {
+let crunch = Value::Dict(BTreeMap::from([
+    ("charset".into(), Value::NativeFunction("crunch_charset".into())),
+    ("generate".into(), Value::NativeFunction("crunch_generate".into())),
+    ("pattern".into(), Value::NativeFunction("crunch_pattern".into())),
+]));
+vm.vars.insert("crunch".into(), crunch);
 }

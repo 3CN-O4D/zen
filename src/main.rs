@@ -1,10 +1,54 @@
+mod base32;
+mod base64;
+mod binascii;
+mod browser;
+mod collections;
+mod color;
+mod crunch;
+mod crypto;
+mod cryptography;
+mod datetime;
+mod decimal;
+mod fs;
+mod glob;
+mod hashlib;
+mod itertools;
+mod pathlib;
+mod random;
+mod shutil;
+mod socket;
+mod struct_mod;
+mod subprocess;
+mod tempfile;
+mod urllib;
+mod uuid;
 mod bytecode;
+mod bluetooth;
+mod dns;
+mod ftp;
+mod imap;
+mod pop3;
+mod scapy;
+mod smtp;
+mod ssh;
+mod csv;
+mod http;
+mod json;
+mod math;
+mod os;
+mod re;
+mod statistics;
+mod string;
+mod threading;
+mod time;
+mod telnet;
+mod wifi;
 mod cdp;
 mod pm;
 mod runtime;
 mod state;
 
-use std::{env, fs, process};
+use std::{env, process};
 
 fn usage() {
     eprintln!("Zen native runtime\n\nUsage:\n  zen run <file.z>\n  zen <file.z>\n  zen -e <source>\n  zen --version\n\nCommands:\n  zen run <file.z>            execute a script\n  zen check <file.z>          parse and validate a script without running it\n  zen lint <file.z>           report suspicious patterns and errors\n  zen repl                    start an interactive session\n\nPackage manager:\n  zen pm init [name]          initialize a new module (creates zen.json + main.z)\n  zen pm install <spec>       install: owner/repo, url, .z file, or local directory\n  zen pm install --force <spec>   reinstall\n  zen pm install -r <freeze.txt>  install from freeze file\n  zen pm list\n  zen pm freeze\n  zen pm remove <name>\n  zen pm info <name>\n  zen pm verify <name>            check sha256 against source\n  zen pm pack <dir>               build publishable tarball\n  zen pm publish <dir> <git-remote>");
@@ -68,7 +112,7 @@ fn main() {
                 process::exit(2);
             }
         };
-        let result = match fs::read_to_string(&file) {
+        let result = match std::fs::read_to_string(&file) {
             Ok(source) => {
                 if command == "lint" {
                     let warnings = runtime::lint(&source);
@@ -99,8 +143,8 @@ fn main() {
     }
     let (source, filename) = match args.as_slice() {
         [flag, code] if flag == "-e" || flag == "--eval" => (Ok(code.clone()), "<string>".to_string()),
-        [command, file, ..] if command == "run" => (fs::read_to_string(file), file.clone()),
-        [file, ..] => (fs::read_to_string(file), file.clone()),
+        [command, file, ..] if command == "run" => (std::fs::read_to_string(file), file.clone()),
+        [file, ..] => (std::fs::read_to_string(file), file.clone()),
         _ => {
             usage();
             process::exit(2);

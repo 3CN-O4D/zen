@@ -1,13 +1,11 @@
-//! Statistics module for Zen — basic statistical functions.
-//! 
-//! Provides: mean, median, mode, stdev, variance, min, max, sum.
+//! Statistics module for Zen — descriptive statistics functions.
 
-use crate::runtime::Vm;
-use crate::runtime::native_functions::NativeFunctions;
+use crate::runtime::{Vm, Value};
+use std::collections::BTreeMap;
 
-/// Initialize the statistics module by creating the statistics dict and registering natives.
-pub fn init_statistics_module(vm: &mut crate::runtime::Vm) {
-    let statistics = Value::Dict(crate::runtime::BTreeMap::from([
+/// Initialize the statistics module.
+pub fn init_statistics_module(vm: &mut Vm) {
+    let statistics = Value::Dict(BTreeMap::from([
         ("mean".into(), Value::NativeFunction("statistics_mean".into())),
         ("median".into(), Value::NativeFunction("statistics_median".into())),
         ("mode".into(), Value::NativeFunction("statistics_mode".into())),

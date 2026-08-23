@@ -2392,8 +2392,8 @@ struct ZenClass {
 }
 type NativeFunc = fn(Vec<Value>) -> Result<Value, String>;
 
-struct Vm {
-    vars: ahash::AHashMap<String, Value>,
+pub struct Vm {
+    pub vars: ahash::AHashMap<String, Value>,
     functions: HashMap<String, Function>,
     native_functions: HashMap<String, NativeFunc>,
     classes: HashMap<String, ZenClass>,
@@ -2424,6 +2424,9 @@ struct Vm {
     /// inside a function body, so `let` declarations bind to locals instead of
     /// clobbering global variables; captured names propagate writes outward.
     capture_frames: Vec<ahash::AHashSet<String>>,
+    /// Start index into `locals` for each active tree-walk frame. Keeps
+    /// `bind_let` from updating bindings that belong to an enclosing call.
+    frame_starts: Vec<usize>,
 }
 
 /// Fast-path cache for repeated calls to the same compiled function.
@@ -2464,6 +2467,7 @@ impl Vm {
             fn_generation: 0,
             call_cache: None,
             capture_frames: Vec::new(),
+            frame_starts: Vec::new(),
         };
         vm.register_builtins();
         vm.register_error_classes();
@@ -3015,727 +3019,136 @@ impl Vm {
             },
         );
         // json module
-        let json = Value::Dict(BTreeMap::from([
-            ("parse".into(), Value::NativeFunction("json_decode".into())),
-            ("encode".into(), Value::NativeFunction("json_encode".into())),
-            ("stringify".into(), Value::NativeFunction("json_encode".into())),
-            ("load".into(), Value::NativeFunction("json_load".into())),
-            ("save".into(), Value::NativeFunction("json_save".into())),
-        ]));
-        self.vars.insert("json".into(), json);
+        crate::json::init_json_module(self);
 
         // fs module
-        let fs = Value::Dict(BTreeMap::from([
-            ("list".into(), Value::NativeFunction("fs_list_dir".into())),
-            ("read".into(), Value::NativeFunction("fs_read".into())),
-            ("write".into(), Value::NativeFunction("fs_write".into())),
-            ("append".into(), Value::NativeFunction("fs_append".into())),
-            ("read_binary".into(), Value::NativeFunction("fs_read_binary".into())),
-            ("readBinary".into(), Value::NativeFunction("fs_read_binary".into())),
-            ("write_binary".into(), Value::NativeFunction("fs_write_binary".into())),
-            ("writeBinary".into(), Value::NativeFunction("fs_write_binary".into())),
-            ("exists".into(), Value::NativeFunction("fs_exists".into())),
-            ("is_file".into(), Value::NativeFunction("fs_is_file".into())),
-            ("isFile".into(), Value::NativeFunction("fs_is_file".into())),
-            ("is_dir".into(), Value::NativeFunction("fs_is_dir".into())),
-            ("isDir".into(), Value::NativeFunction("fs_is_dir".into())),
-            ("size".into(), Value::NativeFunction("fs_size".into())),
-            ("mtime".into(), Value::NativeFunction("fs_mtime".into())),
-            ("mkdir".into(), Value::NativeFunction("fs_mkdir".into())),
-            ("mkdirs".into(), Value::NativeFunction("fs_mkdir".into())),
-            ("remove".into(), Value::NativeFunction("fs_remove".into())),
-            ("rmdir".into(), Value::NativeFunction("fs_rmdir".into())),
-            ("rmtree".into(), Value::NativeFunction("fs_rmtree".into())),
-            ("copy".into(), Value::NativeFunction("fs_copy".into())),
-            ("move".into(), Value::NativeFunction("fs_move".into())),
-            ("rename".into(), Value::NativeFunction("fs_move".into())),
-            ("glob".into(), Value::NativeFunction("fs_glob".into())),
-            ("join".into(), Value::NativeFunction("fs_join".into())),
-            ("basename".into(), Value::NativeFunction("fs_basename".into())),
-            ("dirname".into(), Value::NativeFunction("fs_dirname".into())),
-            ("cwd".into(), Value::NativeFunction("os_cwd".into())),
-            ("cd".into(), Value::NativeFunction("fs_cd".into())),
-        ]));
-        self.vars.insert("fs".into(), fs);
+        crate::fs::init_fs_module(self);
 
         // re module
-        let re = Value::Dict(BTreeMap::from([
-            ("match".into(), Value::NativeFunction("regex_match".into())),
-            ("matches".into(), Value::NativeFunction("regex_match".into())),
-            ("search".into(), Value::NativeFunction("regex_search".into())),
-            ("find".into(), Value::NativeFunction("regex_find".into())),
-            ("findall".into(), Value::NativeFunction("regex_find".into())),
-            ("split".into(), Value::NativeFunction("regex_split".into())),
-            ("replace".into(), Value::NativeFunction("regex_replace".into())),
-            ("sub".into(), Value::NativeFunction("regex_replace".into())),
-        ]));
-self.vars.insert("re".into(), re);
+        crate::re::init_re_module(self);
 
         // random module
-        let random = Value::Dict(BTreeMap::from([
-            ("random".into(), Value::NativeFunction("random_random".into())),
-            ("randint".into(), Value::NativeFunction("random_randint".into())),
-            ("randrange".into(), Value::NativeFunction("random_randrange".into())),
-            ("choice".into(), Value::NativeFunction("random_choice".into())),
-            ("choices".into(), Value::NativeFunction("random_choices".into())),
-            ("sample".into(), Value::NativeFunction("random_sample".into())),
-            ("shuffle".into(), Value::NativeFunction("random_shuffle".into())),
-            ("uniform".into(), Value::NativeFunction("random_uniform".into())),
-            ("hex".into(), Value::NativeFunction("random_hex".into())),
-            ("seed".into(), Value::NativeFunction("random_seed".into())),
-        ]));
-        self.vars.insert("random".into(), random);
+        crate::random::init_random_module(self);
 
         // math module
-        let math = Value::Dict(BTreeMap::from([
-            ("pi".into(), Value::Number(std::f64::consts::PI)),
-            ("e".into(), Value::Number(std::f64::consts::E)),
-            ("inf".into(), Value::Number(f64::INFINITY)),
-            ("nan".into(), Value::Number(f64::NAN)),
-            ("floor".into(), Value::NativeFunction("math_floor".into())),
-            ("ceil".into(), Value::NativeFunction("math_ceil".into())),
-            ("trunc".into(), Value::NativeFunction("math_trunc".into())),
-            ("sqrt".into(), Value::NativeFunction("math_sqrt".into())),
-            ("abs".into(), Value::NativeFunction("math_abs".into())),
-            ("pow".into(), Value::NativeFunction("math_pow".into())),
-            ("exp".into(), Value::NativeFunction("math_exp".into())),
-            ("log".into(), Value::NativeFunction("math_log".into())),
-            ("log2".into(), Value::NativeFunction("math_log2".into())),
-            ("log10".into(), Value::NativeFunction("math_log10".into())),
-            ("sin".into(), Value::NativeFunction("math_sin".into())),
-            ("cos".into(), Value::NativeFunction("math_cos".into())),
-            ("tan".into(), Value::NativeFunction("math_tan".into())),
-            ("asin".into(), Value::NativeFunction("math_asin".into())),
-            ("acos".into(), Value::NativeFunction("math_acos".into())),
-            ("atan".into(), Value::NativeFunction("math_atan".into())),
-            ("atan2".into(), Value::NativeFunction("math_atan2".into())),
-            ("degrees".into(), Value::NativeFunction("math_degrees".into())),
-            ("radians".into(), Value::NativeFunction("math_radians".into())),
-            ("hypot".into(), Value::NativeFunction("math_hypot".into())),
-            ("isnan".into(), Value::NativeFunction("math_isnan".into())),
-            ("isfinite".into(), Value::NativeFunction("math_isfinite".into())),
-            ("isinf".into(), Value::NativeFunction("math_isinf".into())),
-            ("copysign".into(), Value::NativeFunction("math_copysign".into())),
-            ("gcd".into(), Value::NativeFunction("math_gcd".into())),
-            ("lcm".into(), Value::NativeFunction("math_lcm".into())),
-            ("factorial".into(), Value::NativeFunction("math_factorial".into())),
-            ("comb".into(), Value::NativeFunction("math_comb".into())),
-            ("perm".into(), Value::NativeFunction("math_perm".into())),
-            ("remainder".into(), Value::NativeFunction("math_remainder".into())),
-            ("fsum".into(), Value::NativeFunction("math_fsum".into())),
-            ("prod".into(), Value::NativeFunction("math_prod".into())),
-            ("modf".into(), Value::NativeFunction("math_modf".into())),
-            ("frexp".into(), Value::NativeFunction("math_frexp".into())),
-            ("ldexp".into(), Value::NativeFunction("math_ldexp".into())),
-            ("round".into(), Value::NativeFunction("math_round".into())),
-            ("min".into(), Value::NativeFunction("math_min".into())),
-            ("max".into(), Value::NativeFunction("math_max".into())),
-        ]));
-        self.vars.insert("math".into(), math);
+        crate::math::init_math_module(self);
 
         // time module
-        let time = Value::Dict(BTreeMap::from([
-            ("now".into(), Value::NativeFunction("time_now".into())),
-            ("unix".into(), Value::NativeFunction("time_unix".into())),
-            ("utc".into(), Value::NativeFunction("time_utc".into())),
-            ("date".into(), Value::NativeFunction("time_date".into())),
-            ("format".into(), Value::NativeFunction("time_format".into())),
-            ("parse".into(), Value::NativeFunction("time_parse".into())),
-            ("sleep".into(), Value::NativeFunction("time_sleep".into())),
-            ("wait".into(), Value::NativeFunction("time_wait".into())),
-            ("year".into(), Value::NativeFunction("time_year".into())),
-            ("month".into(), Value::NativeFunction("time_month".into())),
-            ("day".into(), Value::NativeFunction("time_day".into())),
-            ("hour".into(), Value::NativeFunction("time_hour".into())),
-            ("minute".into(), Value::NativeFunction("time_minute".into())),
-            ("second".into(), Value::NativeFunction("time_second".into())),
-            ("weekday".into(), Value::NativeFunction("time_weekday".into())),
-            ("timestamp".into(), Value::NativeFunction("time_unix".into())),
-        ]));
-        self.vars.insert("time".into(), time);
+        crate::time::init_time_module(self);
 
         // os module
-        let os = Value::Dict(BTreeMap::from([
-            ("env".into(), Value::NativeFunction("os_getenv".into())),
-            ("getenv".into(), Value::NativeFunction("os_getenv".into())),
-            ("setenv".into(), Value::NativeFunction("os_setenv".into())),
-            ("unsetenv".into(), Value::NativeFunction("os_unsetenv".into())),
-            ("exit".into(), Value::NativeFunction("exit".into())),
-            ("platform".into(), Value::NativeFunction("os_platform".into())),
-            ("hostname".into(), Value::NativeFunction("os_hostname".into())),
-            ("pid".into(), Value::NativeFunction("os_pid".into())),
-            ("cwd".into(), Value::NativeFunction("os_cwd".into())),
-            ("chdir".into(), Value::NativeFunction("fs_cd".into())),
-            ("name".into(), Value::String(std::env::consts::OS.into())),
-            ("sep".into(), Value::String(std::path::MAIN_SEPARATOR.to_string())),
-            ("linesep".into(), Value::String("\n".into())),
-            ("cpu_count".into(), Value::NativeFunction("os_cpu_count".into())),
-            ("system".into(), Value::NativeFunction("os_system".into())),
-            ("arch".into(), Value::NativeFunction("os_arch".into())),
-            ("execute".into(), Value::NativeFunction("os_execute".into())),
-            ("run".into(), Value::NativeFunction("os_run".into())),
-            ("popen".into(), Value::NativeFunction("os_popen".into())),
-            ("args".into(), Value::NativeFunction("os_args".into())),
-            ("pids".into(), Value::NativeFunction("os_pids".into())),
-            ("kill".into(), Value::NativeFunction("os_kill".into())),
-            ("home".into(), Value::NativeFunction("os_home".into())),
-        ]));
-        self.vars.insert("os".into(), os);
+        crate::os::init_os_module(self);
 
         // base64 module
-        let base64 = Value::Dict(BTreeMap::from([
-            ("encode".into(), Value::NativeFunction("b64_encode".into())),
-            ("decode".into(), Value::NativeFunction("b64_decode".into())),
-            ("url_encode".into(), Value::NativeFunction("b64_url_encode".into())),
-            ("url_decode".into(), Value::NativeFunction("b64_url_decode".into())),
-        ]));
-        self.vars.insert("base64".into(), base64);
+        crate::base64::init_base64_module(self);
 
         // base32 module
-        let base32 = Value::Dict(BTreeMap::from([
-            ("encode".into(), Value::NativeFunction("b32_encode".into())),
-            ("decode".into(), Value::NativeFunction("b32_decode".into())),
-        ]));
-        self.vars.insert("base32".into(), base32);
+        crate::base32::init_base32_module(self);
 
         // crypto module (hashes + hmac + aes)
-        let crypto = Value::Dict(BTreeMap::from([
-            ("sha256".into(), Value::NativeFunction("crypto_sha256".into())),
-            ("sha1".into(), Value::NativeFunction("crypto_sha1".into())),
-            ("md5".into(), Value::NativeFunction("crypto_md5".into())),
-            ("sha512".into(), Value::NativeFunction("crypto_sha512".into())),
-            ("sha224".into(), Value::NativeFunction("crypto_sha224".into())),
-            ("sha384".into(), Value::NativeFunction("crypto_sha384".into())),
-            ("sha3_256".into(), Value::NativeFunction("crypto_sha3_256".into())),
-            ("sha3_512".into(), Value::NativeFunction("crypto_sha3_512".into())),
-            ("blake2b".into(), Value::NativeFunction("crypto_blake2b".into())),
-            ("blake2s".into(), Value::NativeFunction("crypto_blake2s".into())),
-            ("hmac_sha256".into(), Value::NativeFunction("crypto_hmac_sha256".into())),
-            ("hmac_sha1".into(), Value::NativeFunction("crypto_hmac_sha1".into())),
-            ("hmac_md5".into(), Value::NativeFunction("crypto_hmac_md5".into())),
-            ("random_bytes".into(), Value::NativeFunction("crypto_random_bytes".into())),
-            ("random_hex".into(), Value::NativeFunction("crypto_random_hex".into())),
-            ("pbkdf2".into(), Value::NativeFunction("crypto_pbkdf2".into())),
-            ("aes_encrypt".into(), Value::NativeFunction("crypto_aes_encrypt".into())),
-            ("aes_decrypt".into(), Value::NativeFunction("crypto_aes_decrypt".into())),
-        ]));
-        self.vars.insert("crypto".into(), crypto);
+        crate::crypto::init_crypto_module(self);
 
         // cryptography module (Fernet symmetric encryption)
-        let cryptography = Value::Dict(BTreeMap::from([(
-            "fernet".into(),
-            Value::Dict(BTreeMap::from([
-                ("generate_key".into(), Value::NativeFunction("fernet_generate_key".into())),
-                ("encrypt".into(), Value::NativeFunction("fernet_encrypt".into())),
-                ("decrypt".into(), Value::NativeFunction("fernet_decrypt".into())),
-            ])),
-        )]));
-        self.vars.insert("cryptography".into(), cryptography);
+        crate::cryptography::init_cryptography_module(self);
 
         // datetime module
-        let datetime = Value::Dict(BTreeMap::from([
-            ("now".into(), Value::NativeFunction("time_now".into())),
-            ("utcnow".into(), Value::NativeFunction("time_utc".into())),
-            ("today".into(), Value::NativeFunction("time_date".into())),
-            ("unix".into(), Value::NativeFunction("time_unix".into())),
-            ("from_unix".into(), Value::NativeFunction("time_from_unix".into())),
-            ("parse".into(), Value::NativeFunction("time_parse".into())),
-            ("format".into(), Value::NativeFunction("time_format".into())),
-            ("year".into(), Value::NativeFunction("time_year".into())),
-            ("month".into(), Value::NativeFunction("time_month".into())),
-            ("day".into(), Value::NativeFunction("time_day".into())),
-            ("hour".into(), Value::NativeFunction("time_hour".into())),
-            ("minute".into(), Value::NativeFunction("time_minute".into())),
-            ("second".into(), Value::NativeFunction("time_second".into())),
-            ("weekday".into(), Value::NativeFunction("time_weekday".into())),
-            ("add_days".into(), Value::NativeFunction("time_add_days".into())),
-            ("MONDAY".into(), Value::Number(0.0)),
-            ("TUESDAY".into(), Value::Number(1.0)),
-            ("WEDNESDAY".into(), Value::Number(2.0)),
-            ("THURSDAY".into(), Value::Number(3.0)),
-            ("FRIDAY".into(), Value::Number(4.0)),
-            ("SATURDAY".into(), Value::Number(5.0)),
-            ("SUNDAY".into(), Value::Number(6.0)),
-        ]));
-        self.vars.insert("datetime".into(), datetime);
+        crate::datetime::init_datetime_module(self);
 
         // uuid module
-        let uuid = Value::Dict(BTreeMap::from([
-            ("uuid4".into(), Value::NativeFunction("uuid_uuid4".into())),
-            ("uuid1".into(), Value::NativeFunction("uuid_uuid1".into())),
-            ("uuid3".into(), Value::NativeFunction("uuid_uuid3".into())),
-            ("uuid5".into(), Value::NativeFunction("uuid_uuid5".into())),
-            ("v4".into(), Value::NativeFunction("uuid_uuid4".into())),
-            ("v1".into(), Value::NativeFunction("uuid_uuid1".into())),
-            ("v3".into(), Value::NativeFunction("uuid_uuid3".into())),
-            ("v5".into(), Value::NativeFunction("uuid_uuid5".into())),
-            ("NAMESPACE_DNS".into(), Value::String("dns".into())),
-            ("NAMESPACE_URL".into(), Value::String("url".into())),
-            ("NAMESPACE_OID".into(), Value::String("oid".into())),
-            ("NAMESPACE_X500".into(), Value::String("x500".into())),
-        ]));
-        self.vars.insert("uuid".into(), uuid);
+        crate::uuid::init_uuid_module(self);
 
         // color module (ANSI helpers)
-        let color = Value::Dict(BTreeMap::from([
-            ("reset".into(), Value::String("\x1b[0m".into())),
-            ("bold".into(), Value::NativeFunction("color_style_bold".into())),
-            ("dim".into(), Value::NativeFunction("color_style_dim".into())),
-            ("italic".into(), Value::NativeFunction("color_style_italic".into())),
-            ("underline".into(), Value::NativeFunction("color_style_underline".into())),
-            ("blink".into(), Value::NativeFunction("color_style_blink".into())),
-            ("reverse".into(), Value::NativeFunction("color_style_reverse".into())),
-            ("hidden".into(), Value::NativeFunction("color_style_hidden".into())),
-            ("strike".into(), Value::NativeFunction("color_style_strike".into())),
-            ("rgb".into(), Value::NativeFunction("color_rgb".into())),
-            ("bg_rgb".into(), Value::NativeFunction("color_bg_rgb".into())),
-            ("hex".into(), Value::NativeFunction("color_hex".into())),
-            ("strip".into(), Value::NativeFunction("color_strip".into())),
-            ("black".into(), Value::NativeFunction("color_fg_black".into())),
-            ("red".into(), Value::NativeFunction("color_fg_red".into())),
-            ("green".into(), Value::NativeFunction("color_fg_green".into())),
-            ("yellow".into(), Value::NativeFunction("color_fg_yellow".into())),
-            ("blue".into(), Value::NativeFunction("color_fg_blue".into())),
-            ("magenta".into(), Value::NativeFunction("color_fg_magenta".into())),
-            ("cyan".into(), Value::NativeFunction("color_fg_cyan".into())),
-            ("white".into(), Value::NativeFunction("color_fg_white".into())),
-            ("bg_black".into(), Value::NativeFunction("color_bg_black".into())),
-            ("bg_red".into(), Value::NativeFunction("color_bg_red".into())),
-            ("bg_green".into(), Value::NativeFunction("color_bg_green".into())),
-            ("bg_yellow".into(), Value::NativeFunction("color_bg_yellow".into())),
-            ("bg_blue".into(), Value::NativeFunction("color_bg_blue".into())),
-            ("bg_magenta".into(), Value::NativeFunction("color_bg_magenta".into())),
-            ("bg_cyan".into(), Value::NativeFunction("color_bg_cyan".into())),
-            ("bg_white".into(), Value::NativeFunction("color_bg_white".into())),
-            ("bright_black".into(), Value::NativeFunction("color_fg_bright_black".into())),
-            ("bright_red".into(), Value::NativeFunction("color_fg_bright_red".into())),
-            ("bright_green".into(), Value::NativeFunction("color_fg_bright_green".into())),
-            ("bright_yellow".into(), Value::NativeFunction("color_fg_bright_yellow".into())),
-            ("bright_blue".into(), Value::NativeFunction("color_fg_bright_blue".into())),
-            ("bright_magenta".into(), Value::NativeFunction("color_fg_bright_magenta".into())),
-            ("bright_cyan".into(), Value::NativeFunction("color_fg_bright_cyan".into())),
-            ("bright_white".into(), Value::NativeFunction("color_fg_bright_white".into())),
-        ]));
-        self.vars.insert("color".into(), color);
+        crate::color::init_color_module(self);
 
         // csv module
-        let csv = Value::Dict(BTreeMap::from([
-            ("read".into(), Value::NativeFunction("csv_read".into())),
-            ("write".into(), Value::NativeFunction("csv_write".into())),
-            ("parse".into(), Value::NativeFunction("csv_parse".into())),
-            ("encode".into(), Value::NativeFunction("csv_encode".into())),
-        ]));
-        self.vars.insert("csv".into(), csv);
+        crate::csv::init_csv_module(self);
 
         // http module
-        let http = Value::Dict(BTreeMap::from([
-            ("get".into(), Value::NativeFunction("http_get".into())),
-            ("post".into(), Value::NativeFunction("http_post".into())),
-            ("put".into(), Value::NativeFunction("http_put".into())),
-            ("del".into(), Value::NativeFunction("http_del".into())),
-            ("head".into(), Value::NativeFunction("http_head".into())),
-            ("patch".into(), Value::NativeFunction("http_patch".into())),
-        ]));
-        self.vars.insert("http".into(), http);
+        crate::http::init_http_module(self);
 
         // decimal module
-        let decimal = Value::Dict(BTreeMap::from([
-            ("Decimal".into(), Value::NativeFunction("decimal_decimal".into())),
-            ("getcontext".into(), Value::NativeFunction("decimal_getcontext".into())),
-            ("setcontext".into(), Value::NativeFunction("decimal_setcontext".into())),
-            ("localcontext".into(), Value::NativeFunction("decimal_localcontext".into())),
-            ("ROUND_HALF_UP".into(), Value::String("ROUND_HALF_UP".into())),
-            ("ROUND_HALF_EVEN".into(), Value::String("ROUND_HALF_EVEN".into())),
-            ("ROUND_DOWN".into(), Value::String("ROUND_DOWN".into())),
-            ("ROUND_UP".into(), Value::String("ROUND_UP".into())),
-            ("ROUND_CEILING".into(), Value::String("ROUND_CEILING".into())),
-            ("ROUND_FLOOR".into(), Value::String("ROUND_FLOOR".into())),
-            ("ROUND_HALF_DOWN".into(), Value::String("ROUND_HALF_DOWN".into())),
-            ("ROUND_05UP".into(), Value::String("ROUND_05UP".into())),
-        ]));
-        self.vars.insert("decimal".into(), decimal);
+        crate::decimal::init_decimal_module(self);
 
         // threading module
-        let threading = Value::Dict(BTreeMap::from([
-            ("start".into(), Value::NativeFunction("threading_start".into())),
-        ]));
-        self.vars.insert("threading".into(), threading);
+        crate::threading::init_threading_module(self);
 
         // statistics module
-        let statistics = Value::Dict(BTreeMap::from([
-            ("mean".into(), Value::NativeFunction("statistics_mean".into())),
-            ("median".into(), Value::NativeFunction("statistics_median".into())),
-            ("mode".into(), Value::NativeFunction("statistics_mode".into())),
-            ("stdev".into(), Value::NativeFunction("statistics_stdev".into())),
-            ("variance".into(), Value::NativeFunction("statistics_variance".into())),
-            ("min".into(), Value::NativeFunction("math_min".into())),
-            ("max".into(), Value::NativeFunction("math_max".into())),
-            ("sum".into(), Value::NativeFunction("statistics_sum".into())),
-        ]));
-        self.vars.insert("statistics".into(), statistics);
+        crate::statistics::init_statistics_module(self);
 
         // socket module
-        let socket = Value::Dict(BTreeMap::from([
-            ("open".into(), Value::NativeFunction("socket_open".into())),
-            ("open_udp".into(), Value::NativeFunction("socket_open_udp".into())),
-            ("send".into(), Value::NativeFunction("socket_send".into())),
-            ("send_to".into(), Value::NativeFunction("socket_send_to".into())),
-            ("recv".into(), Value::NativeFunction("socket_recv".into())),
-            ("recv_text".into(), Value::NativeFunction("socket_recv_text".into())),
-            ("recv_from".into(), Value::NativeFunction("socket_recv_from".into())),
-            ("recv_all".into(), Value::NativeFunction("socket_recv_all".into())),
-            ("listen".into(), Value::NativeFunction("socket_listen".into())),
-            ("accept".into(), Value::NativeFunction("socket_accept".into())),
-            ("close".into(), Value::NativeFunction("socket_close".into())),
-            ("set_timeout".into(), Value::NativeFunction("socket_set_timeout".into())),
-            ("scan".into(), Value::NativeFunction("socket_scan".into())),
-        ]));
-        self.vars.insert("socket".into(), socket);
+        crate::socket::init_socket_module(self);
 
         // browser module (CDP-based browser automation)
-        let browser = Value::Dict(BTreeMap::from([
-            ("launch".into(), Value::NativeFunction("browser_launch".into())),
-            ("connect".into(), Value::NativeFunction("browser_connect".into())),
-            ("navigate".into(), Value::NativeFunction("browser_navigate".into())),
-            ("go".into(), Value::NativeFunction("browser_navigate".into())),
-            ("evaluate".into(), Value::NativeFunction("browser_evaluate".into())),
-            ("eval".into(), Value::NativeFunction("browser_evaluate".into())),
-            ("screenshot".into(), Value::NativeFunction("browser_capture_screenshot".into())),
-            ("shot".into(), Value::NativeFunction("browser_capture_screenshot".into())),
-            ("html".into(), Value::NativeFunction("browser_get_html".into())),
-            ("page".into(), Value::NativeFunction("browser_get_html".into())),
-            ("get_title".into(), Value::NativeFunction("browser_get_title".into())),
-            ("title".into(), Value::NativeFunction("browser_get_title".into())),
-            ("get_url".into(), Value::NativeFunction("browser_get_url".into())),
-            ("url".into(), Value::NativeFunction("browser_get_url".into())),
-            ("get_text".into(), Value::NativeFunction("browser_get_text".into())),
-            ("text".into(), Value::NativeFunction("browser_get_text".into())),
-            ("click".into(), Value::NativeFunction("browser_click".into())),
-            ("fill".into(), Value::NativeFunction("browser_fill".into())),
-            ("query".into(), Value::NativeFunction("browser_query".into())),
-            ("wait_for".into(), Value::NativeFunction("browser_wait_for".into())),
-            ("wait_for_ms".into(), Value::NativeFunction("browser_wait_for_ms".into())),
-            ("attr".into(), Value::NativeFunction("browser_attr".into())),
-            ("page_text".into(), Value::NativeFunction("browser_page_text".into())),
-            ("close".into(), Value::NativeFunction("browser_close".into())),
-            ("quit".into(), Value::NativeFunction("browser_close".into())),
-        ]));
-        self.vars.insert("browser".into(), browser);
+        crate::browser::init_browser_module(self);
 
         // ftp module (pure-Rust FTP client)
-        let ftp = Value::Dict(BTreeMap::from([
-            ("connect".into(), Value::NativeFunction("ftp_connect".into())),
-            ("login".into(), Value::NativeFunction("ftp_login".into())),
-            ("pwd".into(), Value::NativeFunction("ftp_pwd".into())),
-            ("list".into(), Value::NativeFunction("ftp_list".into())),
-            ("nlist".into(), Value::NativeFunction("ftp_nlist".into())),
-            ("cwd".into(), Value::NativeFunction("ftp_cwd".into())),
-            ("retr".into(), Value::NativeFunction("ftp_retr".into())),
-            ("stor".into(), Value::NativeFunction("ftp_stor".into())),
-            ("dele".into(), Value::NativeFunction("ftp_dele".into())),
-            ("mkdir".into(), Value::NativeFunction("ftp_mkdir".into())),
-            ("rmdir".into(), Value::NativeFunction("ftp_rmdir".into())),
-            ("rename".into(), Value::NativeFunction("ftp_rename".into())),
-            ("quit".into(), Value::NativeFunction("ftp_quit".into())),
-        ]));
-        self.vars.insert("ftp".into(), ftp);
+        crate::ftp::init_ftp_module(self);
 
         // smtp module (pure-Rust SMTP client)
-        let smtp = Value::Dict(BTreeMap::from([
-            ("connect".into(), Value::NativeFunction("smtp_connect".into())),
-            ("login".into(), Value::NativeFunction("smtp_login".into())),
-            ("sendmail".into(), Value::NativeFunction("smtp_sendmail".into())),
-            ("quit".into(), Value::NativeFunction("smtp_quit".into())),
-            ("message".into(), Value::NativeFunction("smtp_message".into())),
-        ]));
-        self.vars.insert("smtp".into(), smtp);
+        crate::smtp::init_smtp_module(self);
 
         // pop3 module (pure-Rust POP3 client)
-        let pop3 = Value::Dict(BTreeMap::from([
-            ("connect".into(), Value::NativeFunction("pop3_connect".into())),
-            ("stat".into(), Value::NativeFunction("pop3_stat".into())),
-            ("list".into(), Value::NativeFunction("pop3_list".into())),
-            ("retr".into(), Value::NativeFunction("pop3_retr".into())),
-            ("dele".into(), Value::NativeFunction("pop3_dele".into())),
-            ("quit".into(), Value::NativeFunction("pop3_quit".into())),
-        ]));
-        self.vars.insert("pop3".into(), pop3);
+        crate::pop3::init_pop3_module(self);
 
         // imap module (pure-Rust IMAP client)
-        let imap = Value::Dict(BTreeMap::from([
-            ("connect".into(), Value::NativeFunction("imap_connect".into())),
-            ("select".into(), Value::NativeFunction("imap_select".into())),
-            ("search".into(), Value::NativeFunction("imap_search".into())),
-            ("fetch".into(), Value::NativeFunction("imap_fetch".into())),
-            ("list".into(), Value::NativeFunction("imap_list".into())),
-            ("logout".into(), Value::NativeFunction("imap_logout".into())),
-        ]));
-        self.vars.insert("imap".into(), imap);
+        crate::imap::init_imap_module(self);
 
         // telnet module (pure-Rust telnet client)
-        let telnet = Value::Dict(BTreeMap::from([
-            ("connect".into(), Value::NativeFunction("telnet_connect".into())),
-            ("write".into(), Value::NativeFunction("telnet_write".into())),
-            ("read".into(), Value::NativeFunction("telnet_read".into())),
-            ("read_until".into(), Value::NativeFunction("telnet_read_until".into())),
-            ("close".into(), Value::NativeFunction("telnet_close".into())),
-        ]));
-        self.vars.insert("telnet".into(), telnet);
+        crate::telnet::init_telnet_module(self);
 
         // dns module (pure-Rust DNS client)
-        let dns = Value::Dict(BTreeMap::from([
-            ("resolve".into(), Value::NativeFunction("dns_resolve".into())),
-            ("lookup".into(), Value::NativeFunction("dns_resolve".into())),
-            ("query".into(), Value::NativeFunction("dns_query".into())),
-        ]));
-        self.vars.insert("dns".into(), dns);
+        crate::dns::init_dns_module(self);
 
         // ssh module (wraps the system ssh/scp binaries)
-        let ssh = Value::Dict(BTreeMap::from([
-            ("run".into(), Value::NativeFunction("ssh_run".into())),
-            ("upload".into(), Value::NativeFunction("ssh_upload".into())),
-            ("download".into(), Value::NativeFunction("ssh_download".into())),
-            ("available".into(), Value::NativeFunction("ssh_available".into())),
-        ]));
-        self.vars.insert("ssh".into(), ssh);
+        crate::ssh::init_ssh_module(self);
 
         // bluetooth module (wraps bluetoothctl)
-        let bluetooth = Value::Dict(BTreeMap::from([
-            ("status".into(), Value::NativeFunction("bt_status".into())),
-            ("power".into(), Value::NativeFunction("bt_power".into())),
-            ("scan".into(), Value::NativeFunction("bt_scan".into())),
-            ("scan_stop".into(), Value::NativeFunction("bt_scan_stop".into())),
-            ("devices".into(), Value::NativeFunction("bt_devices".into())),
-            ("pair".into(), Value::NativeFunction("bt_pair".into())),
-            ("unpair".into(), Value::NativeFunction("bt_unpair".into())),
-            ("connect".into(), Value::NativeFunction("bt_connect".into())),
-            ("disconnect".into(), Value::NativeFunction("bt_disconnect".into())),
-            ("trust".into(), Value::NativeFunction("bt_trust".into())),
-            ("send".into(), Value::NativeFunction("bt_send".into())),
-        ]));
-        self.vars.insert("bluetooth".into(), bluetooth);
+        crate::bluetooth::init_bluetooth_module(self);
 
         // wifi module (wraps nmcli / iw)
-        let wifi = Value::Dict(BTreeMap::from([
-            ("scan".into(), Value::NativeFunction("wifi_scan".into())),
-            ("status".into(), Value::NativeFunction("wifi_status".into())),
-            ("connect".into(), Value::NativeFunction("wifi_connect".into())),
-            ("disconnect".into(), Value::NativeFunction("wifi_disconnect".into())),
-            ("forget".into(), Value::NativeFunction("wifi_forget".into())),
-            ("interfaces".into(), Value::NativeFunction("wifi_interfaces".into())),
-            ("list".into(), Value::NativeFunction("wifi_list".into())),
-        ]));
-        self.vars.insert("wifi".into(), wifi);
+        crate::wifi::init_wifi_module(self);
 
         // crunch module (Rust-native password wordlist generator)
-        let crunch = Value::Dict(BTreeMap::from([
-            ("charset".into(), Value::NativeFunction("crunch_charset".into())),
-            ("generate".into(), Value::NativeFunction("crunch_generate".into())),
-            ("pattern".into(), Value::NativeFunction("crunch_pattern".into())),
-        ]));
-        self.vars.insert("crunch".into(), crunch);
+        crate::crunch::init_crunch_module(self);
 
         // scapy module (packet crafting / sniffing)
-        let scapy = Value::Dict(BTreeMap::from([
-            ("checksum".into(), Value::NativeFunction("scapy_checksum".into())),
-            ("ip".into(), Value::NativeFunction("scapy_ip".into())),
-            ("tcp".into(), Value::NativeFunction("scapy_tcp".into())),
-            ("udp".into(), Value::NativeFunction("scapy_udp".into())),
-            ("icmp".into(), Value::NativeFunction("scapy_icmp".into())),
-            ("raw".into(), Value::NativeFunction("scapy_raw".into())),
-            ("build".into(), Value::NativeFunction("scapy_build".into())),
-            ("parse".into(), Value::NativeFunction("scapy_parse".into())),
-            ("send".into(), Value::NativeFunction("scapy_send".into())),
-            ("sniff".into(), Value::NativeFunction("scapy_sniff".into())),
-            ("ip_to_int".into(), Value::NativeFunction("scapy_ip_to_int".into())),
-            ("int_to_ip".into(), Value::NativeFunction("scapy_int_to_ip".into())),
-            ("cidr_expand".into(), Value::NativeFunction("scapy_cidr_expand".into())),
-            ("subnet_hosts".into(), Value::NativeFunction("scapy_subnet_hosts".into())),
-        ]));
-        self.vars.insert("scapy".into(), scapy);
+        crate::scapy::init_scapy_module(self);
 
         // string module (Python string helpers + constants)
-        let string = Value::Dict(BTreeMap::from([
-            ("upper".into(), Value::NativeFunction("str_upper".into())),
-            ("lower".into(), Value::NativeFunction("str_lower".into())),
-            ("title".into(), Value::NativeFunction("str_title".into())),
-            ("capitalize".into(), Value::NativeFunction("str_capitalize".into())),
-            ("swapcase".into(), Value::NativeFunction("str_swapcase".into())),
-            ("strip".into(), Value::NativeFunction("str_strip".into())),
-            ("lstrip".into(), Value::NativeFunction("str_lstrip".into())),
-            ("rstrip".into(), Value::NativeFunction("str_rstrip".into())),
-            ("split".into(), Value::NativeFunction("str_split".into())),
-            ("splitlines".into(), Value::NativeFunction("str_splitlines".into())),
-            ("join".into(), Value::NativeFunction("str_join".into())),
-            ("replace".into(), Value::NativeFunction("str_replace".into())),
-            ("count".into(), Value::NativeFunction("str_count".into())),
-            ("find".into(), Value::NativeFunction("str_find".into())),
-            ("rfind".into(), Value::NativeFunction("str_rfind".into())),
-            ("startswith".into(), Value::NativeFunction("str_startswith".into())),
-            ("endswith".into(), Value::NativeFunction("str_endswith".into())),
-            ("contains".into(), Value::NativeFunction("str_contains".into())),
-            ("ljust".into(), Value::NativeFunction("str_ljust".into())),
-            ("rjust".into(), Value::NativeFunction("str_rjust".into())),
-            ("center".into(), Value::NativeFunction("str_center".into())),
-            ("zfill".into(), Value::NativeFunction("str_zfill".into())),
-            ("repeat".into(), Value::NativeFunction("str_repeat".into())),
-            ("isdigit".into(), Value::NativeFunction("str_isdigit".into())),
-            ("isalpha".into(), Value::NativeFunction("str_isalpha".into())),
-            ("isalnum".into(), Value::NativeFunction("str_isalnum".into())),
-            ("isspace".into(), Value::NativeFunction("str_isspace".into())),
-            ("islower".into(), Value::NativeFunction("str_islower".into())),
-            ("isupper".into(), Value::NativeFunction("str_isupper".into())),
-            ("digits".into(), Value::String("0123456789".into())),
-            ("hexdigits".into(), Value::String("0123456789abcdefABCDEF".into())),
-            ("octdigits".into(), Value::String("01234567".into())),
-            ("ascii_letters".into(), Value::String("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".into())),
-            ("ascii_lowercase".into(), Value::String("abcdefghijklmnopqrstuvwxyz".into())),
-            ("ascii_uppercase".into(), Value::String("ABCDEFGHIJKLMNOPQRSTUVWXYZ".into())),
-            ("punctuation".into(), Value::String("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".into())),
-            ("whitespace".into(), Value::String(" \t\n\r\x0b\x0c".into())),
-            ("printable".into(), Value::String("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r\x0b\x0c".into())),
-        ]));
-        self.vars.insert("string".into(), string);
+        crate::string::init_string_module(self);
 
         // subprocess module
-        let subprocess = Value::Dict(BTreeMap::from([
-            ("run".into(), Value::NativeFunction("subprocess_run".into())),
-            ("call".into(), Value::NativeFunction("subprocess_call".into())),
-            ("check_output".into(), Value::NativeFunction("subprocess_check_output".into())),
-        ]));
-        self.vars.insert("subprocess".into(), subprocess);
+        crate::subprocess::init_subprocess_module(self);
 
         // struct module (binary pack/unpack)
-        let struct_mod = Value::Dict(BTreeMap::from([
-            ("pack".into(), Value::NativeFunction("struct_pack".into())),
-            ("unpack".into(), Value::NativeFunction("struct_unpack".into())),
-            ("calcsize".into(), Value::NativeFunction("struct_calcsize".into())),
-        ]));
-        self.vars.insert("struct".into(), struct_mod);
+        crate::struct_mod::init_struct_mod_module(self);
 
         // hashlib module (alias to the crypto hashes)
-        let hashlib = Value::Dict(BTreeMap::from([
-            ("sha256".into(), Value::NativeFunction("crypto_sha256".into())),
-            ("sha1".into(), Value::NativeFunction("crypto_sha1".into())),
-            ("md5".into(), Value::NativeFunction("crypto_md5".into())),
-            ("sha512".into(), Value::NativeFunction("crypto_sha512".into())),
-            ("sha224".into(), Value::NativeFunction("crypto_sha224".into())),
-            ("sha384".into(), Value::NativeFunction("crypto_sha384".into())),
-            ("sha3_256".into(), Value::NativeFunction("crypto_sha3_256".into())),
-            ("sha3_512".into(), Value::NativeFunction("crypto_sha3_512".into())),
-            ("blake2b".into(), Value::NativeFunction("crypto_blake2b".into())),
-            ("blake2s".into(), Value::NativeFunction("crypto_blake2s".into())),
-            ("pbkdf2_hmac".into(), Value::NativeFunction("crypto_pbkdf2".into())),
-            ("create".into(), Value::NativeFunction("hashlib_new".into())),
-            ("algorithms_available".into(), Value::List(vec![
-                Value::String("md5".into()),
-                Value::String("sha1".into()),
-                Value::String("sha224".into()),
-                Value::String("sha256".into()),
-                Value::String("sha384".into()),
-                Value::String("sha512".into()),
-                Value::String("sha3_256".into()),
-                Value::String("sha3_512".into()),
-                Value::String("blake2b".into()),
-                Value::String("blake2s".into()),
-            ])),
-        ]));
-        self.vars.insert("hashlib".into(), hashlib);
+        crate::hashlib::init_hashlib_module(self);
 
         // shutil module (file utilities)
-        let shutil = Value::Dict(BTreeMap::from([
-            ("copy".into(), Value::NativeFunction("shutil_copy".into())),
-            ("copy2".into(), Value::NativeFunction("shutil_copy2".into())),
-            ("move".into(), Value::NativeFunction("shutil_move".into())),
-            ("rmtree".into(), Value::NativeFunction("shutil_rmtree".into())),
-            ("copytree".into(), Value::NativeFunction("shutil_copytree".into())),
-            ("which".into(), Value::NativeFunction("shutil_which".into())),
-            ("disk_usage".into(), Value::NativeFunction("shutil_disk_usage".into())),
-        ]));
-        self.vars.insert("shutil".into(), shutil);
+        crate::shutil::init_shutil_module(self);
 
         // pathlib module
-        let pathlib = Value::Dict(BTreeMap::from([
-            ("join".into(), Value::NativeFunction("pathlib_join".into())),
-            ("name".into(), Value::NativeFunction("pathlib_name".into())),
-            ("parent".into(), Value::NativeFunction("pathlib_parent".into())),
-            ("stem".into(), Value::NativeFunction("pathlib_stem".into())),
-            ("suffix".into(), Value::NativeFunction("pathlib_suffix".into())),
-            ("suffixes".into(), Value::NativeFunction("pathlib_suffixes".into())),
-            ("is_absolute".into(), Value::NativeFunction("pathlib_is_absolute".into())),
-            ("resolve".into(), Value::NativeFunction("pathlib_resolve".into())),
-            ("absolute".into(), Value::NativeFunction("pathlib_absolute".into())),
-            ("exists".into(), Value::NativeFunction("pathlib_exists".into())),
-            ("is_file".into(), Value::NativeFunction("pathlib_is_file".into())),
-            ("is_dir".into(), Value::NativeFunction("pathlib_is_dir".into())),
-            ("glob".into(), Value::NativeFunction("pathlib_glob".into())),
-            ("touch".into(), Value::NativeFunction("pathlib_touch".into())),
-            ("mkdir".into(), Value::NativeFunction("pathlib_mkdir".into())),
-            ("rmdir".into(), Value::NativeFunction("pathlib_rmdir".into())),
-            ("unlink".into(), Value::NativeFunction("pathlib_unlink".into())),
-            ("rename".into(), Value::NativeFunction("pathlib_rename".into())),
-            ("read_text".into(), Value::NativeFunction("pathlib_read_text".into())),
-            ("write_text".into(), Value::NativeFunction("pathlib_write_text".into())),
-        ]));
-        self.vars.insert("pathlib".into(), pathlib);
+        crate::pathlib::init_pathlib_module(self);
 
         // glob module
-        let glob = Value::Dict(BTreeMap::from([
-            ("glob".into(), Value::NativeFunction("fs_glob".into())),
-        ]));
-        self.vars.insert("glob".into(), glob);
+        crate::glob::init_glob_module(self);
 
         // urllib module
-        let urllib = Value::Dict(BTreeMap::from([
-            ("urlopen".into(), Value::NativeFunction("urllib_urlopen".into())),
-            ("quote".into(), Value::NativeFunction("urllib_quote".into())),
-            ("unquote".into(), Value::NativeFunction("urllib_unquote".into())),
-            ("urlencode".into(), Value::NativeFunction("urllib_urlencode".into())),
-            ("parse".into(), Value::NativeFunction("urllib_parse".into())),
-            ("parse_qs".into(), Value::NativeFunction("urllib_parse_qs".into())),
-        ]));
-        self.vars.insert("urllib".into(), urllib);
+        crate::urllib::init_urllib_module(self);
 
         // collections module
-        let collections = Value::Dict(BTreeMap::from([
-            ("Counter".into(), Value::NativeFunction("collections_counter".into())),
-            ("chain".into(), Value::NativeFunction("collections_chain".into())),
-            ("flatten".into(), Value::NativeFunction("collections_flatten".into())),
-        ]));
-        self.vars.insert("collections".into(), collections);
+        crate::collections::init_collections_module(self);
 
         // itertools module
-        let itertools = Value::Dict(BTreeMap::from([
-            ("enumerate".into(), Value::NativeFunction("itertools_enumerate".into())),
-            ("zip".into(), Value::NativeFunction("itertools_zip".into())),
-            ("chain".into(), Value::NativeFunction("itertools_chain".into())),
-            ("repeat".into(), Value::NativeFunction("itertools_repeat".into())),
-            ("product".into(), Value::NativeFunction("itertools_product".into())),
-            ("permutations".into(), Value::NativeFunction("itertools_permutations".into())),
-            ("combinations".into(), Value::NativeFunction("itertools_combinations".into())),
-            ("accumulate".into(), Value::NativeFunction("itertools_accumulate".into())),
-            ("take".into(), Value::NativeFunction("itertools_take".into())),
-            ("drop".into(), Value::NativeFunction("itertools_drop".into())),
-            ("range".into(), Value::NativeFunction("itertools_range".into())),
-        ]));
-        self.vars.insert("itertools".into(), itertools);
+        crate::itertools::init_itertools_module(self);
 
         // tempfile module
-        let tempfile = Value::Dict(BTreeMap::from([
-            ("dir".into(), Value::NativeFunction("tempfile_dir".into())),
-            ("mkdtemp".into(), Value::NativeFunction("tempfile_mkdtemp".into())),
-            ("mkstemp".into(), Value::NativeFunction("tempfile_mkstemp".into())),
-        ]));
-        self.vars.insert("tempfile".into(), tempfile);
+        crate::tempfile::init_tempfile_module(self);
 
         // binascii module
-        let binascii = Value::Dict(BTreeMap::from([
-            ("hexlify".into(), Value::NativeFunction("binascii_hexlify".into())),
-            ("unhexlify".into(), Value::NativeFunction("binascii_unhexlify".into())),
-            ("a2b_base64".into(), Value::NativeFunction("binascii_a2b_base64".into())),
-            ("b2a_base64".into(), Value::NativeFunction("binascii_b2a_base64".into())),
-        ]));
-        self.vars.insert("binascii".into(), binascii);
+        crate::binascii::init_binascii_module(self);
 
         // Register all core native functions eagerly
           const NATIVES: [&str; 402] = [
@@ -4449,6 +3862,7 @@ self.vars.insert("re".into(), re);
                 }
                 let instance = self.eval(&Expr::Var("self".into()))?;
                 let saved_len = self.locals.len();
+                self.frame_starts.push(saved_len);
                 self.locals.reserve(1 + function.params.len());
                 self.locals.push(("self".into(), instance));
                 for (param, val) in function.params.iter().zip(values) {
@@ -4462,6 +3876,7 @@ self.vars.insert("re".into(), re);
                 let flow = self.exec(&function.body);
                 self.stack.pop();
                 self.locals.truncate(saved_len);
+                self.frame_starts.pop();
                 let result = match flow? {
                     Flow::Return(v) => Ok(v),
                     Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
@@ -5783,6 +5198,7 @@ self.vars.insert("re".into(), re);
             let bound = bind_args(&function, &values);
             // Save locals stack position, push params + captured onto fast local stack
             let saved_len = self.locals.len();
+            self.frame_starts.push(saved_len);
             self.locals.reserve(function.params.len() + cap_count);
             for (parameter, value) in function.params.iter().zip(bound) {
                 self.locals.push((parameter.0.clone(), value));
@@ -5795,6 +5211,7 @@ self.vars.insert("re".into(), re);
             self.capture_frames.pop();
             // Restore locals stack
             self.locals.truncate(saved_len);
+            self.frame_starts.pop();
             let flow = flow?;
             return Ok(match flow {
                 Flow::Return(value) => Flow::Return(value),
@@ -6562,12 +5979,13 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
     }
 
     /// Bind a `let`-declared name. Inside a function body the declaration is
-    /// function-local (update the innermost existing binding or push a new
-    /// one); at top level it writes to global variables as before.
+    /// function-local (update the innermost binding within THIS frame or push
+    /// a new one); at top level it writes to global variables as before.
     fn bind_let(&mut self, name: &str, value: Value) {
         if !self.capture_frames.is_empty() {
-            if let Some(idx) = self.locals.iter().rposition(|(n, _)| n == name) {
-                self.locals[idx].1 = value;
+            let start = self.frame_starts.last().copied().unwrap_or(0);
+            if let Some(rel) = self.locals[start..].iter().rposition(|(n, _)| n == name) {
+                self.locals[start + rel].1 = value;
             } else {
                 self.locals.push((name.to_string(), value));
             }
@@ -6952,6 +6370,7 @@ let function = self
         }
         // Use local stack: self + params + captured
         let saved_len = self.locals.len();
+        self.frame_starts.push(saved_len);
         self.locals.reserve(1 + function.params.len() + function.effective_captured.len());
         self.locals.push(("self".into(), Value::Instance(instance)));
         for (parameter, value) in function.params.iter().zip(bound) {
@@ -6964,6 +6383,7 @@ let function = self
         let flow = self.exec(&body);
         self.capture_frames.pop();
         self.locals.truncate(saved_len);
+        self.frame_starts.pop();
         let flow = flow?;
         self.current_class = prev_class;
         self.current_method = prev_method;
