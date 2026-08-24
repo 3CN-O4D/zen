@@ -5607,6 +5607,41 @@ impl Vm {
                         ip = inst.arg1 as usize;
                     }
                 }
+                Opcode::JmpLtLocalConst
+                | Opcode::JmpLeLocalConst
+                | Opcode::JmpGtLocalConst
+                | Opcode::JmpGeLocalConst => {
+                    let ia = base + inst.arg2 as usize;
+                    let taken =
+                        match (locals.get(ia), cur.constants.get(inst.arg3 as usize)) {
+                            (Some(Value::Number(x)), Some(Value::Number(y))) => {
+                                match inst.opcode {
+                                    Opcode::JmpLtLocalConst => x >= y,
+                                    Opcode::JmpLeLocalConst => x > y,
+                                    Opcode::JmpGtLocalConst => x <= y,
+                                    _ => x < y,
+                                }
+                            }
+                            (Some(a), Some(b)) => {
+                                let k = match inst.opcode {
+                                    Opcode::JmpLtLocalConst => Kind::Lt,
+                                    Opcode::JmpLeLocalConst => Kind::Le,
+                                    Opcode::JmpGtLocalConst => Kind::Gt,
+                                    _ => Kind::Ge,
+                                };
+                                match self.binary(a.clone(), &k, b.clone())? {
+                                    Value::Bool(t) => !t,
+                                    other => !other.truthy(),
+                                }
+                            }
+                            _ => {
+                                return Err("bad slot/constant in fused const-compare".into())
+                            }
+                        };
+                    if taken {
+                        ip = inst.arg1 as usize;
+                    }
+                }
                 Opcode::AddLocalImm | Opcode::SubLocalImm => {
                     let idx = base + inst.arg1 as usize;
                     let imm = match cur.constants.get(inst.arg2 as usize) {

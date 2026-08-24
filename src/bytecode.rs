@@ -71,10 +71,18 @@ pub enum Opcode {
     JmpIfFalse,
     // Superinstructions for counting loops (locals only):
     JmpIfTrue,
-    // locals[a] <  locals[b] ? fall through : jump arg3
+    // locals[a] <  locals[b] ? fall through : jump arg1
     JmpLtLocal,
-    // locals[a] <= locals[b] ? fall through : jump arg3
+    // locals[a] <= locals[b] ? fall through : jump arg1
     JmpLeLocal,
+    // locals[a] <  constants[b] ? fall through : jump arg1
+    JmpLtLocalConst,
+    // locals[a] <= constants[b] ? fall through : jump arg1
+    JmpLeLocalConst,
+    // locals[a] >  constants[b] ? fall through : jump arg1
+    JmpGtLocalConst,
+    // locals[a] >= constants[b] ? fall through : jump arg1
+    JmpGeLocalConst,
     // locals[arg1] += constants[arg2] (Number fast path, generic fallback)
     AddLocalImm,
     SubLocalImm,
@@ -460,8 +468,47 @@ impl FunctionCompiler {
                 // Lt/Le forms so all four comparisons reuse the two
                 // fused compare-jump opcodes.
                 let fused = match c {
-                    Expr::Binary(l, Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge, r) => {
-                        if let (Expr::Var(an), Expr::Var(bn)) = (l.as_ref(), r.as_ref()) {
+                    Expr::Binary(l, k @ (Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge), r) => {
+                        // local vs numeric literal (either side): fused
+                        // compare-against-constant. A literal on the left is
+                        // rewritten to the equivalent local-first comparison.
+                        let lit_r = match r.as_ref() {
+                            Expr::Value(Value::Number(m)) => Some(self.const_num(*m)),
+                            _ => None,
+                        };
+                        let lit_l = match l.as_ref() {
+                            Expr::Value(Value::Number(m)) => Some(self.const_num(*m)),
+                            _ => None,
+                        };
+                        if let (Some(sa), Some(cr)) = (
+                            match l.as_ref() {
+                                Expr::Var(an) => self.slots.get(an).copied(),
+                                _ => None,
+                            },
+                            lit_r,
+                        ) {
+                            let fop = match k {
+                                Kind::Lt => Opcode::JmpLtLocalConst,
+                                Kind::Le => Opcode::JmpLeLocalConst,
+                                Kind::Gt => Opcode::JmpGtLocalConst,
+                                _ => Opcode::JmpGeLocalConst,
+                            };
+                            Some((fop, sa, cr))
+                        } else if let (Some(sb), Some(cl)) = (
+                            match r.as_ref() {
+                                Expr::Var(bn) => self.slots.get(bn).copied(),
+                                _ => None,
+                            },
+                            lit_l,
+                        ) {
+                            let fop = match k {
+                                Kind::Lt => Opcode::JmpGtLocalConst,
+                                Kind::Le => Opcode::JmpGeLocalConst,
+                                Kind::Gt => Opcode::JmpLtLocalConst,
+                                _ => Opcode::JmpLeLocalConst,
+                            };
+                            Some((fop, sb, cl))
+                        } else if let (Expr::Var(an), Expr::Var(bn)) = (l.as_ref(), r.as_ref()) {
                             if let (Some(&sa), Some(&sb)) =
                                 (self.slots.get(an), self.slots.get(bn))
                             {
