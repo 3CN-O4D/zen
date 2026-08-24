@@ -5991,6 +5991,68 @@ impl Vm {
                         None => return Err("bad slot in Add/SubLocalImm".into()),
                     }
                 }
+                Opcode::JmpLtGlobalConst
+                | Opcode::JmpLeGlobalConst
+                | Opcode::JmpGtGlobalConst
+                | Opcode::JmpGeGlobalConst => {
+                    let Value::String(name) = &cur.constants[inst.arg2 as usize] else {
+                        return Err("bad constant in fused global const-compare".into());
+                    };
+                    let owned;
+                    let gv = if let Some(v) = self.vars.get(name.as_str()) {
+                        v
+                    } else if self.functions.contains_key(name.as_str()) {
+                        owned = Value::Function(name.clone());
+                        &owned
+                    } else {
+                        return Err(format!("undefined variable: `{name}`"));
+                    };
+                    let Some(Value::Number(y)) = cur.constants.get(inst.arg3 as usize) else {
+                        return Err("bad constant in fused global const-compare".into());
+                    };
+                    let taken = match gv {
+                        Value::Number(x) => match inst.opcode {
+                            Opcode::JmpLtGlobalConst => x >= y,
+                            Opcode::JmpLeGlobalConst => x > y,
+                            Opcode::JmpGtGlobalConst => x <= y,
+                            _ => x < y,
+                        },
+                        other => {
+                            let k = match inst.opcode {
+                                Opcode::JmpLtGlobalConst => Kind::Lt,
+                                Opcode::JmpLeGlobalConst => Kind::Le,
+                                Opcode::JmpGtGlobalConst => Kind::Gt,
+                                _ => Kind::Ge,
+                            };
+                            match self.binary(other.clone(), &k, Value::Number(*y))? {
+                                Value::Bool(t) => !t,
+                                v => !v.truthy(),
+                            }
+                        }
+                    };
+                    if taken {
+                        ip = inst.arg1 as usize;
+                    }
+                }
+                Opcode::AddGlobalImm | Opcode::SubGlobalImm => {
+                    let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
+                        return Err("bad constant in Add/SubGlobalImm".into());
+                    };
+                    let imm = match cur.constants.get(inst.arg2 as usize) {
+                        Some(Value::Number(n)) => *n,
+                        _ => return Err("bad constant in Add/SubGlobalImm".into()),
+                    };
+                    let imm = if inst.opcode == Opcode::AddGlobalImm { imm } else { -imm };
+                    match self.vars.get_mut(name.as_str()) {
+                        Some(Value::Number(x)) => *x += imm,
+                        Some(slot_val) => {
+                            let old = std::mem::replace(slot_val, Value::Null);
+                            let nv = self.binary(old, &Kind::Plus, Value::Number(imm))?;
+                            self.vars.insert(name.clone(), nv);
+                        }
+                        None => return Err(format!("undefined variable: `{name}`")),
+                    }
+                }
                 Opcode::JmpIfFalse => {
                     let top = stack.pop().unwrap_or(Value::Null);
                     if !top.truthy() {
@@ -7020,6 +7082,18 @@ let function = self
         funcs: Vec<Arc<crate::bytecode::CompiledFunction>>,
     ) -> Result<Flow, String> {
         self.compiled_functions = funcs;
+        if std::env::var("ZBCDump").is_ok() {
+            let mut counts: std::collections::HashMap<&'static str, usize> = std::collections::HashMap::new();
+            for f in &self.compiled_functions {
+                for inst in &f.instructions {
+                    *counts.entry(format!("{:?}", inst.opcode).leak() as &'static str).or_insert(0) += 1;
+                }
+            }
+            let mut rows: Vec<(&'static str, usize)> = counts.into_iter().collect();
+            rows.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+            eprintln!("[bcdump] {} opcodes across {} fns", rows.iter().map(|(_,c)| *c).sum::<usize>(), self.compiled_functions.len());
+            for (name, c) in rows { eprintln!("  {:>6}  {}", c, name); }
+        }
         if let Some(main) = self.compiled_functions.first().cloned() {
             let flow = self.run_bytecode(&main, Vec::new(), &HashMap::new());
             self.drain_pending_error_classes();

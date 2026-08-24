@@ -95,6 +95,12 @@ fn op_to_id(op: Opcode) -> u16 {
         Opcode::ImportFrom => 67,
         Opcode::ImportStar => 68,
         Opcode::MakeRange => 69,
+        Opcode::JmpLtGlobalConst => 70,
+        Opcode::JmpLeGlobalConst => 71,
+        Opcode::JmpGtGlobalConst => 72,
+        Opcode::JmpGeGlobalConst => 73,
+        Opcode::AddGlobalImm => 74,
+        Opcode::SubGlobalImm => 75,
     }
 }
 
@@ -170,6 +176,12 @@ fn op_from_id(id: u16) -> Option<Opcode> {
         67 => Opcode::ImportFrom,
         68 => Opcode::ImportStar,
         69 => Opcode::MakeRange,
+        70 => Opcode::JmpLtGlobalConst,
+        71 => Opcode::JmpLeGlobalConst,
+        72 => Opcode::JmpGtGlobalConst,
+        73 => Opcode::JmpGeGlobalConst,
+        74 => Opcode::AddGlobalImm,
+        75 => Opcode::SubGlobalImm,
         _ => return None,
     })
 }

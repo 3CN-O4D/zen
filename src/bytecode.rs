@@ -81,6 +81,19 @@ pub enum Opcode {
     JmpLeLocalConst,
     // locals[a] >  constants[b] ? fall through : jump arg1
     JmpGtLocalConst,
+
+    // Global (top-level) siblings of the fused compare-jumps: arg1 = patched
+    // jump target, arg2 = name-constant index of the global, arg3 = numeric
+    // constant index. Taken when the condition HOLDS.
+    JmpLtGlobalConst,
+    JmpLeGlobalConst,
+    JmpGtGlobalConst,
+    JmpGeGlobalConst,
+
+    // Global += / -= numeric immediate: arg1 = name-constant index,
+    // arg2 = numeric constant index.
+    AddGlobalImm,
+    SubGlobalImm,
     // locals[a] >= constants[b] ? fall through : jump arg1
     JmpGeLocalConst,
     // locals[arg1] += constants[arg2] (Number fast path, generic fallback)
@@ -283,6 +296,66 @@ impl FunctionCompiler {
         idx
     }
 
+    /// Fuse `var <op> <literal>` / `<literal> <op> var` / `var <op> var`
+    /// conditions into single compare-jump opcodes. Locals use slot indices;
+    /// anything not in the local slot map is treated as a global by name.
+    /// Returns (opcode, operand_a, operand_b); jump target rides in arg1 via
+    /// patch(), taken when the condition FAILS (same polarity as JmpIfFalse).
+    fn try_fuse_cond(&mut self, c: &Expr) -> Option<(Opcode, u16, u16)> {
+        let Expr::Binary(l, k @ (Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge), r) = c else {
+            return None;
+        };
+        let lit_r = match r.as_ref() {
+            Expr::Value(Value::Number(m)) => Some(self.const_num(*m)),
+            _ => None,
+        };
+        let lit_l = match l.as_ref() {
+            Expr::Value(Value::Number(m)) => Some(self.const_num(*m)),
+            _ => None,
+        };
+        let local_op = |k: &Kind| match k {
+            Kind::Lt => Opcode::JmpLtLocalConst,
+            Kind::Le => Opcode::JmpLeLocalConst,
+            Kind::Gt => Opcode::JmpGtLocalConst,
+            _ => Opcode::JmpGeLocalConst,
+        };
+        let global_op = |k: &Kind| match k {
+            Kind::Lt => Opcode::JmpLtGlobalConst,
+            Kind::Le => Opcode::JmpLeGlobalConst,
+            Kind::Gt => Opcode::JmpGtGlobalConst,
+            _ => Opcode::JmpGeGlobalConst,
+        };
+        // var vs literal
+        if let (Expr::Var(an), Some(cr)) = (l.as_ref(), lit_r) {
+            if let Some(&sa) = self.slots.get(an) {
+                return Some((local_op(k), sa, cr));
+            }
+            let ni = self.const_str(an);
+            return Some((global_op(k), ni, cr));
+        }
+        // literal vs var (rewrite literal-left to var-first comparison)
+        if let (Some(cl), Expr::Var(bn)) = (lit_l, r.as_ref()) {
+            if let Some(&sb) = self.slots.get(bn) {
+                let fop = match *k {
+                    Kind::Lt => Opcode::JmpGtLocalConst,
+                    Kind::Le => Opcode::JmpGeLocalConst,
+                    Kind::Gt => Opcode::JmpLtLocalConst,
+                    _ => Opcode::JmpLeLocalConst,
+                };
+                return Some((fop, sb, cl));
+            }
+            let ni = self.const_str(bn);
+            let fop = match *k {
+                Kind::Lt => Opcode::JmpGtGlobalConst,
+                Kind::Le => Opcode::JmpGeGlobalConst,
+                Kind::Gt => Opcode::JmpLtGlobalConst,
+                _ => Opcode::JmpLeGlobalConst,
+            };
+            return Some((fop, ni, cl));
+        }
+        None
+    }
+
     fn patch(&mut self, idx: usize, target: usize) {
         if let Some(inst) = self.instructions.get_mut(idx) {
             inst.arg1 = target as u16;
@@ -413,12 +486,48 @@ impl FunctionCompiler {
                 let ni = self.const_str(n);
                 match op {
                     Kind::Assign => {
+                        // Fusion: i = i + <num> / i = i - <num> for globals
+                        if let Expr::Binary(l, k2, r) = e {
+                            let imm = match (k2, l.as_ref(), r.as_ref()) {
+                                (Kind::Plus, Expr::Var(ln), Expr::Value(Value::Number(m))) if ln == n => Some(*m),
+                                (Kind::Minus, Expr::Var(ln), Expr::Value(Value::Number(m))) if ln == n => Some(*m),
+                                _ => None,
+                            };
+                            if let Some(m) = imm {
+                                let ci = self.const_num(m);
+                                self.emit(
+                                    if matches!(k2, Kind::Plus) { Opcode::AddGlobalImm } else { Opcode::SubGlobalImm },
+                                    ni, ci, 0,
+                                );
+                                return Ok(());
+                            }
+                        }
                         self.compile_expr(e)?;
                         self.emit(Opcode::StoreGlobal, ni, 0, 0);
                         Ok(())
                     }
-                    Kind::PlusAssign
-                    | Kind::MinusAssign
+                    Kind::PlusAssign => {
+                        if let Expr::Value(Value::Number(m)) = e {
+                            let ci = self.const_num(*m);
+                            self.emit(Opcode::AddGlobalImm, ni, ci, 0);
+                            return Ok(());
+                        }
+                        self.compile_expr(e)?;
+                        self.emit(self.binary_opcode(op)?, ni, 0, 0);
+                        Ok(())
+                    }
+                    Kind::MinusAssign => {
+                        if let Expr::Value(Value::Number(m)) = e {
+                            let ci = self.const_num(*m);
+                            self.emit(Opcode::SubGlobalImm, ni, ci, 0);
+                            return Ok(());
+                        }
+                        self.compile_expr(e)?;
+                        self.emit(self.binary_opcode(op)?, ni, 0, 0);
+                        Ok(())
+                    }
+                    Kind::StarAssign
+                    | Kind::SlashAssign
                     | Kind::StarAssign
                     | Kind::SlashAssign
                     | Kind::PercentAssign => {
@@ -458,8 +567,12 @@ impl FunctionCompiler {
                 Ok(())
             }
             StmtKind::If(c, yes, no) => {
-                self.compile_expr(c)?;
-                let jf = self.emit(Opcode::JmpIfFalse, 0, 0, 0);
+                let jf = if let Some((fop, sa, sb)) = self.try_fuse_cond(c) {
+                    self.emit(fop, 0, sa, sb)
+                } else {
+                    self.compile_expr(c)?;
+                    self.emit(Opcode::JmpIfFalse, 0, 0, 0)
+                };
                 for s in yes {
                     self.compile_stmt(s)?;
                 }
@@ -477,67 +590,8 @@ impl FunctionCompiler {
                 // `a > b` / `a >= b` are normalized to the swapped
                 // Lt/Le forms so all four comparisons reuse the two
                 // fused compare-jump opcodes.
-                let fused = match c {
-                    Expr::Binary(l, k @ (Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge), r) => {
-                        // local vs numeric literal (either side): fused
-                        // compare-against-constant. A literal on the left is
-                        // rewritten to the equivalent local-first comparison.
-                        let lit_r = match r.as_ref() {
-                            Expr::Value(Value::Number(m)) => Some(self.const_num(*m)),
-                            _ => None,
-                        };
-                        let lit_l = match l.as_ref() {
-                            Expr::Value(Value::Number(m)) => Some(self.const_num(*m)),
-                            _ => None,
-                        };
-                        if let (Some(sa), Some(cr)) = (
-                            match l.as_ref() {
-                                Expr::Var(an) => self.slots.get(an).copied(),
-                                _ => None,
-                            },
-                            lit_r,
-                        ) {
-                            let fop = match k {
-                                Kind::Lt => Opcode::JmpLtLocalConst,
-                                Kind::Le => Opcode::JmpLeLocalConst,
-                                Kind::Gt => Opcode::JmpGtLocalConst,
-                                _ => Opcode::JmpGeLocalConst,
-                            };
-                            Some((fop, sa, cr))
-                        } else if let (Some(sb), Some(cl)) = (
-                            match r.as_ref() {
-                                Expr::Var(bn) => self.slots.get(bn).copied(),
-                                _ => None,
-                            },
-                            lit_l,
-                        ) {
-                            let fop = match k {
-                                Kind::Lt => Opcode::JmpGtLocalConst,
-                                Kind::Le => Opcode::JmpGeLocalConst,
-                                Kind::Gt => Opcode::JmpLtLocalConst,
-                                _ => Opcode::JmpLeLocalConst,
-                            };
-                            Some((fop, sb, cl))
-                        } else if let (Expr::Var(an), Expr::Var(bn)) = (l.as_ref(), r.as_ref()) {
-                            if let (Some(&sa), Some(&sb)) =
-                                (self.slots.get(an), self.slots.get(bn))
-                            {
-                                let (fop, fa, fb) = match c {
-                                    Expr::Binary(_, Kind::Lt, _) => (Opcode::JmpLtLocal, sa, sb),
-                                    Expr::Binary(_, Kind::Le, _) => (Opcode::JmpLeLocal, sa, sb),
-                                    Expr::Binary(_, Kind::Gt, _) => (Opcode::JmpLtLocal, sb, sa),
-                                    _ => (Opcode::JmpLeLocal, sb, sa),
-                                };
-                                Some((fop, fa, fb))
-                            } else { None }
-                        } else { None }
-                    }
-                    _ => None,
-                };
                 let cond = self.instructions.len();
-                let jf = if let Some((fop, sa, sb)) = fused {
-                    // Target goes in arg1 so the standard patch() applies;
-                    // operand slots ride in arg2/arg3.
+                let jf = if let Some((fop, sa, sb)) = self.try_fuse_cond(c) {
                     self.emit(fop, 0, sa, sb)
                 } else {
                     self.compile_expr(c)?;
