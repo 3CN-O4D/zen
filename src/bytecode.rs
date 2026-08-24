@@ -120,6 +120,16 @@ pub enum Opcode {
     // Function definition (module-level) / closure
     DefineFunction,
     Closure,
+
+    // Imports (packed name lists in the constants pool, '\u{1f}'-separated;
+    // items are "name" or "name=alias").
+    Import,
+    ImportFrom,
+    ImportStar,
+
+    // Pops end, start (Numbers); pushes the materialized range list.
+    // arg1 != 0 => exclusive (..) instead of inclusive (..=).
+    MakeRange,
 }
 
 /// A single bytecode instruction.
@@ -132,7 +142,7 @@ pub struct Instruction {
 }
 
 impl Instruction {
-    fn new(opcode: Opcode, arg1: u16, arg2: u16, arg3: u16) -> Self {
+    pub fn new(opcode: Opcode, arg1: u16, arg2: u16, arg3: u16) -> Self {
         Self { opcode, arg1, arg2, arg3 }
     }
 }
@@ -696,6 +706,38 @@ impl FunctionCompiler {
                 self.emit(Opcode::DefineFunction, ci, idx as u16, 0);
                 Ok(())
             }
+            StmtKind::Import(imports) => {
+                let packed = imports
+                    .iter()
+                    .map(|(m, a)| match a {
+                        Some(a) => format!("{m}={a}"),
+                        None => m.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\u{1f}");
+                let ci = self.const_str(&packed);
+                self.emit(Opcode::Import, ci, 0, 0);
+                Ok(())
+            }
+            StmtKind::FromImport(module, items) => {
+                let cm = self.const_str(module);
+                let packed = items
+                    .iter()
+                    .map(|(n, a)| match a {
+                        Some(a) => format!("{n}={a}"),
+                        None => n.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\u{1f}");
+                let ci = self.const_str(&packed);
+                self.emit(Opcode::ImportFrom, cm, ci, 0);
+                Ok(())
+            }
+            StmtKind::StarImport(module) => {
+                let cm = self.const_str(module);
+                self.emit(Opcode::ImportStar, cm, 0, 0);
+                Ok(())
+            }
             _ => Err(
                 "statement not supported by the bytecode compiler".into(),
             ),
@@ -921,6 +963,12 @@ fn local_opcode(&self, op: &Kind) -> Result<Opcode, String> {
                 let idx = self.nested.len() + 1;
                 self.nested.push((*cf).clone());
                 self.emit(Opcode::Closure, idx as u16, 0, 0);
+                Ok(())
+            }
+            Expr::Range(rs, re, exclusive) => {
+                self.compile_expr(rs)?;
+                self.compile_expr(re)?;
+                self.emit(Opcode::MakeRange, *exclusive as u16, 0, 0);
                 Ok(())
             }
             _ => Err("expression not supported by the bytecode compiler".into()),

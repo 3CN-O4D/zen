@@ -124,6 +124,30 @@ static FUNCTION_REGISTRY: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, Function>>,
 > = std::sync::OnceLock::new();
 
+/// Process-wide cache of executed modules (canonical path -> artifact).
+/// Guarantees each module executes exactly ONCE regardless of how many VMs
+/// or import paths reach it (diamond dependencies), and provides the data
+/// needed to re-register exports under a different alias without re-running
+/// module-level side effects.
+struct ModuleArtifact {
+    exports: HashMap<String, Value>,
+    functions: Vec<(String, Function)>,
+    classes: Vec<(String, ZenClass)>,
+}
+
+fn loaded_modules() -> &'static std::sync::Mutex<std::collections::HashMap<String, ModuleArtifact>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ModuleArtifact>>> =
+        std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Join handles for threads spawned via threading.start, keyed by thread id.
+fn thread_joins() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::thread::JoinHandle<()>>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::thread::JoinHandle<()>>>> =
+        std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 fn function_registry() -> &'static std::sync::Mutex<std::collections::HashMap<String, Function>> {
     FUNCTION_REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
@@ -2402,6 +2426,18 @@ pub struct Vm {
     native_functions: HashMap<String, NativeFunc>,
     classes: HashMap<String, ZenClass>,
     imported_modules: HashMap<String, HashMap<String, Value>>,
+    /// Canonical paths of modules currently being executed up the import
+    /// chain (cycle detection).
+    loading: Vec<String>,
+    /// Function/class keys registered on this VM by nested module imports.
+    /// They belong to other modules and must never count as this module's
+    /// own exports when the import chain unwinds.
+    foreign_fns: ahash::AHashSet<String>,
+    /// Append-only log of every function/class name registered in this VM,
+    /// shared (Arc) across nested VMs so run_module can diff its own window
+    /// by index instead of snapshotting whole maps (O(total) per import).
+    reg_log: std::sync::Arc<std::sync::Mutex<Vec<Option<(bool, String)>>>>,
+    foreign_classes: ahash::AHashSet<String>,
     stdlib_factories: HashMap<String, fn() -> Value>,
     lambda_counter: u64,
     locked: ahash::AHashSet<String>,
@@ -2456,6 +2492,10 @@ impl Vm {
             native_functions: HashMap::new(),
             classes: HashMap::new(),
             imported_modules: HashMap::new(),
+            loading: Vec::new(),
+            foreign_fns: ahash::AHashSet::new(),
+            reg_log: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            foreign_classes: ahash::AHashSet::new(),
             stdlib_factories: HashMap::new(),
             lambda_counter: 0,
             locked: ahash::AHashSet::new(),
@@ -3155,7 +3195,7 @@ impl Vm {
         crate::binascii::init_binascii_module(self);
 
         // Register all core native functions eagerly
-          const NATIVES: [&str; 402] = [
+          const NATIVES: [&str; 403] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -3360,6 +3400,7 @@ impl Vm {
             "decimal_setcontext",
             "decimal_localcontext",
             "threading_start",
+            "threading_join",
             "statistics_sum",
             "statistics_mean",
             "statistics_median",
@@ -3660,22 +3701,7 @@ impl Vm {
                 else {
                     return Err("range bounds must be numbers".into());
                 };
-                if start.fract() != 0.0 || end.fract() != 0.0 {
-                    return Err("range bounds must be integers".into());
-                }
-                let step = if start <= end { 1 } else { -1 };
-                let mut values = Vec::new();
-                let mut value = start as i64;
-                let stop = end as i64;
-                while if *exclusive {
-                    (step > 0 && value < stop) || (step < 0 && value > stop)
-                } else {
-                    (step > 0 && value <= stop) || (step < 0 && value >= stop)
-                } {
-                    values.push(Value::Number(value as f64));
-                    value += step;
-                }
-                Ok(Value::List(Arc::new(values)))
+                make_range_values(start, end, *exclusive)
             }
             Expr::Index(object, index) => {
                 let object = self.eval(object)?;
@@ -4850,62 +4876,365 @@ impl Vm {
             _ => Err("unsupported operator".into()),
         }
     }
+    /// Shared import machinery used by both tree-walk execution and the
+    /// bytecode `Import` opcode.
+    fn do_import(&mut self, imports: Vec<(String, Option<String>)>) -> Result<Flow, String> {
+        for (module, alias) in imports {
+            let name = alias.clone().unwrap_or(module.clone());
+            // Modules execute exactly once; repeated imports reuse
+            // the cached exports so module-level side effects do not
+            // re-run and exports stay stable.
+            if self.imported_modules.contains_key(&name) {
+                continue;
+            }
+            // Check if the module is already loaded as a dict in
+            // vars under its REAL name (`import string as st`
+            // must find vars["string"], not vars["st"]).
+            if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned() {
+                let mut map: HashMap<String, Value> = HashMap::new();
+                for (k, v) in Arc::unwrap_or_clone(existing) {
+                    map.insert(k, v);
+                }
+                // Also try to load the .zen file and merge exports
+                if let Ok(path) = self.resolve_module(&module) {
+                    if let Ok(module_vars) = self.run_module(&path, &name) {
+                        for (k, v) in module_vars {
+                            map.entry(k).or_insert(v);
+                        }
+                    }
+                }
+                self.imported_modules.insert(name.clone(), map.clone());
+                let btree: BTreeMap<String, Value> = map.into_iter().collect();
+                self.vars.insert(name, Value::Dict(Arc::new(btree)));
+                continue;
+            }
+            // Check if it's a dotted submodule (e.g. pkg.sub -> parent.sub)
+            if module.contains('.') {
+                let parts: Vec<&str> = module.splitn(2, '.').collect();
+                let parent = parts[0];
+                let child = parts[1];
+                if let Some(parent_mod) = self.imported_modules.get(parent).cloned() {
+                    if let Some(child_val) = parent_mod.get(child) {
+                        if let Value::Dict(d) = child_val {
+                            let mut map = HashMap::new();
+                            for (k, v) in (**d).clone() {
+                                map.insert(k, v);
+                            }
+                            self.imported_modules.insert(name, map);
+                            continue;
+                        }
+                    }
+                }
+            }
+            // Check stdlib lazy registry
+            if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
+                let mod_val = factory();
+                if let Value::Dict(d) = &mod_val {
+                    let mut map = HashMap::new();
+                    for (k, v) in (**d).clone() {
+                        map.insert(k.clone(), v.clone());
+                    }
+                    self.imported_modules.insert(name.clone(), map);
+                }
+                self.vars.insert(name, mod_val);
+                continue;
+            }
+            // Resolve as file
+            let path = self.resolve_module(&module)?;
+            let vars = match self.run_module(&path, &name) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err(e);
+                }
+            };
+            if module.contains('.') {
+                // Register nested dicts so chained member access
+                // `pkg.sub.mod.func` resolves through vars.
+                let parts: Vec<&str> = module.split('.').collect();
+                let leaf: BTreeMap<String, Value> =
+                    vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let mut acc = Value::Dict(Arc::new(leaf));
+                // Nest every segment after the root var name,
+                // left-to-right: pkg.sub.mod -> {sub: {mod: exports}}.
+                for p in parts.iter().skip(1).rev() {
+                    let mut m = BTreeMap::new();
+                    m.insert(p.to_string(), acc);
+                    acc = Value::Dict(Arc::new(m));
+                }
+                let root = parts[0];
+                match self.vars.get(root).cloned() {
+                    Some(Value::Dict(existing)) => {
+                        let mut merged = Arc::unwrap_or_clone(existing);
+                        if let Value::Dict(newm) = &acc {
+                            for (k, v) in (**newm).clone() {
+                                merged.entry(k.clone()).or_insert(v.clone());
+                            }
+                        }
+                        self.vars.insert(root.to_string(), Value::Dict(Arc::new(merged)));
+                    }
+                    _ => {
+                        self.vars.insert(root.to_string(), acc);
+                    }
+                }
+                if let Some(a) = &alias {
+                    let dict: BTreeMap<String, Value> =
+                        vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    self.vars.insert(a.clone(), Value::Dict(Arc::new(dict)));
+                }
+            } else if alias.is_some() {
+                // Bind the loaded module under the alias so direct
+                // member access (`alias.func()`) works.
+                let dict: BTreeMap<String, Value> =
+                    vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                self.vars.insert(name.clone(), Value::Dict(Arc::new(dict)));
+            }
+            self.imported_modules.insert(name, vars);
+        }
+        Ok(Flow::Normal)
+    }
+
+    fn do_from_import(
+        &mut self,
+        module: &str,
+        items: &[(String, Option<String>)],
+    ) -> Result<Flow, String> {
+        let vars = if let Some(Value::Dict(existing)) = self.vars.get(module).cloned() {
+            Arc::unwrap_or_clone(existing).into_iter().collect()
+        } else if let Some(map) = self.imported_modules.get(module).cloned() {
+            map.into_iter().collect()
+        } else if let Some(factory) = self.stdlib_factories.get(module).cloned() {
+            let mod_val = factory();
+            if let Value::Dict(d) = &mod_val {
+                (**d).clone().into_iter().collect()
+            } else {
+                HashMap::new()
+            }
+        } else {
+            let path = self.resolve_module(module)?;
+            self.run_module(&path, module)?
+        };
+        for (item, alias) in items.iter() {
+            let value = if let Some(v) = vars.get(item).cloned() {
+                v
+            } else {
+                // Item not in module dict - try as a submodule file:
+                // from pkg import sub  ->  pkg/sub.z or pkg/sub/main.z
+                let sub_name = format!("{module}.{item}");
+                match self.resolve_module(&sub_name) {
+                    Ok(path) => {
+                        let sub_vars = self.run_module(&path, &sub_name)?;
+                        // Cache the submodule dict in imported_modules
+                        let mut map = HashMap::new();
+                        for (k, v) in &sub_vars {
+                            map.insert(k.clone(), v.clone());
+                        }
+                        self.imported_modules.insert(sub_name.clone(), map);
+                        Value::Dict(Arc::new(sub_vars.into_iter().collect::<BTreeMap<String, Value>>()))
+                    }
+                    Err(_) => {
+                        return Err(format!("item '{item}' not found in module '{module}'\n  \x1b[1;33m= help:\x1b[0m check the module's available exports with `from {module} import *`"));
+                    }
+                }
+            };
+            let name = alias.clone().unwrap_or(item.clone());
+            self.bind_let(&name, value);
+        }
+        Ok(Flow::Normal)
+    }
+    fn do_star_import(&mut self, module: &str) -> Result<Flow, String> {
+                    let vars = if let Some(Value::Dict(existing)) = self.vars.get(module).cloned()
+                    {
+                        Arc::unwrap_or_clone(existing).into_iter().collect()
+                    } else if let Some(map) = self.imported_modules.get(module).cloned() {
+                        map.into_iter().collect()
+                    } else if let Some(factory) = self.stdlib_factories.get(module).cloned() {
+                        let mod_val = factory();
+                        if let Value::Dict(d) = &mod_val {
+                            (**d).clone().into_iter().collect()
+                        } else {
+                            HashMap::new()
+                        }
+                    } else {
+                        let path = self.resolve_module(module)?;
+                        self.run_module(&path, module)?
+                    };
+                    for (name, value) in vars {
+                        if !name.starts_with('_') {
+                            self.bind_let(&name, value);
+                        }
+                    }
+                            Ok(Flow::Normal)
+    }
+
     fn run_module(&mut self, path: &str, namespace: &str) -> Result<HashMap<String, Value>, String> {
-        let stmts = parse_file(path).map_err(|e| format!("\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n \x1b[1;34m-->\x1b[0m {}:1\n  \x1b[1;34m|\x1b[0m\n  \x1b[1;31m= {}\x1b[0m", e, path, e))?;
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+        let canon_str = canon.to_string_lossy().into_owned();
+        // Already executed somewhere in this process? Re-register under this
+        // namespace without re-running module-level side effects (diamond
+        // imports share one execution).
+        if let Some(art) = loaded_modules().lock().unwrap().get(&canon_str) {
+            for (fname, f) in &art.functions {
+                let ns_key = format!("{namespace}::{fname}");
+                self.register_function(ns_key.clone(), f.clone());
+                // Plain-name alias is first-wins so a later module cannot
+                // silently redirect closures that captured an earlier
+                // module's helper.
+                if !self.functions.contains_key(fname) {
+                    self.register_function(fname.clone(), f.clone());
+                }
+                self.foreign_fns.insert(ns_key);
+                if !self.functions.contains_key(fname) || art.functions.len() > 0 {
+                    self.foreign_fns.insert(fname.clone());
+                }
+            }
+            for (cname, cdef) in &art.classes {
+                let ns_key = format!("{namespace}.{cname}");
+                self.classes.insert(ns_key.clone(), cdef.clone());
+                self.classes.entry(cname.clone()).or_insert_with(|| cdef.clone());
+                self.foreign_classes.insert(ns_key);
+                self.foreign_classes.insert(cname.clone());
+            }
+            return Ok(art.exports.clone());
+        }
+        // Circular import guard on canonical paths.
+        if self.loading.iter().any(|p| p == &canon_str) {
+            let names: Vec<String> = self
+                .loading
+                .iter()
+                .map(|p| {
+                    std::path::Path::new(p)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| p.clone())
+                })
+                .collect();
+            let leaf = std::path::Path::new(&canon_str)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| canon_str.clone());
+            return Err(format!(
+                "circular import detected: {} -> {leaf}",
+                names.join(" -> ")
+            ));
+        }
+        let source = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read module {path}: {e}"))?;
         let mut module_vm = Vm::new();
         // Snapshot the pristine baseline BEFORE seeding from the parent, so
         // names the parent happens to share with this module (e.g. plain-name
         // function registrations left by an earlier `from mod import fn`) are
         // not mistaken for pre-existing builtins and filtered out of exports.
         let initial_keys: std::collections::HashSet<String> = module_vm.vars.keys().cloned().collect();
-        let initial_fns: std::collections::HashSet<String> = module_vm.functions.keys().cloned().collect();
-        let initial_classes: std::collections::HashSet<String> = module_vm.classes.keys().cloned().collect();
-        module_vm.functions = self.functions.clone();
+        // Modules are self-contained: they see the prelude, builtins/natives,
+        // and whatever they import themselves — NOT the importer's private
+        // definitions. Seeding the parent's whole function/class maps here
+        // made every import an O(total) clone (quadratic across many imports).
         module_vm.native_functions = self.native_functions.clone();
-        module_vm.classes = self.classes.clone();
+        // Share ONE append-only registration log across the whole import
+        // tree so per-module diff slices nest and unwind-tombstones erase
+        // exactly what nested imports contributed.
+        module_vm.reg_log = self.reg_log.clone();
+        // Function/class diffs use the shared registration log: everything
+        // appended after this index was defined while THIS module executed
+        // (nested imports tombstone their own entries on unwind), so no
+        // ancestor definitions leak into this module's exports and chains
+        // stay linear instead of exponential.
+        let log_start = module_vm.reg_log.lock().unwrap().len();
         module_vm.file = path.into();
-        if let Ok(source) = fs::read_to_string(path) {
-            module_vm.lines = source.lines().map(|l| l.to_string()).collect();
-        }
-        module_vm.exec_module(&stmts)?;
+        module_vm.lines = source.lines().map(|l| l.to_string()).collect();
+        // Propagate the import chain so nested circular imports are caught.
+        module_vm.loading = self.loading.clone();
+        module_vm.loading.push(canon_str.clone());
+        let parse_err = |e: &str| {
+            format!("\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n \x1b[1;34m-->\x1b[0m {}:1\n  \x1b[1;34m|\x1b[0m\n  \x1b[1;31m= {}\x1b[0m", e, path, e)
+        };
+        module_vm.exec_source_cached(path, &source, &parse_err)?;
         // Register the module's functions under a namespaced key in the caller so
         // `module.func(...)` calls resolve through self.functions.
-        for (fname, function) in &module_vm.functions {
-            if !initial_fns.contains(fname) {
-                let key = format!("{namespace}::{fname}");
-                self.register_function(key, function.clone());
-                // Also expose under the plain name so closures escaping the module
-                // (e.g. logging handlers) can resolve module helpers by name.
+        let mut art_functions: Vec<(String, Function)> = Vec::new();
+        let mut art_classes: Vec<(String, ZenClass)> = Vec::new();
+        {
+            let log = module_vm.reg_log.lock().unwrap();
+            let mut seen = ahash::AHashSet::new();
+            for entry in log[log_start..].iter().flatten() {
+                if !seen.insert(entry.clone()) {
+                    continue;
+                }
+                let (is_class, name) = (&entry.0, &entry.1);
+                if *is_class {
+                    if let Some(def) = module_vm.classes.get(name) {
+                        art_classes.push((name.clone(), def.clone()));
+                    }
+                } else if let Some(function) = module_vm.functions.get(name) {
+                    art_functions.push((name.clone(), function.clone()));
+                }
+            }
+        }
+        for (fname, function) in &art_functions {
+            let key = format!("{namespace}::{fname}");
+            self.register_function(key, function.clone());
+            // Plain alias: first-wins (see note above).
+            if !self.functions.contains_key(fname) {
                 self.register_function(fname.clone(), function.clone());
             }
         }
         // Register the module's classes under a namespaced key so `new module.Class(...)` works.
-        for (class, def) in &module_vm.classes {
-            if !initial_classes.contains(class) {
-                let key = format!("{namespace}.{class}");
-                self.classes.insert(key, def.clone());
-                // Also expose under the plain name so module factories that do
-                // `new Class(...)` internally resolve.
-                self.classes.insert(class.clone(), def.clone());
-            }
+        for (class, def) in &art_classes {
+            let key = format!("{namespace}.{class}");
+            self.classes.insert(key, def.clone());
+            self.classes.entry(class.clone()).or_insert_with(|| def.clone());
         }
-        let mut exports: HashMap<String, Value> = module_vm.vars.into_iter()
+        let exports: HashMap<String, Value> = module_vm.vars.into_iter()
             .filter(|(k, _)| !initial_keys.contains(k))
             .collect();
-        for (fname, _fn) in &module_vm.functions {
-            if !initial_fns.contains(fname) && !exports.contains_key(fname) {
+        let mut exports = exports;
+        for (fname, _fn) in &art_functions {
+            if !exports.contains_key(fname) {
                 exports.insert(
                     fname.clone(),
                     Value::Function(format!("{namespace}::{fname}")),
                 );
             }
         }
-        for (class, _def) in &module_vm.classes {
-            if !initial_classes.contains(class) && !exports.contains_key(class) {
+        for (class, _def) in &art_classes {
+            if !exports.contains_key(class) {
                 exports.insert(
                     class.clone(),
                     Value::Function(format!("{namespace}.{class}")),
                 );
+            }
+        }
+        // Everything just registered belongs to THIS module; tag the
+        // caller-visible copies as foreign inside the caller so the unwind
+        // does not re-export ancestor functions under compounded prefixes.
+        let mut newly_owned: Vec<(String, String)> = art_functions
+            .iter()
+            .map(|(f, _)| (format!("{namespace}::{f}"), f.clone()))
+            .collect();
+        let newly_owned_classes: Vec<(String, String)> = art_classes
+            .iter()
+            .map(|(c, _)| (format!("{namespace}.{c}"), c.clone()))
+            .collect();
+        for (ns_key, plain) in newly_owned.drain(..) {
+            self.foreign_fns.insert(ns_key);
+            self.foreign_fns.insert(plain);
+        }
+        for (ns_key, plain) in newly_owned_classes {
+            self.foreign_classes.insert(ns_key);
+            self.foreign_classes.insert(plain);
+        }
+        loaded_modules().lock().unwrap().insert(
+            canon_str,
+            ModuleArtifact {
+                exports: exports.clone(),
+                functions: art_functions,
+                classes: art_classes,
+            },
+        );
+        {
+            let mut log = module_vm.reg_log.lock().unwrap();
+            for entry in log[log_start..].iter_mut() {
+                *entry = None;
             }
         }
         Ok(exports)
@@ -4996,6 +5325,9 @@ impl Vm {
         self.fn_generation = self.fn_generation.wrapping_add(1);
         if let Ok(mut registry) = function_registry().lock() {
             registry.insert(name.clone(), function.clone());
+        }
+        if let Ok(mut log) = self.reg_log.lock() {
+            log.push(Some((false, name.clone())));
         }
         self.functions.insert(name, function);
     }
@@ -6025,6 +6357,53 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         stack.push(Value::Function(name));
                     }
                 }
+                Opcode::MakeRange => {
+                    let end = stack.pop().ok_or("stack underflow in MakeRange")?;
+                    let start = stack.pop().ok_or("stack underflow in MakeRange")?;
+                    match (start, end) {
+                        (Value::Number(s), Value::Number(e)) => {
+                            stack.push(make_range_values(s, e, inst.arg1 != 0)?);
+                        }
+                        _ => return Err("range bounds must be numbers".into()),
+                    }
+                }
+                Opcode::Import | Opcode::ImportFrom | Opcode::ImportStar => {
+                    let get_const = |idx: u16| -> Result<String, String> {
+                        match cur.constants.get(idx as usize) {
+                            Some(Value::String(s)) => Ok(s.clone()),
+                            _ => Err("bad string constant in import".into()),
+                        }
+                    };
+                    let unpack = |tok: &str| match tok.split_once('=') {
+                        Some((n, a)) => (n.to_string(), Some(a.to_string())),
+                        None => (tok.to_string(), None),
+                    };
+                    match inst.opcode {
+                        Opcode::Import => {
+                            let packed = get_const(inst.arg1)?;
+                            let imports: Vec<(String, Option<String>)> = packed
+                                .split('\u{1f}')
+                                .filter(|t| !t.is_empty())
+                                .map(unpack)
+                                .collect();
+                            self.do_import(imports)?;
+                        }
+                        Opcode::ImportFrom => {
+                            let module = get_const(inst.arg1)?;
+                            let packed = get_const(inst.arg2)?;
+                            let items: Vec<(String, Option<String>)> = packed
+                                .split('\u{1f}')
+                                .filter(|t| !t.is_empty())
+                                .map(unpack)
+                                .collect();
+                            self.do_from_import(&module, &items)?;
+                        }
+                        _ => {
+                            let module = get_const(inst.arg1)?;
+                            self.do_star_import(&module)?;
+                        }
+                    }
+                }
             }
         }
     }
@@ -6626,17 +7005,58 @@ let function = self
     fn exec_module(&mut self, stmts: &[Stmt]) -> Result<Flow, String> {
         // Try to compile and run the module via the bytecode VM. Falls back to
         // tree-walk if any construct is unsupported.
-        if let Ok(funcs) = crate::bytecode::compile_program(stmts) {
-            self.compiled_functions = funcs;
-            if let Some(main) = self.compiled_functions.first().cloned() {
-                let flow = self.run_bytecode(&main, Vec::new(), &HashMap::new());
+        match crate::bytecode::compile_program(stmts) {
+            Ok(funcs) => self.exec_compiled(funcs),
+            Err(_) => {
+                let result = self.exec(stmts);
                 self.drain_pending_error_classes();
-                return flow;
+                result
             }
         }
-        let result = self.exec(stmts);
-        self.drain_pending_error_classes();
-        result
+    }
+
+    fn exec_compiled(
+        &mut self,
+        funcs: Vec<Arc<crate::bytecode::CompiledFunction>>,
+    ) -> Result<Flow, String> {
+        self.compiled_functions = funcs;
+        if let Some(main) = self.compiled_functions.first().cloned() {
+            let flow = self.run_bytecode(&main, Vec::new(), &HashMap::new());
+            self.drain_pending_error_classes();
+            return flow;
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// Execute a source file with the on-disk bytecode cache enabled: warm
+    /// runs skip lex/parse/compile entirely. Falls back to the normal path
+    /// on cache miss or when the program cannot compile to bytecode.
+    fn exec_source_cached(
+        &mut self,
+        path: &str,
+        source: &str,
+        fmt_parse_err: &dyn Fn(&str) -> String,
+    ) -> Result<Flow, String> {
+        if let Some(funcs) = crate::cache::load(path, source) {
+            return self.exec_compiled(funcs);
+        }
+
+        let tokens = lex(source).map_err(|e| fmt_parse_err(&e.to_string()))?;
+        let program = Parser::new(tokens)
+            .program()
+            .map_err(|e| fmt_parse_err(&e.to_string()))?;
+        match crate::bytecode::compile_program(&program) {
+            Ok(funcs) => {
+                crate::cache::store(path, source, &funcs);
+                self.exec_compiled(funcs)
+            }
+            Err(e) => {
+                if std::env::var("ZWhyNoBC").is_ok() { eprintln!("[whybc] {}: {}", path, e); }
+                let result = self.exec(&program);
+                self.drain_pending_error_classes();
+                result
+            }
+        }
     }
     fn drain_pending_error_classes(&mut self) {
         let pending = if let Ok(mut lock) = pending_error_classes().lock() {
@@ -6953,201 +7373,9 @@ let function = self
                     let val = self.eval(e)?;
                     return Ok(Flow::Throw(self.to_error(val, stmt.line, stmt.col)));
                 }
-                StmtKind::Import(imports) => {
-                    for (module, alias) in imports {
-                        let name = alias.clone().unwrap_or(module.clone());
-                        // Modules execute exactly once; repeated imports reuse
-                        // the cached exports so module-level side effects do not
-                        // re-run and exports stay stable.
-                        if self.imported_modules.contains_key(&name) {
-                            continue;
-                        }
-                        // Check if the module is already loaded as a dict in
-                        // vars under its REAL name (`import string as st`
-                        // must find vars["string"], not vars["st"]).
-                        if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned() {
-                            let mut map: HashMap<String, Value> = HashMap::new();
-                            for (k, v) in Arc::unwrap_or_clone(existing) {
-                                map.insert(k, v);
-                            }
-                            // Also try to load the .zen file and merge exports
-                            if let Ok(path) = self.resolve_module(&module) {
-                                if let Ok(module_vars) = self.run_module(&path, &name) {
-                                    for (k, v) in module_vars {
-                                        map.entry(k).or_insert(v);
-                                    }
-                                }
-                            }
-                            self.imported_modules.insert(name.clone(), map.clone());
-                            let btree: BTreeMap<String, Value> = map.into_iter().collect();
-                            self.vars.insert(name, Value::Dict(Arc::new(btree)));
-                            continue;
-                        }
-                        // Check if it's a dotted submodule (e.g. pkg.sub -> parent.sub)
-                        if module.contains('.') {
-                            let parts: Vec<&str> = module.splitn(2, '.').collect();
-                            let parent = parts[0];
-                            let child = parts[1];
-                            if let Some(parent_mod) = self.imported_modules.get(parent).cloned() {
-                                if let Some(child_val) = parent_mod.get(child) {
-                                    if let Value::Dict(d) = child_val {
-                                        let mut map = HashMap::new();
-                                        for (k, v) in (**d).clone() {
-                                            map.insert(k, v);
-                                        }
-                                        self.imported_modules.insert(name, map);
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                        // Check stdlib lazy registry
-                        if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
-                            let mod_val = factory();
-                            if let Value::Dict(d) = &mod_val {
-                                let mut map = HashMap::new();
-                                for (k, v) in (**d).clone() {
-                                    map.insert(k.clone(), v.clone());
-                                }
-                                self.imported_modules.insert(name.clone(), map);
-                            }
-                            self.vars.insert(name, mod_val);
-                            continue;
-                        }
-                        // Modules execute exactly once; repeated imports reuse
-                        // the cached exports so module-level side effects do not
-                        // re-run and exports stay stable.
-                        if self.imported_modules.contains_key(&name) {
-                            continue;
-                        }
-                        // Resolve as file
-                        let path = self.resolve_module(&module)?;
-                        let vars = match self.run_module(&path, &name) {
-                            Ok(v) => {
-                                v
-                            }
-                            Err(e) => {
-                                return Err(e);
-                            }
-                        };
-                        if module.contains('.') {
-                            // Register nested dicts so chained member access
-                            // `pkg.sub.mod.func` resolves through vars.
-                            let parts: Vec<&str> = module.split('.').collect();
-                            let leaf: BTreeMap<String, Value> =
-                                vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            let mut acc = Value::Dict(Arc::new(leaf));
-                            // Nest every segment after the root var name,
-                            // left-to-right: pkg.sub.mod -> {sub: {mod: exports}}.
-                            for p in parts.iter().skip(1).rev() {
-                                let mut m = BTreeMap::new();
-                                m.insert(p.to_string(), acc);
-                                acc = Value::Dict(Arc::new(m));
-                            }
-                            let root = parts[0];
-                            match self.vars.get(root).cloned() {
-                                Some(Value::Dict(existing)) => {
-                                    let mut merged = Arc::unwrap_or_clone(existing);
-                                    if let Value::Dict(newm) = &acc {
-                                        for (k, v) in (**newm).clone() {
-                                            merged.entry(k.clone()).or_insert(v.clone());
-                                        }
-                                    }
-                                    self.vars.insert(root.to_string(), Value::Dict(Arc::new(merged)));
-                                }
-                                _ => {
-                                    self.vars.insert(root.to_string(), acc);
-                                }
-                            }
-                            if let Some(a) = &alias {
-                                let dict: BTreeMap<String, Value> =
-                                    vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                                self.vars.insert(a.clone(), Value::Dict(Arc::new(dict)));
-                            }
-                        } else if alias.is_some() {
-                            // Bind the loaded module under the alias so direct
-                            // member access (`alias.func()`) works.
-                            let dict: BTreeMap<String, Value> =
-                                vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                            self.vars.insert(name.clone(), Value::Dict(Arc::new(dict)));
-                        }
-                        self.imported_modules.insert(name, vars);
-                    }
-                    Ok(Flow::Normal)
-                }
-                StmtKind::FromImport(module, items) => {
-                    let vars = if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned()
-                    {
-                        Arc::unwrap_or_clone(existing).into_iter().collect()
-                    } else if let Some(map) = self.imported_modules.get(module.as_str()).cloned() {
-                        map.into_iter().collect()
-                    } else if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
-                        let mod_val = factory();
-                        if let Value::Dict(d) = &mod_val {
-                            (**d).clone().into_iter().collect()
-                        } else {
-                            HashMap::new()
-                        }
-                    } else {
-                        let path = self.resolve_module(&module)?;
-                        self.run_module(&path, &module)?
-                    };
-                    for (item, alias) in items {
-                        let value = if let Some(v) = vars.get(item).cloned() {
-                            v
-                        } else {
-                            // Item not in module dict — try as a submodule file:
-                            // from pkg import sub  ->  pkg/sub.z or pkg/sub/main.z
-                            let sub_name = if module.contains('.') {
-                                format!("{}.{}", module, item)
-                            } else {
-                                format!("{}.{}", module, item)
-                            };
-                            match self.resolve_module(&sub_name) {
-                                Ok(path) => {
-                                    let sub_vars = self.run_module(&path, &sub_name)?;
-                                    // Cache the submodule dict in imported_modules
-                                    let mut map = HashMap::new();
-                                    for (k, v) in &sub_vars {
-                                        map.insert(k.clone(), v.clone());
-                                    }
-                                    self.imported_modules.insert(sub_name.clone(), map);
-                                    Value::Dict(Arc::new(sub_vars.into_iter().collect::<BTreeMap<String, Value>>()))
-                                }
-                                Err(_) => {
-                                    return Err(format!("item '{}' not found in module '{}'\n  \x1b[1;33m= help:\x1b[0m check the module's available exports with `from {} import *`", item, module, module));
-                                }
-                            }
-                        };
-                        let name = alias.clone().unwrap_or(item.clone());
-                        self.bind_let(&name, value);
-                    }
-                    Ok(Flow::Normal)
-                }
-                StmtKind::StarImport(module) => {
-                    let vars = if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned()
-                    {
-                        Arc::unwrap_or_clone(existing).into_iter().collect()
-                    } else if let Some(map) = self.imported_modules.get(module.as_str()).cloned() {
-                        map.into_iter().collect()
-                    } else if let Some(factory) = self.stdlib_factories.get(module.as_str()).cloned() {
-                        let mod_val = factory();
-                        if let Value::Dict(d) = &mod_val {
-                            (**d).clone().into_iter().collect()
-                        } else {
-                            HashMap::new()
-                        }
-                    } else {
-                        let path = self.resolve_module(&module)?;
-                        self.run_module(&path, &module)?
-                    };
-                    for (name, value) in vars {
-                        if !name.starts_with('_') {
-                            self.bind_let(&name, value);
-                        }
-                    }
-                    Ok(Flow::Normal)
-                }
+                StmtKind::Import(imports) => self.do_import(imports.clone()),
+                StmtKind::FromImport(module, items) => self.do_from_import(&module, &items),
+                StmtKind::StarImport(module) => self.do_star_import(&module),
                 StmtKind::Load(path) => {
                     let resolved = if path.ends_with(".z") || path.contains('/') {
                         path.clone()
@@ -7227,6 +7455,9 @@ let function = self
                             fields,
                         },
                     );
+                    if let Ok(mut log) = self.reg_log.lock() {
+                        log.push(Some((true, name.clone())));
+                    }
                     self.vars.insert(name.clone(), Value::Function(name.clone()));
                     Ok(Flow::Normal)
                 }
@@ -11008,8 +11239,14 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::Function(f)) | Some(Value::NativeFunction(f)) => f.clone(),
                 _ => return Err("threading.start expects a function".into()),
             };
+            static NEXT_THREAD_ID: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(1);
+            let id = format!(
+                "thread-{}",
+                NEXT_THREAD_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            );
             let name_clone = name.clone();
-            std::thread::spawn(move || {
+            let handle = std::thread::spawn(move || {
                 let mut vm = Vm::new();
                 // Seed the thread VM with the function body from the registry.
                 if let Ok(registry) = function_registry().lock() {
@@ -11019,10 +11256,25 @@ fn native_for(name: &str) -> NativeFunc {
                 }
                 let _ = vm.call(&name_clone, Vec::new());
             });
+            if let Ok(mut joins) = thread_joins().lock() {
+                joins.insert(id.clone(), handle);
+            }
             Ok(Value::Dict(Arc::new(BTreeMap::from([
                 ("name".into(), Value::String(format!("Thread-{name}"))),
+                ("id".into(), Value::String(id)),
                 ("daemon".into(), Value::Bool(true)),
             ]))))
+        },
+        "threading_join" => |args| {
+            let id = arg_string(&args, 0)?;
+            let handle = thread_joins().lock().ok().and_then(|mut j| j.remove(&id));
+            match handle {
+                Some(h) => match h.join() {
+                    Ok(()) => Ok(Value::Bool(true)),
+                    Err(_) => Ok(Value::Bool(false)),
+                },
+                None => Err(format!("no such thread: {id}")),
+            }
         },
         "browser_launch" => |args| crate::state::browser_launch(&args),
         "browser_connect" => |_| crate::state::browser_connect(),
@@ -13291,16 +13543,25 @@ pub fn run(source: &str) -> Result<(), String> {
 
 /// Run a script, reporting errors against a named source file.
 pub fn run_named(source: &str, file: &str) -> Result<(), String> {
-    let tokens = lex(source)?;
-    let program = Parser::new(tokens).program()?;
     let mut vm = Vm::new();
     vm.file = file.into();
     vm.lines = source.lines().map(|l| l.to_string()).collect();
     if let Some(prelude) = find_std_file("browser.z") {
-        let stmts = parse_file(&prelude)?;
-        vm.exec_module(&stmts)?;
+        let psource = std::fs::read_to_string(&prelude)
+            .map_err(|e| format!("cannot read prelude {prelude}: {e}"))?;
+        vm.exec_source_cached(&prelude, &psource, &|e| e.to_string())?;
     }
-    let flow = vm.exec_module(&program)?;
+    let flow = if file == "<string>" {
+        let tokens = lex(source)?;
+        let program = Parser::new(tokens).program()?;
+        vm.exec_module(&program)?
+    } else {
+        // Seed cycle detection so importing the entry file errors cleanly.
+        if let Ok(canon) = std::fs::canonicalize(file) {
+            vm.loading.push(canon.to_string_lossy().into_owned());
+        }
+        vm.exec_source_cached(file, source, &|e| e.to_string())?
+    };
     match flow {
         Flow::Normal => Ok(()),
         Flow::Return(_) => Err("return used outside a function\n  \x1b[1;33m= help:\x1b[0m `return` can only be used inside a function body defined with `function` or `def`".into()),
@@ -13312,6 +13573,26 @@ pub fn run_named(source: &str, file: &str) -> Result<(), String> {
             Err(format_unhandled(source, &file, line, col, &ty, &msg))
         }
     }
+}
+
+/// Shared numeric-range materialization (tree-walk eval + MakeRange opcode).
+fn make_range_values(start: f64, end: f64, exclusive: bool) -> Result<Value, String> {
+    if start.fract() != 0.0 || end.fract() != 0.0 {
+        return Err("range bounds must be integers".into());
+    }
+    let step = if start <= end { 1 } else { -1 };
+    let mut values = Vec::new();
+    let mut value = start as i64;
+    let stop = end as i64;
+    while if exclusive {
+        (step > 0 && value < stop) || (step < 0 && value > stop)
+    } else {
+        (step > 0 && value <= stop) || (step < 0 && value >= stop)
+    } {
+        values.push(Value::Number(value as f64));
+        value += step;
+    }
+    Ok(Value::List(Arc::new(values)))
 }
 
 fn error_location(value: &Value) -> (String, usize, usize) {

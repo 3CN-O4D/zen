@@ -2,6 +2,7 @@ mod base32;
 mod base64;
 mod binascii;
 mod browser;
+mod cache;
 mod collections;
 mod color;
 mod crunch;
@@ -56,6 +57,10 @@ fn usage() {
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
+    if args.is_empty() {
+        repl();
+        return;
+    }
     if args.first().is_some_and(|arg| arg == "--version") {
         println!("zen {} (native Rust runtime)", env!("CARGO_PKG_VERSION"));
         return;
