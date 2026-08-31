@@ -1,11 +1,10 @@
 //! Zen `os` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_os_module(vm: &mut Vm) {
-let os = Value::Dict(Arc::new(BTreeMap::from([
+let os = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("env".into(), Value::NativeFunction("os_getenv".into())),
     ("getenv".into(), Value::NativeFunction("os_getenv".into())),
     ("setenv".into(), Value::NativeFunction("os_setenv".into())),

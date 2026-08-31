@@ -10,7 +10,6 @@ Zen is a Rust-based scripting language. You need one of the following installati
 |--------|-------------|
 | Pre-built binary | Download from GitHub releases |
 | Build from source | Rust toolchain (rustup) |
-| pip (wrapper) | Python 3.8+, pip |
 
 ---
 
@@ -68,11 +67,14 @@ sudo cp target/release/zen /usr/local/bin/
 zen --version
 ```
 
-### Any Linux — pip install
+### Any Linux — pip install (wrapper)
+
+> Note: The pip package (`pip install zen-lang`) is a legacy Python wrapper.
+> The recommended method is the standalone Rust binary.
 
 ```bash
 pip install zen-lang
-# or from source
+# or from source (legacy)
 git clone https://github.com/3CN-O4D/zen.git
 cd zen
 pip install -e .
@@ -111,7 +113,10 @@ cp target/release/zen /opt/homebrew/bin/
 zen --version
 ```
 
-### pip install
+### pip install (wrapper)
+
+> Note: The pip package (`pip install zen-lang`) is a legacy Python wrapper.
+> The recommended method is the standalone Rust binary.
 
 ```bash
 pip install zen-lang
@@ -158,7 +163,10 @@ copy target\release\zen.exe C:\Users\YourUser\AppData\Local\Microsoft\WindowsApp
 zen --version
 ```
 
-### pip install
+### pip install (wrapper)
+
+> Note: The pip package (`pip install zen-lang`) is a legacy Python wrapper.
+> The recommended method is the standalone Rust binary.
 
 ```powershell
 pip install zen-lang
@@ -249,11 +257,12 @@ docker run -it zen shell
 docker run -it zen -e 'print 2 + 2'
 ```
 
-### pip-based Dockerfile
+### Standalone binary Dockerfile
 
 ```dockerfile
-FROM python:3.11-slim
-RUN pip install zen-lang
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/zen /usr/local/bin/
 ENTRYPOINT ["zen"]
 ```
 
@@ -264,10 +273,10 @@ ENTRYPOINT ["zen"]
 ```bash
 # Check version
 zen --version
-# Zen v0.x.x
+# zen 2.1.0 (native Rust runtime)
 
-# Start interactive shell
-zen shell
+# Start interactive REPL
+zen repl
 
 # Run inline code
 zen -e 'print "Hello from Zen!"'
@@ -276,6 +285,8 @@ zen -e 'print "Hello from Zen!"'
 echo 'print "It works!"' > test.z
 zen run test.z
 ```
+
+> **Note:** The interactive session is invoked with `zen repl` (not `zen shell`). Inside the REPL, type `:help` for available commands.
 
 ---
 
@@ -447,15 +458,15 @@ sudo dnf groupinstall "Development Tools"
 xcode-select --install
 ```
 
-### "pip: externally managed environment" (PEP 668)
+### "pip: externally managed environment" (legacy wrapper)
+
+> The `pip install zen-lang` package is a legacy Python wrapper and not
+> recommended. Use the standalone Rust binary instead. If you must use the
+> wrapper, activate a virtual environment first:
 
 ```bash
-# Option 1: Use a virtual environment
 python -m venv ~/zen-env && source ~/zen-env/bin/activate
 pip install zen-lang
-
-# Option 2: Override (use with caution)
-pip install zen-lang --break-system-packages
 ```
 
 ### "zen: command not found" after install

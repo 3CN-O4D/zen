@@ -1,126 +1,56 @@
-// wa_auth.z — WhatsApp Auth via QR or Pairing Code
-// Usage: zen run wa_auth.z
-// Stores encrypted auth to wa_session.enc for reuse
+// wa_auth.z — WhatsApp authentication via QR code or pairing code.
+// Usage: zen run examples/wa_auth.z
+// The session persists in ~/.zen/wa_session — run again to reuse it.
 
-load wa
-load crypto
+import wa
 
-let auth_file = "wa_session.enc"
-let auth_dir = "wa_auth"
-let password = ""
-let conn = null
+print("WhatsApp auth")
+print("  1. QR Code (scan from phone)")
+print("  2. Pairing Code (enter phone number)")
+var choice = input("Method [1/2]: ")
 
-// ── Helper: prompt for password (hidden) ──
-function get_password() {
-    let p = input("Enter encryption password: ")
-    if p.len < 4 {
-        print "Password too short, using default"
-        p = "zen-wa-default-key-2024"
+if choice == "2" {
+    var phone = input("Phone number with country code (e.g. 254712345678): ")
+    print("Requesting pairing code...")
+    wa.connect("", phone)
+    # pairing code arrives shortly after the bridge reaches the server
+    var code = null
+    for i in range(0, 40) {
+        code = wa.pairingCode()
+        if code != null { break }
+        wait(500)
     }
-    return p
-}
-
-// ── Check if we have a saved session ──
-if fs.exists(auth_file) {
-    print "Found saved session: " + auth_file
-    password = get_password()
-    let encrypted = fs.read(auth_file)
-    conn = wa.connect(auth_dir)
-    let imported = conn.import_auth(password, auth_dir, encrypted)
-    if imported {
-        print "Session restored: " + imported + " files"
-        conn.disconnect()
-    }
-}
-
-// ── Fresh authentication ──
-if conn is null {
-    print "No saved session found."
-    print "Choose auth method:"
-    print "  1. QR Code (scan with phone)"
-    print "  2. Pairing Code (enter phone number)"
-    let choice = input("Method [1/2]: ")
-
-    if choice == "2" {
-        let phone = input("Enter phone number with country code (e.g. 254712345678): ")
-        print "Requesting pairing code..."
-        conn = wa.connect(auth_dir, phone)
-        if conn is not null and conn.pairingCode {
-            print ""
-            print "╔══════════════════════════════════════╗"
-            print "║  Pairing Code: " + conn.pairingCode
-            print "║                                      ║"
-            print "║  Open WhatsApp → Linked Devices      ║"
-            print "║  → Link a Device → Pair with code    ║"
-            print "╚══════════════════════════════════════╝"
-            print ""
-        } else {
-            print "ERROR: Failed to get pairing code."
-            return
-        }
-    } else if choice == "1" {
-        conn = wa.connect(auth_dir)
-        print "QR code will appear below."
-        print "Open WhatsApp → Linked Devices → Link a Device → Scan QR"
-    } else {
-        print "Invalid choice. Enter 1 for QR or 2 for Pairing Code."
+    if code == null {
+        print("ERROR: no pairing code received. state =", wa.state())
+        wa.disconnect()
         return
     }
-
-    print "Waiting for connection..."
-    print "(this may take a moment)"
-
-    wait 2000
-    let state = conn.connection_state()
-    if state == "disconnected" or state == "dead" {
-        print "ERROR: Connection failed immediately. Check your network."
-        print "Make sure WhatsApp is reachable from this machine."
-        conn.disconnect()
-        return
-    }
-
-    let connected = false
-    for i in 1 -> 60 {
-        if state == "connected" {
-            connected = true
-            break
-        }
-        wait 1000
-        state = conn.connection_state()
-        if state == "disconnected" or state == "dead" {
-            print "Connection lost during auth. Network issue?"
-            conn.disconnect()
-            return
-        }
-        if i % 10 == 0 {
-            print "  Still waiting... (" + i + "s)"
-        }
-    }
-
-    if connected == false {
-        print "ERROR: Connection timed out. Check your network and try again."
-        conn.disconnect()
-        return
-    }
-
-    let me = conn.user()
-    print "Connected as: " + me.id
-
-    // ── Export and encrypt auth ──
-    password = get_password()
-    print "Exporting and encrypting session..."
-    let encrypted = conn.export_auth(password, auth_dir)
-    if encrypted {
-        fs.write(auth_file, encrypted)
-        print "Session saved to " + auth_file
-    }
+    print("")
+    print("=========================================")
+    print "Pairing code: " + code
+    print("Open WhatsApp -> Settings -> Linked Devices")
+    print("-> Link a Device -> Link with phone number")
+    print("=========================================")
+} else {
+    print("A QR code is rendering below/above. Scan it with:")
+    print("WhatsApp -> Settings -> Linked Devices -> Link a Device")
+    wa.connect()
 }
 
-print ""
-print "=== WhatsApp Authenticated ==="
-print "Connection ready. You can now use conn for messaging."
-print "Next time, run this script again to reuse the saved session."
-print ""
+# Wait up to 90s for the connection to complete.
+var state = ""
+for i in range(0, 180) {
+    state = wa.state()
+    if state == "connected" || state == "dead" { break }
+    wait(500)
+}
 
-// Return the connection for use in scripts that include this
-return conn
+if state == "connected" {
+    print("")
+    print("=== WhatsApp connected ===")
+    print("Session saved. Future runs skip the QR/pairing step.")
+    print("Try: zen run examples/wa_bot.z")
+} else {
+    print("")
+    print("Connection did not complete. Final state:", state)
+}

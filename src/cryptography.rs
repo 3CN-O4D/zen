@@ -1,14 +1,13 @@
 //! Zen `cryptography` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_cryptography_module(vm: &mut Vm) {
-    let cryptography = Value::Dict(Arc::new(BTreeMap::from([
+    let cryptography = Value::Dict(Arc::new(ahash::AHashMap::from([
         (
             "fernet".into(),
-            Value::Dict(Arc::new(BTreeMap::from([
+            Value::Dict(Arc::new(ahash::AHashMap::from([
                 ("generate_key".into(), Value::NativeFunction("fernet_generate_key".into())),
                 ("encrypt".into(), Value::NativeFunction("fernet_encrypt".into())),
                 ("decrypt".into(), Value::NativeFunction("fernet_decrypt".into())),

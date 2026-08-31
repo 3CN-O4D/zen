@@ -1,11 +1,10 @@
 //! Zen `math` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_math_module(vm: &mut Vm) {
-let math = Value::Dict(Arc::new(BTreeMap::from([
+let math = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("pi".into(), Value::Number(std::f64::consts::PI)),
     ("e".into(), Value::Number(std::f64::consts::E)),
     ("inf".into(), Value::Number(f64::INFINITY)),

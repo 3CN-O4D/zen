@@ -1,105 +1,102 @@
-# API Examples
+# API and Networking Examples
 
-## Basic GET Request
+Zen can interact with REST APIs and perform low-level networking tasks.
 
-```
-let resp = http.get("https://api.github.com/repos/3CN-O4D/zen")
+## REST API Client
+
+Using the `http` module to interact with a JSON API.
+
+```zen
+# 1. GET request with JSON parsing
+var resp = http.get("https://api.github.com/repos/rust-lang/rust")
 if resp.ok {
-    let data = resp.json()
-    print "Repo: " + data["full_name"]
-    print "Stars: " + data["stargazers_count"]
-    print "Description: " + data["description"]
+    var data = resp.json()
+    print("Project: ${data.full_name}")
+    print("Description: ${data.description}")
+    print("Stars: ${data.stargazers_count}")
+}
+
+# 2. Authenticated POST request
+var token = os.getenv("GITHUB_TOKEN")
+var payload = json.stringify({
+    title: "New Issue from Zen",
+    body: "This issue was created using Zen automation."
+})
+
+var res = http.post("https://api.github.com/repos/user/repo/issues", {
+    headers: {
+        "Authorization": "token " + token,
+        "Accept": "application/vnd.github.v3+json"
+    },
+    json: payload
+})
+
+if res.ok {
+    print("Issue created successfully!")
 }
 ```
 
-## POST with JSON
+## Concurrent API Requests
 
-```
-let resp = http.post("https://httpbin.org/post",
-    json={"name": "Zen", "version": "0.1.0"})
+Using the `threading` module to fetch data in parallel.
 
-print resp.status    // 200
-print resp.json()    // echoed data
-```
+```zen
+var results = []
 
-## Custom Headers
-
-```
-let resp = http.get("https://api.github.com/user",
-    headers={"Authorization": "Bearer ghp_xxxxxxxxxxxx"})
-
-if resp.ok {
-    let user = resp.json()
-    print "Logged in as: " + user["login"]
-}
-```
-
-## Fetch and Process
-
-```
-function fetch_users() {
-    let resp = http.get("https://api.github.com/users")
-    if resp.ok {
-        return resp.json()
+func fetch_status(url) {
+    try {
+        var r = http.get(url, {timeout: 5000})
+        results = results.push("${url}: ${r.status}")
+    } catch as e {
+        results = results.push("${url}: FAILED")
     }
-    return []
 }
 
-let users = fetch_users()
-for user in users {
-    print user["login"] + " - " + user["html_url"]
+var sites = [
+    "https://google.com",
+    "https://github.com",
+    "https://bing.com"
+]
+
+var threads = []
+for site in sites {
+    threads = threads.push(threading.start(fn() { fetch_status(site) }))
+}
+
+# Wait for all checks to complete
+for t in threads {
+    threading.join(t)
+}
+
+for res in results {
+    print(res)
 }
 ```
 
-## Pagination
+## Low-Level Port Scanner
 
-```
-let page = 1
-let all_items = []
+Using the `socket` module to check for open ports.
 
-while true {
-    let resp = http.get("https://api.example.com/items?page=" + page)
-    let items = resp.json()
+```zen
+var target = "127.0.0.1"
+var ports = [22, 80, 443, 3000, 8080]
 
-    if items.len == 0 {
-        break
+print("Scanning ${target}...")
+
+for port in ports {
+    try {
+        var s = socket.open(target, port)
+        print("PORT ${port}: OPEN")
+        s.close()
+    } catch as e {
+        # Connection refused or timeout
+        print("PORT ${port}: CLOSED")
     }
-
-    all_items = [...all_items, ...items]
-    page = page + 1
-}
-
-print "Total items: " + all_items.len
-```
-
-## Error Handling
-
-```
-try {
-    let resp = http.get("https://api.example.com/data")
-    if !resp.ok {
-        throw "HTTP error: " + resp.status
-    }
-    let data = resp.json()
-    print data
-} catch err {
-    print "Request failed: " + err
 }
 ```
 
-## WhatsApp API Integration
-
-```
-load wa
-conn = wa.connect()
-
-// Fetch data from API
-let resp = http.get("https://api.example.com/notifications")
-let notifications = resp.json()
-
-// Send via WhatsApp
-for notif in notifications {
-    conn.send(notif["jid"], notif["message"])
-    print "Sent to: " + notif["jid"]
-}
-```
+## See Also
+- [http Module](../modules/http.md) — Full HTTP client reference.
+- [json Module](../modules/json.md) — Working with JSON data.
+- [socket Module](../modules/socket.md) — Raw TCP/UDP networking.
+- [threading Module](../modules/threading.md) — Concurrent execution.

@@ -62,7 +62,7 @@ check(os.cpu_count() >= 1, "cpu_count")
 
 # fs (in /tmp/opencode only)
 import fs
-var tp = "/tmp/opencode/zen_suite_fs.txt"
+var tp = "/tmp/zen_test/zen_suite_fs.txt"
 fs.write(tp, "suite-data")
 check(fs.read(tp) == "suite-data", "fs write/read roundtrip")
 check(fs.exists(tp), "fs.exists true")

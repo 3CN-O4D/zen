@@ -16,10 +16,16 @@ FTP_STARTED=0
 if nc -z 127.0.0.1 2121 2>/dev/null; then
     echo "mock ftp: already running (reusing)"
 else
-    setsid nohup python3 "$ROOT/tests/mock_ftp.py" > /tmp/opencode/zen_suite_ftp.log 2>&1 < /dev/null &
+    setsid nohup python3 "$ROOT/tests/mock_ftp.py" > /tmp/zen_test/zen_suite_ftp.log 2>&1 < /dev/null &
     FTP_PID=$!
     FTP_STARTED=1
-    sleep 1
+    # Wait for the mock server to accept connections (up to ~6s).
+    for _ in $(seq 1 30); do
+        if nc -z 127.0.0.1 2121 2>/dev/null; then
+            break
+        fi
+        sleep 0.2
+    done
 fi
 cleanup() {
     if [ "$FTP_STARTED" = "1" ] && [ -n "$FTP_PID" ]; then

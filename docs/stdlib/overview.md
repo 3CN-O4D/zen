@@ -1,51 +1,54 @@
 # Standard Library Overview
 
-Zen ships with standard library files in `lib/`. Use them with `include`:
+The Zen Standard Library (`std/`) is a collection of modules written in the
+Zen language itself. Unlike the native modules (like `math` or `fs`), these
+modules must be **imported** before use.
 
-```
-include "lib/str.z"
-include "lib/dict.z"
-include "lib/browser.z"
-```
+```zen
+import logging
+logging.info("Starting script...")
 
-Note: `list.z` and `test.z` are now loaded automatically on startup.
-
-## Built-in Functions
-
-Available without any `include`:
-
-### range & interval
-
-```
-range(5)                    // [0, 1, 2, 3, 4]
-range(2, 5)                 // [2, 3, 4]
-range(1, 10, 2)             // [1, 3, 5, 7, 9]
-interval(0, 5)              // [0, 1, 2, 3, 4]
-interval(0, 10, 3)          // [0, 3, 6, 9]
+import sys
+print(sys.platform)
 ```
 
-There's also a range *operator* that produces inclusive ranges: `1 -> 5` → `[1, 2, 3, 4, 5]`. See the [Operators](../language/operators.md) section.
+## Available Standard Modules
 
-### Functional Built-ins
+| Module | Purpose |
+|--------|---------|
+| `argparser` | Command-line argument parsing (Python-style). |
+| `logging` | Structured logging with levels and handlers. |
+| `requests` | Python-like HTTP requests wrapper. |
+| `sys` | System-specific parameters and functions. |
 
+## How to use
+
+Standard library modules reside in the `std/` directory. When you write
+`import logging`, Zen looks for `logging.z` in the `std/` directory bundled
+with the binary.
+
+```zen
+from argparser import ArgumentParser
+
+var p = ArgumentParser("My Tool")
+p.add_argument("--verbose", {action: "store_true"})
+var args = p.parse_args()
+
+if args.verbose {
+    print("Verbose mode on")
+}
 ```
-enumerate(list)              // [[0, "a"], [1, "b"], [2, "c"]]
-enumerate(list, 1)           // [[1, "a"], [2, "b"], [3, "c"]]
-zip(list1, list2)            // [[1, "x"], [2, "y"]]
-map(fn, list)                // apply fn to each item
-filter(fn, list)             // keep items where fn returns truthy
-reduce(fn, list)             // fold list to single value
-reduce(fn, list, initial)    // fold with initial value
-```
 
-Also available as list methods: `list.map(fn)`, `list.filter(fn)`, `list.reduce(fn)`.
+## Difference from Native Modules
 
-## Standard Library Files
+- **Native Modules** (`fs`, `http`, `re`, `json`, ...): Built directly into
+  the Rust binary. Available as global variables; no `import` is required.
+- **Standard Modules** (`logging`, `sys`, ...): Written in Zen. Reside in
+  `std/*.z` files. Must be `import`ed.
 
-| File | Description |
-|------|-------------|
-| [list.z](list.md) | List utilities |
-| [str.z](str.md) | String utilities |
-| [dict.z](dict.md) | Dict utilities |
-| [test.z](test.md) | Testing framework |
-| [browser.z](browser.md) | Browser helpers |
+## See also
+
+- [argparser](argparser.md) — Parsing command-line flags and arguments.
+- [logging](logging.md) — Logging to terminal or files.
+- [requests](requests.md) — Simplified HTTP requests.
+- [sys](sys.md) — System information and CLI arguments.

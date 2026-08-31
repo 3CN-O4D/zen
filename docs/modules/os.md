@@ -1,61 +1,61 @@
-# OS Module (`os`)
+# os — Operating system interface
 
-Access the operating system. No import needed.
-
-## System Info
+The `os` module provides a way of interacting with the operating system, environment, and processes. It is available globally as `os`.
 
 ```zen
-os.platform()              // "linux", "macos", "windows"
-os.name                    // same (constant)
-os.arch()                  // CPU architecture
-os.hostname()               // machine hostname
-os.pid()                    // current process ID
-os.pids()                   // list of all process IDs
-os.cpu_count()              // number of CPUs
-os.home()                   // home directory
+# 1. Get environment variables
+print(os.getenv("USER"))
+
+# 2. Get system information
+print(os.platform()) # e.g., "linux"
+print(os.arch())     # e.g., "x86_64"
+
+# 3. Get current process ID
+print(os.pid())
 ```
+
+## System Information
+
+| Function | Description |
+|----------|-------------|
+| `platform()` | Returns the OS name ("linux", "macos", "windows"). |
+| `arch()` | Returns the CPU architecture. |
+| `hostname()` | Returns the machine's hostname. |
+| `cpu_count()` | Returns the number of logical CPUs. |
+| `cwd()` | Returns current working directory. |
+| `home()` | Returns user home directory. |
 
 ## Environment Variables
 
-```zen
-os.env("PATH")              // get env var (null if not set)
-os.getenv("PATH")          // alias
-os.setenv("K", "V")         // set
-os.unsetenv("K")            // remove
-```
-
-## File System
-
-```zen
-os.cwd()                    // current working directory
-os.chdir("/tmp")            // change directory
-```
-
-## Running Commands
-
-```zen
-// Structured result
-let r = os.execute("echo hi")
-print r.ok        // true
-print r.code      // 0
-print r.stdout    // "hi\n"
-print r.stderr    // ""
-
-// Return stdout or throw on failure
-let out = os.run("echo hello")
-print out.strip()   // "hello"
-
-// Return exit code only
-let code = os.system("ls")
-
-// Alias for execute
-let r = os.popen("ls")
-```
+| Function | Description |
+|----------|-------------|
+| `getenv(key)` | Returns the value of an environment variable or null. |
+| `setenv(key, val)` | Sets an environment variable. |
+| `unsetenv(key)` | Removes an environment variable. |
+| `env()` | Returns a dict of all environment variables. |
 
 ## Process Control
 
-```zen
-os.args()                   // command-line arguments list
-os.exit(0)                  // exit program
-os.kill(1234)               // send SIGTERM to PID
-```
+| Function | Description |
+|----------|-------------|
+| `pid()` | Current process ID. |
+| `pids()` | List of all running process IDs. |
+| `kill(pid)` | Terminates the process with the given ID. |
+| `exit(code)` | Exits the Zen process with the specified code. |
+
+## Command Execution
+
+| Function | Description |
+|----------|-------------|
+| `execute(cmd)` | Runs a command in the shell. Returns a dict `{ok, code, stdout, stderr}`. |
+| `run(cmd)` | Runs a command and returns `stdout`. Throws on failure. |
+| `system(cmd)` | Runs a command and returns the exit code. |
+| `popen(cmd)` | Runs a command and returns `{stdout, stderr, code}`. |
+
+## Constants
+- `os.sep` (path separator: `/` or `\`)
+- `os.linesep` (newline: `\n` or `\r\n`)
+
+## See Also
+- [subprocess](subprocess.md) — More control over external commands.
+- [fs](fs.md) — For filesystem operations.

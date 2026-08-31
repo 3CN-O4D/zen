@@ -642,9 +642,11 @@ zen run weather_report.z
 
 - [Shell Usage](shell.md) — Interactive REPL with tab completion and history
 - [Scripts](scripts.md) — Running scripts, arguments, shebangs
-- [Language Overview](../language/overview.md) — Deep dive into the language
-- [Types](../language/types.md) — Every type explained in detail
-- [Functions](../language/functions.md) — Complete function reference
+- [Variables](../variables.md) — Declarations, const, and scoping
+- [Operators](../operators.md) — Every operator explained
+- [Control Flow](../control-flow.md) — if, for, while, match
+- [Functions](../functions.md) — Complete function reference
+- [Classes](../classes.md) — Object-oriented programming
 - [Modules](../modules/overview.md) — All available modules
 - [CLI Reference](../cli.md) — Every CLI command and flag
 
@@ -707,8 +709,8 @@ name = "Zen"
 
 ## Pro Tips
 
-1. **Use the REPL for experimentation.** Run `zen shell` and try things interactively.
-2. **Backticks are your friend.** `${expr}` works for complex expressions inside strings.
+1. **Use the REPL for experimentation.** Run `zen repl` and try things interactively.
+2. **Backticks are your friend.** `${expr}` works for complex expressions inside strings; use `{name}` for simple variables.
 3. **`??` for defaults.** `config["key"] ?? "default"` returns `"default"` if the key is missing.
 4. **Use `?.` for safe access.** `user?.address?.city` returns `null` instead of crashing.
 5. **`for i in 0 -> 10` is inclusive.** Both 0 and 10 are included. Use `range(10)` for 0–9.

@@ -1,12 +1,11 @@
 //! Statistics module for Zen — descriptive statistics functions.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Initialize the statistics module.
 pub fn init_statistics_module(vm: &mut Vm) {
-    let statistics = Value::Dict(Arc::new(BTreeMap::from([
+    let statistics = Value::Dict(Arc::new(ahash::AHashMap::from([
         ("mean".into(), Value::NativeFunction("statistics_mean".into())),
         ("median".into(), Value::NativeFunction("statistics_median".into())),
         ("mode".into(), Value::NativeFunction("statistics_mode".into())),

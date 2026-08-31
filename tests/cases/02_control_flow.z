@@ -84,4 +84,87 @@ try {
     check(false, "catch fired wrongly")
 }
 
+# match: literal patterns, wildcard, both separators, dict-literal body
+var status = match "ready" {
+  "loading": "spinner",
+  "ready" => "check",
+  _: "unknown"
+}
+check(status == "check", "match literal arm with colon")
+
+status = match "nope" {
+  "loading": "spinner",
+  "ready": "check",
+  _: "unknown"
+}
+check(status == "unknown", "match wildcard")
+
+# match: bare identifier binds value, guards gate fall-through
+var bound = match 42 {
+  n if n > 100: "big",
+  n if n == 42: "forty-two",
+  _: "other"
+}
+check(bound == "forty-two", "match guard binding")
+
+func flag_z() { return false }
+bound = match "err" {
+  "err" if flag_z(): "guarded",
+  "err": "plain",
+  _: "other"
+}
+check(bound == "plain", "match guard false falls through")
+
+# match: numeric patterns and multi-case function use
+func label_of(n) {
+  return match n {
+    1: "one",
+    2 => "two",
+    _: "many"
+  }
+}
+check(label_of(1) == "one", "match in function 1")
+check(label_of(2) == "two", "match in function 2")
+check(label_of(9) == "many", "match in function wildcard")
+
+# when: condition evaluation order, wildcard
+var score = 87
+var grade = when {
+  score >= 90: "A",
+  score >= 85 => "A-",
+  score >= 80: "B+",
+  _: "C"
+}
+check(grade == "A-", "when condition arms")
+
+grade = when {
+  score > 1000: "impossible",
+  _: "fallback"
+}
+check(grade == "fallback", "when wildcard")
+
+# when in expression position
+var sz = when {
+  score >= 85: "large",
+  _: "small"
+}
+check(sz == "large", "when as expression")
+
+# match arms with block bodies / statements
+var printed = ""
+var got = match 3 {
+  1: { printed = "one" },
+  2: { printed = "two" },
+  3: { printed = "three" }
+}
+check(printed == "three", "match block body executes")
+
+# match returning dict literal body
+var usr = "bob"
+var info = match usr {
+  "bob": { name: "Bob", id: 7 },
+  _: { name: "stranger", id: 0 }
+}
+check(info["name"] == "Bob" && info["id"] == 7, "match dict-literal body")
+
 if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

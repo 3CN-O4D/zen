@@ -36,8 +36,8 @@ check(r.results.length() == 3, "run records every attempt")
 # hydra.run_file reads candidates from disk
 fs_write_ok = true
 import fs
-fs.write("/tmp/opencode/zen_suite_pw.txt", "bad1\ns3cret99\nbad2\n")
-var rf = hydra.run_file("ftp", "127.0.0.1:2121", "admin", "/tmp/opencode/zen_suite_pw.txt")
+fs.write("/tmp/zen_test/zen_suite_pw.txt", "bad1\ns3cret99\nbad2\n")
+var rf = hydra.run_file("ftp", "127.0.0.1:2121", "admin", "/tmp/zen_test/zen_suite_pw.txt")
 check(rf.success == true && rf.password == "s3cret99" && rf.attempts == 2, "run_file finds password")
 
 if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

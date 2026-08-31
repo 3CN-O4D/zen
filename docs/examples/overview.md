@@ -1,47 +1,50 @@
 # Examples Overview
 
-This section contains practical examples of using Zen for common tasks.
+Welcome to the Zen examples gallery. These guides demonstrate how Zen's unique
+features and high-performance native runtime come together to solve real-world
+problems.
 
-## Categories
+## Automation
 
-- [Scraping](scraping.md) - Extracting data from websites
-- [Automation](automation.md) - Automating browser workflows
-- [APIs](apis.md) - Working with web APIs
+Zen's `browser` module allows you to control Chromium-based browsers with
+natural, intention-based syntax.
 
-## Quick Examples
+- **[Login & Forms](automation.md)** — Automating logins, form submissions,
+  and multi-step workflows.
+- **[Screenshots](automation.md#screenshot-workflow)** — Capturing visual
+  snapshots of web pages.
 
-### Hello World
+## Data Extraction
 
-```
-print "Hello, World!"
-```
+Combine the browser's ability to render JavaScript with native parsing modules.
 
-### Scrape a Page
+- **[Web Scraping](scraping.md)** — Extracting headlines, product data, and
+  navigating pagination.
+- **[CSV Export](scraping.md#headless-data-export)** — Saving scraped data
+  to structured files for analysis.
 
-```
-go "https://example.com"
-print page.text
-```
+## Networking & APIs
 
-### Login
+Zen is a capable general-purpose language for network tasks.
 
-```
-go "https://example.com/login"
-fill("#username", "admin")
-fill("#password", "secret")
-click("button[type='submit']")
-```
+- **[REST APIs](apis.md)** — Making GET and POST requests to JSON-based
+  web services.
+- **[Parallel Fetching](apis.md#concurrent-api-requests)** — Using threads
+  to check multiple servers at once.
+- **[Port Scanning](apis.md#low-level-port-scanner)** — Using low-level
+  sockets for security auditing.
 
-### Take a Screenshot
+## Utilities
 
-```
-go "https://example.com"
-shot "screenshot.png"
-```
+See how Zen's core library handles common programming tasks.
 
-### HTTP Request
+- **[System & OS](../modules/os.md)** — Environment variables and process
+  control.
+- **[Cryptography](../modules/crypto.md)** — Secure hashing and symmetric
+  encryption.
 
-```
-let resp = http.get("https://api.github.com/repos/3CN-O4D/zen")
-print resp.json()["stargazers_count"]
-```
+---
+
+## Ready to build?
+Check the **[Quick Start](../getting-started/quickstart.md)** to get your first
+script running in minutes.

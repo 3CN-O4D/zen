@@ -1,11 +1,10 @@
 //! Zen `smtp` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_smtp_module(vm: &mut Vm) {
-let smtp = Value::Dict(Arc::new(BTreeMap::from([
+let smtp = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("connect".into(), Value::NativeFunction("smtp_connect".into())),
     ("login".into(), Value::NativeFunction("smtp_login".into())),
     ("sendmail".into(), Value::NativeFunction("smtp_sendmail".into())),

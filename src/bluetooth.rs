@@ -1,11 +1,10 @@
 //! Zen `bluetooth` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_bluetooth_module(vm: &mut Vm) {
-let bluetooth = Value::Dict(Arc::new(BTreeMap::from([
+let bluetooth = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("status".into(), Value::NativeFunction("bt_status".into())),
     ("power".into(), Value::NativeFunction("bt_power".into())),
     ("scan".into(), Value::NativeFunction("bt_scan".into())),

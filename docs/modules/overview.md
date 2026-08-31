@@ -1,64 +1,92 @@
 # Modules Overview
 
-Complete guide to Zen's module system — how modules work, available modules, and import patterns.
+Zen ships with a large set of **native modules** — dicts that are registered
+as **global variables on startup**, so you can use them without any `import`:
 
-## How Modules Work
-
-Zen provides modules as global dictionaries — **no import statement is required** for built-in modules. They are available directly:
-
-```
-fs.read("file.txt")
-http.get("https://example.com")
-crypto.sha256("data")
-json.parse('{"key": "value"}')
-```
-
-### Two access styles
-
-Most modules support both dot-notation and flat function names:
-
-```
-// Module style (recommended)
+```zen
+print(math.sqrt(144))          # 12
+fs.write("hello.txt", "hi")
 json.parse('{"a": 1}')
-
-// Flat style (legacy alias)
-json_parse('{"a": 1}')
-
-// Both return the same result
 ```
 
----
+`import` is only needed for the Zen standard library (`logging`, `requests`,
+`sys`, `argparser`) and your own `.z` modules. See
+[imports.md](../imports.md).
 
-## All Available Modules
+## Every module is a dict
 
-### Core Modules
+A module is just a `dict` whose keys are its functions (and sometimes
+constants/factories):
+
+```zen
+print(typeof math)        # dict
+print(math.keys())        # [sqrt, sin, cos, pi, e, ...]
+print(math.sqrt(9))       # 3
+```
+
+`help(math)` also prints the module's member list.
+
+## All available modules
+
+All of the following are global dicts — no import required.
+
+### Core
 
 | Module | Description | Example |
 |--------|-------------|---------|
-| `json` | JSON encode/decode | `json.parse("{}")` |
+| `math` | Math constants & functions | `math.sqrt(144)` |
 | `fs` | Filesystem operations | `fs.read("file.txt")` |
 | `http` | HTTP client | `http.get("https://...")` |
-| `re` | Regular expressions | `re.search("\\d+", "abc123")` |
-| `crypto` | Cryptographic hashes | `crypto.sha256("data")` |
-| `datetime` | Date/time operations | `datetime.now()` |
-| `time` | Time functions | `time.now()` |
-| `math` | Math functions | `math.sqrt(144)` |
+| `re` | Regular expressions | `re.findall("\\d+", "abc123")` |
+| `json` | JSON encode/decode | `json.parse('{"a": 1}')` |
 | `random` | Random numbers | `random.randint(1, 100)` |
-| `os` | OS info and process | `os.platform()` |
-| `base64` | Base64 encoding | `base64.encode("hello")` |
-| `base32` | Base32 encoding | `base32.encode("hello")` |
-| `uuid` | UUID generation | `uuid.uuid4()` |
-| `color` | ANSI color helpers | `color.red("error")` |
-| `csv` | CSV processing | `csv.read("data.csv")` |
-| `decimal` | Decimal arithmetic | `decimal.Decimal("3.14")` |
+| `time` | Time functions | `time.now()` |
+| `datetime` | Date/time objects | `datetime.now()` |
+| `os` | OS info & processes | `os.platform()` |
+| `string` | String helpers & constants | `string.upper("hi")` |
+| `errors` | Error classes & typed catch | `errors.define("MyErr")` |
+| `decimal` | Arbitrary-precision decimals | `decimal.Decimal("3.14")` |
 | `statistics` | Statistical functions | `statistics.mean([1,2,3])` |
 | `threading` | Background execution | `threading.start(fn)` |
 
-### Network Modules
+### Encoding & crypto
 
 | Module | Description | Example |
 |--------|-------------|---------|
-| `socket` | Low-level TCP sockets | `socket.open("host", 80)` |
+| `base64` | Base64 encode/decode | `base64.encode("hello")` |
+| `base32` | Base32 encode/decode | `base32.encode("hello")` |
+| `binascii` | Binary/ASCII conversion | `binascii.hexlify("abc")` |
+| `crypto` | Cryptographic hashes (sha256, md5, ...) | `crypto.sha256("data")` |
+| `cryptography` | Fernet symmetric encryption | `cryptography.fernet.encrypt(...)` |
+| `hashlib` | Hashing (sha256, md5, sha1, ...) | `hashlib.sha256("data")` |
+| `uuid` | UUID generation | `uuid.uuid4()` |
+
+### Files & paths
+
+| Module | Description | Example |
+|--------|-------------|---------|
+| `pathlib` | Path manipulation | `pathlib.join("a", "b")` |
+| `shutil` | High-level file ops | `shutil.copy(src, dst)` |
+| `glob` | Pattern matching | `glob.glob("*.txt")` |
+| `tempfile` | Temporary files/dirs | `tempfile.mkdtemp()` |
+| `subprocess` | External commands | `subprocess.run(["ls"])` |
+| `struct` | Binary pack/unpack | `struct.pack("i", 42)` |
+
+### Data structures & streams
+
+| Module | Description | Example |
+|--------|-------------|---------|
+| `csv` | CSV parse/write | `csv.parse("a,b")` |
+| `collections` | Counter, chain, flatten | `collections.Counter([1,1,2])` |
+| `itertools` | Iterators | `itertools.chain(a, b)` |
+| `urllib` | URL handling | `urllib.parse("https://...")` |
+| `color` | ANSI color helpers | `color.red("error")` |
+
+### Networking
+
+| Module | Description | Example |
+|--------|-------------|---------|
+| `socket` | TCP/UDP sockets | `socket.open("host", 80)` |
 | `ftp` | FTP client | `ftp.connect("host")` |
 | `smtp` | SMTP email client | `smtp.connect("host")` |
 | `pop3` | POP3 email client | `pop3.connect("host")` |
@@ -66,260 +94,94 @@ json_parse('{"a": 1}')
 | `telnet` | Telnet client | `telnet.connect("host")` |
 | `dns` | DNS resolver | `dns.resolve("example.com")` |
 | `ssh` | SSH/SCP wrapper | `ssh.run("host", "ls")` |
-| `scapy` | Packet crafting | `scapy.ip(dst="1.1.1.1")` |
 
-### Python-backed Modules
-
-| Module | Description | Example |
-|--------|-------------|---------|
-| `errors` | Error class hierarchy | `errors.define("MyErr", "Error")` |
-| `string` | String helpers | `string.upper("hello")` |
-| `hashlib` | Crypto hashing | `hashlib.sha256("data")` |
-| `struct` | Binary pack/unpack | `struct.pack("i", 42)` |
-| `shutil` | High-level file ops | `shutil.copy(src, dst)` |
-| `pathlib` | Path manipulation | `pathlib.Path("file.txt")` |
-| `glob` | File pattern matching | `glob.glob("*.txt")` |
-| `urllib` | URL handling | `urllib.parse.quote("hello")` |
-| `collections` | Data structures | `collections.Counter([1,1,2])` |
-| `itertools` | Iterators | `itertools.chain(a, b)` |
-| `tempfile` | Temporary files | `tempfile.mkdtemp()` |
-| `binascii` | Binary/ASCII | `binascii.hexlify(data)` |
-| `subprocess` | External commands | `subprocess.run(["ls"])` |
-| `cryptography` | Fernet encryption | `cryptography.fernet.generate_key()` |
-| `emoji` | Emoji lookup | `emoji.smiley` |
-| `net` | Network info | `net.online()` |
-| `storage` | localStorage | `storage.get("key")` |
-| `cookies` | Browser cookies | `cookies.get("session")` |
-
-### Special Modules
+### System / security / automation
 
 | Module | Description | Example |
 |--------|-------------|---------|
-| `wa` | WhatsApp client | `wa.connect("auth_dir")` |
+| `browser` | Browser automation via CDP | `browser.open(...)` |
+| `wa` | WhatsApp automation | `wa.sendText("...")` |
+| `bluetooth` | Bluetooth via bluetoothctl | `bluetooth.scan()` |
+| `wifi` | WiFi via nmcli | `wifi.status()` |
+| `crunch` | Password wordlist generator | `crunch.generate(...)` |
+| `scapy` | Packet crafting/sniffing | `scapy.build(...)` |
 
----
+These mesh the native runtime into useful categories. The definitive list is
+available in the REPL with `:help modules`.
 
-## Import Patterns
+## Import patterns (for std/ and your modules)
 
-### Import a module (namespaced)
+```zen
+import utils                    # bind module + expose names
+import utils as u               # alias
+from utils import add, sub      # specific names
+from utils import add as a      # aliased items
+from utils import *             # all public names
 
-```
-import utils
-print utils.add(2, 3)
-```
-
-### Import with alias
-
-```
-import utils as u
-print u.add(2, 3)
-```
-
-### From-import (specific items)
-
-```
-from utils import add, subtract
-print add(2, 3)
+import logging, sys             # one statement, multiple modules
 ```
 
-### From-import with alias
+### Local file modules
 
-```
-from utils import add as a, subtract as s
-print a(2, 3)
-```
+```zen
+# lib/math.z
+func square(x) { return x * x }
 
-### Star import (all items)
-
-```
-from utils import *
-// All non-underscore items are imported
-```
-
-### Importing file modules
-
-```
-// In lib/math.z:
-function square(x) {
-    return x * x
-}
-
-// In main.z:
+# main.z  (same directory)
 import math
-print math.square(5)    // 25
+print(math.square(5))           # 25
 ```
 
-### Importing dotted modules
+`include "path.z"` executes a file and injects its names directly:
 
-```
-// In pkg/utils.z:
-function helper() { return 42 }
-
-// In main.z:
-import pkg.utils
-print pkg.utils.helper()
-```
-
----
-
-## Module Resolution
-
-### How Zen finds modules
-
-1. **Built-in modules** — checked first (json, fs, http, etc.)
-2. **Stdlib factories** — lazy-loaded Python-backed modules
-3. **File resolution** — looks for `<name>.z` or `<name>/main.z`
-4. **Dotted paths** — `pkg.sub` resolves to `pkg/sub.z`
-
-### Module search order
-
-```
-// For `import utils`:
-// 1. Check if "utils" is a built-in module
-// 2. Check if "utils" is a dict already in scope
-// 3. Look for utils.z in the current directory
-// 4. Look for utils/main.z
-// 5. Look in lib/ directory
-```
-
----
-
-## Include vs Import
-
-### `include` — inline code injection
-
-```
-// utils.z
-function greet(name) {
-    return "Hello, " + name + "!
-}
-
-// main.z
+```zen
 include "utils.z"
-print greet("World")    // functions are in global scope
+print greet("World")            # names in global scope
 ```
 
-### `import` — namespaced module
+## Common patterns
 
-```
-// utils.z
-function greet(name) {
-    return "Hello, " + name + "!
-}
+### Load a config
 
-// main.z
-import utils
-print utils.greet("World")    // namespaced access
-```
-
-### When to use each
-
-| Feature | `include` | `import` |
-|---------|-----------|----------|
-| Scope | Global | Namespaced |
-| Conflicts | Possible | Avoided |
-| Re-includes | Executes again | Cached |
-| Use case | Small shared files | Libraries, larger codebases |
-
----
-
-## Common Module Patterns
-
-### Loading config
-
-```
-let config = json.load("config.json")
-print config.host
-print config.port
-```
-
-### File processing pipeline
-
-```
-let raw = fs.read("data.csv")
-let lines = raw.split("\n")
-let headers = lines[0].split(",")
-
-for line in lines[1:] {
-    let values = line.split(",")
-    let record = {}
-    for i, header in enumerate(headers) {
-        record[header] = values[i]
-    }
-    // process record
-}
+```zen
+var config = json.parse(fs.read("config.json"))
+print(config.host)
+print(config.port)
 ```
 
 ### HTTP + JSON
 
+```zen
+var resp = http.get("https://api.github.com/repos/rust-lang/rust")
+var data = resp.json()
+print(data.name)
 ```
-let resp = http.get("https://api.github.com/repos/rust-lang/rust")
-let data = resp.json()
-print data.name        // rust
-print data.stars       // star count
+
+### CSV pipeline
+
+```zen
+var rows = csv.parse(fs.read("data.csv"))
+for row in rows { print(row) }
 ```
 
 ### Time-based logic
 
-```
-let now = datetime.now()
-let hour = datetime.hour()
-
-if hour >= 9 and hour < 17 {
-    print "Business hours"
-} else {
-    print "After hours"
-}
+```zen
+var now = datetime.now()
+print(datetime.weekday(now))
 ```
 
----
+## Common mistakes
 
-## Pro Tips
+- **Importing a non-existent module** → `module not found`. Only registered
+  natives, `std/*.z`, and local files are resolvable.
+- **Forgetting modules are dicts** — `fs.read` is `fs` (a dict) indexed by
+  `"read"`. Missing methods surface as `dictionary has no method: X`.
+- **Including the same file twice** — `include` re-executes the file (no
+  caching), which can cause redefinition errors in large projects.
 
-1. **Built-in modules need no import.** Use `fs.read()`, `http.get()` directly.
-2. **Use `import` over `include`.** Better for avoiding name conflicts.
-3. **Use `from X import Y` for specific items.** Keeps the namespace clean.
-4. **Check `fs.exists()` before `fs.read()`.** Prevents file-not-found errors.
-5. **Use `try/catch` with modules.** Module functions can fail (network, file I/O).
+## See also
 
----
-
-## Common Mistakes
-
-### Importing a non-existent module
-
-```
-// WRONG — module doesn't exist
-import nonexistent
-// Error: module not found
-
-// Check available modules
-// Run .help modules in the shell
-```
-
-### Forgetting that modules are dicts
-
-```
-// All module access is dict access:
-fs.read("file.txt")    // fs is a dict, "read" is a key
-http.get("url")         // http is a dict, "get" is a key
-```
-
-### Including the same file twice
-
-```
-// include executes the file again — can cause redefinitions
-include "utils.z"
-include "utils.z"    // executes again — may cause issues
-```
-
----
-
-## See Also
-
-- [fs Module](fs.md) — Filesystem operations
-- [http Module](http.md) — HTTP requests
-- [json Module](json.md) — JSON handling
-- [crypto Module](crypto.md) — Cryptography
-- [re Module](re.md) — Regular expressions
-- [datetime Module](datetime.md) — Date/time operations
+- [imports.md](../imports.md) — import, from, include, load, native func
+- Per-module references: [fs](fs.md), [http](http.md), [json](json.md),
+  [re](re.md), [math](math.md), [datetime](datetime.md), ...

@@ -1,33 +1,59 @@
-# Datetime Module (`datetime`)
+# datetime — Date and time objects
 
-Date/time utilities with day constants.
+The `datetime` module provides high-level functions for date/time manipulation. It is available globally as `datetime`.
 
 ```zen
-datetime.now()               // current timestamp
-datetime.utcnow()            // UTC timestamp
-datetime.today()             // today's date
-datetime.unix()              // alias for now()
-datetime.from_unix(1234567890)
+# 1. Current timestamp (epoch seconds)
+var t = datetime.now()
+print(t)
 
-datetime.format(ts, "%A, %B %d, %Y")
-datetime.parse("2024-01-15", "%Y-%m-%d")
+# 2. Components
+print(datetime.year(t))
+print(datetime.weekday(t)) # 0 for Monday
 
-datetime.year()
-datetime.month()
-datetime.day()
-datetime.hour()
-datetime.minute()
-datetime.second()
-datetime.weekday()
-
-datetime.add_days(ts, 7)     // timestamp + 7 days
-
-// Constants
-datetime.MONDAY              // 0.0
-datetime.TUESDAY             // 1.0
-datetime.WEDNESDAY           // 2.0
-datetime.THURSDAY            // 3.0
-datetime.FRIDAY              // 4.0
-datetime.SATURDAY            // 5.0
-datetime.SUNDAY              // 6.0
+# 3. Arithmetic
+var tomorrow = datetime.add_days(t, 1)
 ```
+
+## Functions
+
+| Function | Description |
+|----------|-------------|
+| `now()` / `today()` | Returns current local timestamp (float). |
+| `utcnow()` | Returns current UTC timestamp. |
+| `year(t)` / `month(t)` / `day(t)` | Extracts components from a timestamp. |
+| `hour(t)` / `minute(t)` / `second(t)` | Extracts time components. |
+| `weekday(t)` | Returns day index (0=Monday, 6=Sunday). |
+| `format(t, fmt?)` | Formats a timestamp into a string. |
+| `parse(str, fmt)` | Parses a string into a timestamp. |
+| `from_unix(n)` | Converts a numeric Unix timestamp to a datetime value. |
+| `add_days(t, n)` | Returns a new timestamp `n` days later. |
+
+## Constants
+- `datetime.MONDAY` (0)
+- `datetime.TUESDAY` (1)
+- `datetime.WEDNESDAY` (2)
+- `datetime.THURSDAY` (3)
+- `datetime.FRIDAY` (4)
+- `datetime.SATURDAY` (5)
+- `datetime.SUNDAY` (6)
+
+## Examples
+
+### Formatting a date
+```zen
+var t = datetime.now()
+print(datetime.format(t, "%A, %B %d, %Y")) 
+# e.g., Monday, August 31, 2026
+```
+
+### Checking for the weekend
+```zen
+var day = datetime.weekday(datetime.now())
+if day == datetime.SATURDAY || day == datetime.SUNDAY {
+    print("It is the weekend!")
+}
+```
+
+## See Also
+- [time](time.md) — Lower-level Unix timestamp functions.

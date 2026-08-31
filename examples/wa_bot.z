@@ -1,0 +1,97 @@
+// wa_bot.z — a small WhatsApp bot in Zen.
+// Usage: zen run examples/wa_bot.z   (run examples/wa_auth.z first to link)
+//
+// Commands (DM or group), prefix ".":
+//   .menu            — list commands
+//   .ping            — latency check
+//   .echo <text>     — repeat after you
+//   .time            — current time
+//   .joke            — a very serious joke
+//   .about           — what this is
+
+import wa
+import time
+import random
+
+var start_ms = 0
+
+func menu_text() {
+    var lines = [
+        "*zen-bot* commands:",
+        ".menu - this list",
+        ".ping - latency",
+        ".echo <text> - repeat after you",
+        ".time - current time",
+        ".joke - humor attempt",
+        ".about - info",
+    ]
+    return lines.join("\n")
+}
+
+func handle(text) {
+    var msg = text.trim()
+    if !msg.startsWith(".") { return null }
+
+    if msg == ".menu" { return menu_text() }
+    if msg == ".ping" {
+        var t = str(int(time.now() - start_ms))
+        return "pong (" + t + "s uptime)"
+    }
+    if msg.startsWith(".echo") {
+        var rest = msg.substring(5).trim()
+        if rest.length() == 0 { rest = "<nothing to echo>" }
+        return rest
+    }
+    if msg == ".time" {
+        return time.format("%Y-%m-%d %H:%M:%S")
+    }
+    if msg == ".joke" {
+        var jokes = [
+            "Why do programmers prefer dark mode? Because light attracts bugs.",
+            "There are 10 kinds of people: those who know binary and those who don't.",
+            "A SQL query walks into a bar, approaches two tables and asks: may I join you?",
+        ]
+        var i = random.randint(0, jokes.length() - 1)
+        return jokes[i]
+    }
+    if msg == ".about" {
+        return "zen-bot: WhatsApp bot written in the Zen language, bridged via Baileys."
+    }
+    return "Unknown command. Try .menu"
+}
+
+# ── main loop ──
+if wa.connect() != true {
+    print("failed to start bridge")
+    exit(1)
+}
+
+# Wait for an authenticated connection (session must already be linked).
+print("waiting for connection...")
+var state = ""
+for i in range(0, 60) {
+    state = wa.state()
+    if state == "connected" || state == "dead" { break }
+    wait(1000)
+}
+if state != "connected" {
+    print("not connected (state:", state + ") — run examples/wa_auth.z first")
+    exit(1)
+}
+start_ms = time.now()
+print("bot online. Ctrl-C to stop.")
+
+while true {
+    var msgs = wa.poll(1000)
+    for m in msgs {
+        var reply = handle(m["text"])
+        if reply != null {
+            print("->", m["from"], m["text"])
+            wa.sendText(m["from"], reply)
+        }
+    }
+    if wa.state() == "dead" {
+        print("bridge reported dead; exiting")
+        break
+    }
+}

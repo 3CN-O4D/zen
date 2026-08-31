@@ -1,11 +1,10 @@
 //! Zen `browser` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_browser_module(vm: &mut Vm) {
-let browser = Value::Dict(Arc::new(BTreeMap::from([
+let browser = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("launch".into(), Value::NativeFunction("browser_launch".into())),
     ("connect".into(), Value::NativeFunction("browser_connect".into())),
     ("navigate".into(), Value::NativeFunction("browser_navigate".into())),

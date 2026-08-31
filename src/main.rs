@@ -45,14 +45,19 @@ mod time;
 mod telnet;
 mod wifi;
 mod cdp;
+mod wa;
+mod wa2;
 mod pm;
 mod runtime;
 mod state;
 
 use std::{env, process};
 
-fn usage() {
-    eprintln!("Zen native runtime\n\nUsage:\n  zen run <file.z>\n  zen <file.z>\n  zen -e <source>\n  zen --version\n\nCommands:\n  zen run <file.z>            execute a script\n  zen check <file.z>          parse and validate a script without running it\n  zen lint <file.z>           report suspicious patterns and errors\n  zen repl                    start an interactive session\n\nPackage manager:\n  zen pm init [name]          initialize a new module (creates zen.json + main.z)\n  zen pm install <spec>       install: owner/repo, url, .z file, or local directory\n  zen pm install --force <spec>   reinstall\n  zen pm install -r <freeze.txt>  install from freeze file\n  zen pm list\n  zen pm freeze\n  zen pm remove <name>\n  zen pm info <name>\n  zen pm verify <name>            check sha256 against source\n  zen pm pack <dir>               build publishable tarball\n  zen pm publish <dir> <git-remote>");
+fn usage() -> String {
+    format!(
+        "Zen native runtime {}\n\nUsage:\n  zen run <file.z>\n  zen <file.z>\n  zen -e <source>\n  zen --version\n\nCommands:\n  zen run <file.z>            execute a script\n  zen check <file.z>          parse and validate a script without running it\n  zen lint <file.z>           report suspicious patterns and errors\n  zen repl                    start an interactive session\n\nPackage manager:\n  zen pm init [name]          initialize a new module (creates zen.json + main.z)\n  zen pm install <spec>       install: owner/repo, url, .z file, or local directory\n  zen pm install --force <spec>   reinstall\n  zen pm install -r <freeze.txt>  install from freeze file\n  zen pm list\n  zen pm freeze\n  zen pm remove <name>\n  zen pm info <name>\n  zen pm verify <name>            check sha256 against source\n  zen pm pack <dir>               build publishable tarball\n  zen pm publish <dir> <git-remote>",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 fn main() {
@@ -61,8 +66,12 @@ fn main() {
         repl();
         return;
     }
-    if args.first().is_some_and(|arg| arg == "--version") {
+    if args.first().is_some_and(|arg| arg == "--version" || arg == "-v") {
         println!("zen {} (native Rust runtime)", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if args.first().is_some_and(|arg| arg == "--help" || arg == "-h" || arg == "help") {
+        println!("{}", usage());
         return;
     }
     if args.first().is_some_and(|arg| arg == "pm") {
@@ -85,13 +94,13 @@ fn main() {
                 ("pack", [dir]) => pm::pack(dir).map(|_| ()),
                 ("publish", [dir, remote]) => pm::publish(dir, remote),
                 _ => {
-                    usage();
+                    eprintln!("{}", usage());
                     process::exit(2);
                 }
                 }
             },
             _ => {
-                usage();
+                eprintln!("{}", usage());
                 process::exit(2);
             }
         };
@@ -113,7 +122,7 @@ fn main() {
         let file = match args.get(1) {
             Some(file) => file.clone(),
             None => {
-                usage();
+                eprintln!("{}", usage());
                 process::exit(2);
             }
         };
@@ -135,7 +144,7 @@ fn main() {
                     }
                 }
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(format!("{file}: {e}")),
         };
         match result {
             Ok(()) => {}
@@ -148,14 +157,25 @@ fn main() {
     }
     let (source, filename) = match args.as_slice() {
         [flag, code] if flag == "-e" || flag == "--eval" => (Ok(code.clone()), "<string>".to_string()),
-        [command, file, ..] if command == "run" => (std::fs::read_to_string(file), file.clone()),
-        [file, ..] => (std::fs::read_to_string(file), file.clone()),
+        [command, file, ..] if command == "run" => {
+            let source = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"));
+            (source, file.clone())
+        }
+        [file, ..] => {
+            if file.starts_with('-') {
+                eprintln!("{}", usage());
+                process::exit(2);
+            }
+            let source = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"));
+            (source, file.clone())
+        }
         _ => {
-            usage();
+            eprintln!("{}", usage());
             process::exit(2);
         }
     };
     match source
+        .map_err(std::io::Error::other)
         .and_then(|source| runtime::run_named(&source, &filename).map_err(std::io::Error::other))
     {
         Ok(()) => {}

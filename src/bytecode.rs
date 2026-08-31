@@ -143,6 +143,10 @@ pub enum Opcode {
     // Pops end, start (Numbers); pushes the materialized range list.
     // arg1 != 0 => exclusive (..) instead of inclusive (..=).
     MakeRange,
+
+    // General call: stack holds [callee, arg1..argN]; arg1 = N. The callee
+    // value must be a Function or NativeFunction name reference.
+    CallValue,
 }
 
 /// A single bytecode instruction.
@@ -503,6 +507,7 @@ impl FunctionCompiler {
                             }
                         }
                         self.compile_expr(e)?;
+                        self.emit(Opcode::CheckLockedAssign, ni, 0, 0);
                         self.emit(Opcode::StoreGlobal, ni, 0, 0);
                         Ok(())
                     }
@@ -614,7 +619,12 @@ impl FunctionCompiler {
                 }
                 Ok(())
             }
-            StmtKind::For(n, e, body) => {
+            StmtKind::For(names, e, body) => {
+                if names.len() != 1 {
+                    return Err("multi-variable for is not supported by the bytecode compiler"
+                        .into());
+                }
+                let n = &names[0];
                 self.compile_expr(e)?;
                 let list_t = self.alloc_temp();
                 self.emit(Opcode::StoreLocal, list_t, 0, 0);
@@ -693,11 +703,11 @@ impl FunctionCompiler {
                 // the variable itself; route through dedicated slot opcodes.
                 if let Expr::Call(callee, args) = e {
                     if let Expr::Member(obj, method) = callee.as_ref() {
-                        if matches!(method.as_str(), "push" | "pop") {
+                        if matches!(method.as_str(), "push" | "append" | "pop") {
                             if let Expr::Var(name) = obj.as_ref() {
                                 if let Some(&slot) = self.slots.get(name) {
                                     match method.as_str() {
-                                        "push" => {
+                                        "push" | "append" => {
                                             if args.len() != 1 {
                                                 return Err("push expects exactly one argument".into());
                                             }
@@ -716,7 +726,7 @@ impl FunctionCompiler {
                                 } else {
                                     let ci = self.const_str(name);
                                     match method.as_str() {
-                                        "push" => {
+                                        "push" | "append" => {
                                             if args.len() != 1 {
                                                 return Err("push expects exactly one argument".into());
                                             }
@@ -868,8 +878,8 @@ fn local_opcode(&self, op: &Kind) -> Result<Opcode, String> {
                             self.emit(Opcode::Const, ci, 0, 0);
                             self.compile_expr(v)?;
                         }
-                        DictEntry::Spread(_) => {
-                            return Err("spread in dict not supported in bytecode".into());
+                        DictEntry::Spread(_) | DictEntry::Computed(_, _) => {
+                            return Err("spread/computed keys in dict not supported in bytecode".into());
                         }
                     }
                 }
@@ -968,9 +978,43 @@ fn local_opcode(&self, op: &Kind) -> Result<Opcode, String> {
                     self.emit(Opcode::CallMethod, ci, args.len() as u16, 0);
                     return Ok(());
                 }
+                // General callee expression (e.g. a value held in a list,
+                // dict, or returned from another call): evaluate the callable
+                // first, then the args, then invoke.
+                if !matches!(callee.as_ref(), Expr::Var(_)) {
+                    for arg in args {
+                        if matches!(arg, Expr::Named(_, _)) {
+                            return Err("named arguments not supported in bytecode".into());
+                        }
+                    }
+                    self.compile_expr(callee)?;
+                    for arg in args {
+                        self.compile_expr(arg)?;
+                    }
+                    self.emit(Opcode::CallValue, args.len() as u16, 0, 0);
+                    return Ok(());
+                }
+                // Named call fast path ONLY when the name cannot be a local
+                // slot (params/captured). Slot-held callables (function
+                // values passed as arguments) go through CallValue.
                 let Expr::Var(name) = callee.as_ref() else {
                     return Err("unsupported call target in bytecode".into());
                 };
+                if let Some(&slot) = self.slots.get(name) {
+                    // Callee value lives in a local slot: load it first, then
+                    // args, then invoke generically.
+                    for arg in args {
+                        if matches!(arg, Expr::Named(_, _)) {
+                            return Err("named arguments not supported in bytecode".into());
+                        }
+                    }
+                    self.emit(Opcode::LoadLocal, slot, 0, 0);
+                    for arg in args {
+                        self.compile_expr(arg)?;
+                    }
+                    self.emit(Opcode::CallValue, args.len() as u16, 0, 0);
+                    return Ok(());
+                }
                 for arg in args {
                     if matches!(arg, Expr::Named(_, _)) {
                         return Err("named arguments not supported in bytecode".into());

@@ -33,9 +33,24 @@ cbc = "0.1"
 uuid = { version = "1", features = ["v1", "v3", "v4", "v5"] }
 tar = "0.4"
 websocket = "0.27"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+native-tls = "0.2"
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+[package.metadata.deb]
+maintainer = "zen-lang"
+copyright = "2025 zen-lang contributors"
+extended-description = "Zen is a fast, expression-oriented programming language with an ergonomic syntax, native Rust runtime, and powerful built-ins (http, crypto, socket, mqtt, hydra, wa, and more)."
+section = "devel"
+priority = "optional"
+depends = ["libc6", "libssl3 | libssl1.1 | libssl1.0"]
+recommends = ["nodejs"]
+assets = [
+    ["target/release/zen", "usr/bin/zen", "755"],
+    ["std/*", "usr/share/zen/std/", "644"],
+]

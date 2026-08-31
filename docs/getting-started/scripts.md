@@ -567,5 +567,5 @@ let length = 10
 
 - [Quick Start](quickstart.md) — Beginner-friendly overview
 - [Shell Usage](shell.md) — Interactive REPL reference
-- [Language Overview](../language/overview.md) — Complete language documentation
+- [Language Reference](../index.md) — Complete language documentation
 - [CLI Reference](../cli.md) — All CLI commands and options

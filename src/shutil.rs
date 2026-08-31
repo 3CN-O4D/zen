@@ -1,11 +1,10 @@
 //! Zen `shutil` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_shutil_module(vm: &mut Vm) {
-let shutil = Value::Dict(Arc::new(BTreeMap::from([
+let shutil = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("copy".into(), Value::NativeFunction("shutil_copy".into())),
     ("copy2".into(), Value::NativeFunction("shutil_copy2".into())),
     ("move".into(), Value::NativeFunction("shutil_move".into())),

@@ -1,41 +1,57 @@
-# Math Module (`math`)
+# math — Mathematical functions
 
-Standard math functions. No import needed.
-
-Constants: `math.pi`, `math.e`, `math.inf`, `math.nan`.
+The `math` module provides standard mathematical constants and functions. It is available globally as `math`.
 
 ```zen
-math.floor(3.7)              // 3
-math.ceil(3.2)               // 4
-math.sqrt(16)                // 4.0
-math.abs(-5)                 // 5
-math.pow(2, 10)              // 1024
-math.round(3.5)              // 4
-math.min(1, 2, 3)            // 1
-math.max(10, 20)             // 20
-math.trunc(3.9)              // 3
+# 1. Constants
+print(math.pi) # 3.14159...
+print(math.e)  # 2.71828...
 
-math.sin(math.pi/2)          // 1.0
-math.cos(0)                  // 1.0
-math.tan(0)                  // 0.0
-math.degrees(math.pi)        // 180
-math.radians(180)            // 3.14159...
-math.hypot(3, 4)             // 5.0
-
-math.log(100)                // 4.605... (natural log)
-math.log10(100)              // 2.0
-math.log2(8)                 // 3.0
-math.exp(1)                  // 2.718...
-
-math.gcd(48, 18)             // 6
-math.lcm(4, 6)               // 12
-math.factorial(5)            // 120
-math.comb(5, 2)              // 10
-math.perm(5, 3)              // 60
-math.fsum([0.1, 0.2])        // 0.3
-math.prod([2, 3, 4])         // 24
-
-math.isnan(math.nan)         // true
-math.isinf(math.inf)         // true
-math.isfinite(42)            // true
+# 2. Basic functions
+print(math.sqrt(144)) # 12
+print(math.pow(2, 8))  # 256
 ```
+
+## Constants
+- `math.pi`
+- `math.e`
+- `math.inf`
+- `math.nan`
+
+## Functions
+
+| Function | Description |
+|----------|-------------|
+| `sqrt(n)` | Square root. |
+| `abs(n)` | Absolute value. |
+| `pow(x, y)` | Power (x to the y). |
+| `floor(n)` / `ceil(n)` / `round(n)` | Rounding. |
+| `trunc(n)` | Truncates decimal part. |
+| `sin(n)` / `cos(n)` / `tan(n)` | Trigonometry (radians). |
+| `asin(n)` / `acos(n)` / `atan(n)` / `atan2(y, x)` | Inverse trigonometry. |
+| `log(n)` / `log10(n)` / `log2(n)` | Logarithms. |
+| `exp(n)` | Exponential (e to the n). |
+| `gcd(a, b)` / `lcm(a, b)` | Greatest common divisor / least common multiple. |
+| `factorial(n)` / `comb(n, k)` / `perm(n, k)` | Combinatorics. |
+| `isnan(n)` / `isfinite(n)` / `isinf(n)` | Numeric checks. |
+| `min(list)` / `max(list)` | Minimum/maximum in a list. |
+| `sum(list)` | Sum of a list. |
+
+## Examples
+
+### Converting between degrees and radians
+```zen
+var deg = 180
+var rad = math.radians(deg) # pi
+print(math.degrees(rad))    # 180
+```
+
+### Using combinatorics
+```zen
+# How many ways to pick 2 items from 5?
+print(math.comb(5, 2)) # 10
+```
+
+## See Also
+- [decimal](decimal.md) — For arbitrary-precision math.
+- [statistics](statistics.md) — For statistical functions.

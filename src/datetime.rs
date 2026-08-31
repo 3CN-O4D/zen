@@ -1,11 +1,10 @@
 //! Zen `datetime` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_datetime_module(vm: &mut Vm) {
-let datetime = Value::Dict(Arc::new(BTreeMap::from([
+let datetime = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("now".into(), Value::NativeFunction("time_now".into())),
     ("utcnow".into(), Value::NativeFunction("time_utc".into())),
     ("today".into(), Value::NativeFunction("time_date".into())),

@@ -1,96 +1,174 @@
-# Page Info
+# Page Information
 
-## The `page` Module
+Everything you can learn about the currently loaded page, without touching the
+DOM yourself.
 
-Access page information through the `page` object (clean property access):
+## One-line summary
 
-| Property | Description |
-|----------|-------------|
-| `page.html` | Full page HTML |
-| `page.text` | Visible text with `{[media]}` markers |
-| `page.links` | All link URLs on page |
-| `page.images` | All image URLs on page |
-| `page.forms` | All forms with their inputs |
-| `page.inputs` | All input/select/textarea fields |
-| `page.buttons` | All buttons and clickable elements |
-| `page.title` | Page title |
-| `page.url` | Current page URL |
-| `page.source` | Alias for page.html |
+| Call | Returns |
+|------|---------|
+| `browser.title()` | Page title (`document.title`) |
+| `browser.url()` | Current URL (`location.href`) |
+| `browser.html()` | Full page HTML (`outerHTML` of `<html>`) |
+| `browser.page_text()` | Visible text of the whole page (`document.body.innerText`) |
 
-Examples:
+## Title
 
-```
-page.title           // "MOI University | Student Portal"
-page.inputs          // [{id: "username", type: "text", ...}, ...]
-page.buttons         // [{id: "btnLogin", text: "Log In"}, ...]
+```zen
+browser.go("https://en.wikipedia.org/wiki/Zen")
+print browser.title()      # "Zen - Wikipedia"
 ```
 
-## Special Variables (Legacy)
+`get_title` is an alias:
 
-```
-_page_html           // Full page HTML
-_page_text           // Visible text with {[media]} markers
-_page_links          // All link URLs
-_page_images         // All image URLs
-_page_forms          // All forms
-_page_inputs         // All input fields
-_page_buttons        // All buttons
-_page_urls           // All URLs visited this session
+```zen
+print browser.get_title()
 ```
 
-## Function Equivalents (Legacy)
+## Current URL
 
-```
-page_html()
-page_text()
-page_links()
-page_images()
-page_forms()
+```zen
+print browser.url()        # "https://en.wikipedia.org/wiki/Zen"
 ```
 
-## ZenList (Element Lists)
+Useful for detecting redirects after a form submit or an OAuth dance:
 
-### Getting a List
-
-```
-let list = find_all("a")        // CSS
-let list = find_all("div.item") // all matching elements
-```
-
-### Properties
-
-| Property | Description |
-|----------|-------------|
-| `.count` | Number of elements |
-| `.len` | Same as count |
-| `.first` | First element (ZenElement or null) |
-| `.texts` | List of inner texts |
-| `.htmls` | List of inner HTMLs |
-| `.tags` | List of tag names |
-
-### Methods
-
-| Method | Description |
-|--------|-------------|
-| `.nth(n)` | Element at index n |
-| `.attr("href")` | List of attribute values |
-| `.attrs("href")` | Same as attr() |
-| `.each(callback)` | Iterate: `fn(element, index)` |
-| `.sorted()` | Sorted by text |
-| `.to_list()` | Convert to plain list |
-
-### Iteration
-
-```
-find_all("a").each(function(link, i) {
-    print (i+1) + ". " + link.text + " → " + link.attr("href")
-})
-```
-
-### With for/in
-
-```
-for link in find_all("a") {
-    print link.text + " → " + link.attr("href")
+```zen
+browser.click("button[type=submit]")
+browser.wait_for_ms("body", 5_000)          # give the redirect a beat
+if browser.url().contains("profile") {
+    print "Redirected to the profile"
 }
 ```
+
+## Full page HTML
+
+`browser.html()` returns the outer HTML of the `<html>` element — the whole
+document, including the doctype-less markup inside `<html>`:
+
+```zen
+var page = browser.html()
+print len(page)
+```
+
+You can pipe it straight into files:
+
+```zen
+fs.write("/tmp/snapshot.html", browser.html())
+```
+
+### Grabbing the raw HTML vs the rendered DOM
+
+`browser.html()` reflects whatever the browser has rendered *right now*. For
+pages that mutate heavily after load, wait first:
+
+```zen
+var html = browser.html()
+```
+
+If you need the pre-rendered source, fetch it instead:
+
+```zen
+var r = http.get(browser.url())
+var source = r.text()
+```
+
+> **Gotcha:** `browser.html()` gives you the **current DOM**, which is not
+> necessarily the original HTTP response.
+
+## Visible text
+
+`browser.page_text()` returns `document.body.innerText` (or `""` if there is
+no body) — everything you can actually see, with line breaks preserved:
+
+```zen
+browser.go("https://example.com")
+print browser.page_text()
+```
+
+`innerText` differs from `textContent` (which includes hidden text and no
+line-break normalization). If you need `textContent` semantics, use JS:
+
+```zen
+var raw = browser.eval("document.body.textContent")
+```
+
+### "{[media]}" markers are gone
+
+The old Python backend inserted `{[media]}` markers into page text for
+embedded media. The CDP backend returns plain `innerText` — no markers.
+
+## Page text vs per-element text
+
+- Whole page: `browser.page_text()`
+- One element, first match: `browser.text("h1")`
+- Many elements: `browser.query("p")`
+
+```zen
+var first_paragraph = browser.text("article p")
+var all_paragraphs  = browser.query("article p")
+```
+
+## Counting and inspecting elements
+
+No dedicated "existence" / "count" helper. Use `query` (returns a list):
+
+```zen
+var links = browser.query("a")
+print "There are", len(links), "links"
+
+if len(browser.query(".empty-state")) > 0 {
+    print "Showing the empty state"
+}
+```
+
+or an evaluate for an existence boolean:
+
+```zen
+var has_login = browser.eval("!!document.querySelector('form.login')")
+print has_login
+```
+
+## Reading structured data from a page
+
+Combine the readers with `evaluate` to extract any JSON-ish structure:
+
+```zen
+browser.go("https://example.com/products")
+
+var grid = browser.eval("({"
+    + " count: document.querySelectorAll('.card').length,"
+    + " first: document.querySelector('.card h2')?.textContent,"
+    + " url: location.href"
+    + "})")
+
+print grid.count
+print grid.first
+print grid.url
+```
+
+## What the legacy API used to look like
+
+Older Zen had magic globals (`page`, `_page_html`, `_page_links`,
+`page_links()`, etc.). These do **not** exist in the CDP runtime. The mapping:
+
+| Legacy (retired) | Current replacement |
+|------------------|---------------------|
+| `page.title` | `browser.title()` |
+| `page.url` | `browser.url()` |
+| `page.html` / `page.source` | `browser.html()` |
+| `page.text` | `browser.page_text()` |
+| `page.links` | `browser.query("a[href]")` (+ `browser.attr` for the href) |
+| `page.images` | `browser.query("img")` (+ `browser.attr("img", "src")`) |
+| `page.buttons` | `browser.query("button")` |
+| `page.inputs` / `page.forms` | `browser.query("input, select, textarea")`, `browser.query("form")` |
+| `page_links()` etc. | same as above |
+
+## Reference
+
+| Function | Aliases | Returns |
+|----------|---------|---------|
+| `get_title` | `title` | `string` |
+| `get_url` | `url` | `string` |
+| `html` | `page` | `string` (outer HTML) |
+| `page_text` | – | `string` (visible text) |

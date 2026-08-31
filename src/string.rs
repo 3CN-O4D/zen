@@ -1,11 +1,10 @@
 //! Zen `string` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_string_module(vm: &mut Vm) {
-let string = Value::Dict(Arc::new(BTreeMap::from([
+let string = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("upper".into(), Value::NativeFunction("str_upper".into())),
     ("lower".into(), Value::NativeFunction("str_lower".into())),
     ("title".into(), Value::NativeFunction("str_title".into())),

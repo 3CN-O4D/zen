@@ -1,109 +1,106 @@
-# Scraping Examples
+# Web Scraping Examples
 
-## Basic Scraping
+Zen's native performance and clean syntax make it ideal for scraping structured data from the web.
 
-```
-go "https://example.com"
-let title = find("h1").text
-print "Title: " + title
-```
+## Simple Page Scraping
 
-## Scrape All Links
+Extracting titles and links from a page.
 
-```
-go "https://example.com"
-let links = find_all("a")
-for link in links {
-    print link.text + " → " + link.attr("href")
+```zen
+browser.launch()
+browser.navigate("https://news.ycombinator.com")
+
+# 1. Get the page title
+print("Page: ${browser.get_title()}")
+
+# 2. Extract all article titles using a CSS selector
+var headlines = browser.query(".titleline > a")
+
+for title in headlines {
+    print("- ${title}")
 }
+
+browser.close()
 ```
 
-## Scrape with Pagination
+## Scraping with Pagination
 
-```
-go "https://books.toscrape.com/"
-let all_titles = []
-let page_num = 1
+Navigating multiple pages to collect data.
 
-while page_num <= 3 {
-    print "--- Page " + page_num + " ---"
-    for book in find_all("article.product_pod h3 a") {
-        all_titles.append(book.attr("title"))
+```zen
+browser.launch()
+browser.navigate("https://example.com/products")
+
+var all_products = []
+
+for i in 1 -> 5 {
+    print("Scraping page ${i}...")
+    
+    # Collect products on current page
+    var page_products = browser.query(".product-name")
+    all_products = all_products.concat(page_products)
+    
+    # Click next if available
+    if i < 5 {
+        browser.click(".next-page")
+        browser.wait_for(".product-name")
     }
-
-    let next = find(".next a")
-    if next.exists {
-        click next
-        wait 1000
-        page_num = page_num + 1
-    } else {
-        break
-    }
-}
-write_file("titles.txt", all_titles.join("\n"))
-```
-
-## Scrape to JSON
-
-```
-go "https://quotes.toscrape.com/"
-let data = []
-
-for quote in find_all(".quote") {
-    data.append({
-        "text": quote.find(".text").text,
-        "author": quote.find(".author").text,
-        "tags": quote.find_all(".tag").texts
-    })
 }
 
-write_file("quotes.json", json_encode(data))
-print "Saved " + data.len + " quotes"
+print("Total products found: ${all_products.len}")
+browser.close()
 ```
 
-## Dynamic Content (SPA)
+## Scraping JavaScript-Heavy Sites
 
-```
-go "https://example.com/spa"
-wait_for ".app-root"
+Zen handles dynamic content naturally by waiting for elements to appear.
 
-scroll to bottom
-execute("document.querySelector('.load-more').click()")
-wait 2000
+```zen
+browser.launch()
+browser.navigate("https://api-dashboard.example.com")
 
-let items = find_all(".item")
-items.each(function(item, i) {
-    print (i+1) + ". " + item.text
-})
-print "Loaded " + items.count + " items"
-```
+# Wait for the chart data to load via JS
+browser.wait_for(".data-point", 10000)
 
-## Form Submission
-
-```
-go "https://portal.example.com"
-page.inputs        // see all form fields
-page.buttons       // see all buttons
-
-fill("#username", "user@example.com")
-fill("#password", "secret")
-check("#remember-me")
-click("#login-button")
-wait_for(".dashboard")
-```
-
-## Search and Extract
-
-```
-go "https://example.com"
-fill("#search", "query")
-click("button[type='submit']")
-wait_for(".results")
-
-let results = find_all(".result-item")
-for result in results {
-    print result.find(".title").text
-    print result.find(".description").text
-    print "---"
+# Extract specific attribute (e.g., data-value)
+var values = []
+var items = browser.query(".data-point")
+for item in items {
+    # browser.attr returns the attribute of the first match
+    # for full scraping, use browser.evaluate to run JS directly
+    var val = browser.evaluate("Array.from(document.querySelectorAll('.data-point')).map(e => e.dataset.value)")
+    values = val
+    break
 }
+
+print("Live values: ${values}")
+browser.close()
 ```
+
+## Headless Data Export
+
+Combining scraping with the `csv` module.
+
+```zen
+import csv
+
+browser.launch({headless: true})
+browser.navigate("https://example.com/prices")
+
+var rows = [["Product", "Price"]]
+var names = browser.query(".name")
+var prices = browser.query(".price")
+
+for i in 0 .. names.len {
+    rows = rows.push([names[i], prices[i]])
+}
+
+csv.write("prices.csv", rows)
+print("Data exported to prices.csv")
+browser.close()
+```
+
+## See Also
+- [Finding Elements](../browser/finding.md) — Advanced selectors and text search.
+- [Evaluating JS](../browser/interacting.md#evaluating-javascript) — Running custom logic in the page.
+- [CSV Module](../modules/csv.md) — Saving your scraped data.

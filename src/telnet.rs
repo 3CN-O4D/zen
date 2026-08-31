@@ -1,11 +1,10 @@
 //! Zen `telnet` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_telnet_module(vm: &mut Vm) {
-let telnet = Value::Dict(Arc::new(BTreeMap::from([
+let telnet = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("connect".into(), Value::NativeFunction("telnet_connect".into())),
     ("write".into(), Value::NativeFunction("telnet_write".into())),
     ("read".into(), Value::NativeFunction("telnet_read".into())),

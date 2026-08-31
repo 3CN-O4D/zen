@@ -1,11 +1,10 @@
 //! Zen `ftp` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_ftp_module(vm: &mut Vm) {
-let ftp = Value::Dict(Arc::new(BTreeMap::from([
+let ftp = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("connect".into(), Value::NativeFunction("ftp_connect".into())),
     ("login".into(), Value::NativeFunction("ftp_login".into())),
     ("pwd".into(), Value::NativeFunction("ftp_pwd".into())),

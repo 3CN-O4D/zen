@@ -1,11 +1,10 @@
 //! Zen `imap` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_imap_module(vm: &mut Vm) {
-let imap = Value::Dict(Arc::new(BTreeMap::from([
+let imap = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("connect".into(), Value::NativeFunction("imap_connect".into())),
     ("select".into(), Value::NativeFunction("imap_select".into())),
     ("search".into(), Value::NativeFunction("imap_search".into())),

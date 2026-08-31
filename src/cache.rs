@@ -11,7 +11,6 @@
 
 use crate::bytecode::{CompiledFunction, Instruction, Opcode};
 use crate::runtime::Value;
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -101,6 +100,7 @@ fn op_to_id(op: Opcode) -> u16 {
         Opcode::JmpGeGlobalConst => 73,
         Opcode::AddGlobalImm => 74,
         Opcode::SubGlobalImm => 75,
+        Opcode::CallValue => 76,
     }
 }
 
@@ -182,6 +182,7 @@ fn op_from_id(id: u16) -> Option<Opcode> {
         73 => Opcode::JmpGeGlobalConst,
         74 => Opcode::AddGlobalImm,
         75 => Opcode::SubGlobalImm,
+        76 => Opcode::CallValue,
         _ => return None,
     })
 }
@@ -367,7 +368,7 @@ fn read_value(r: &mut Reader, depth: usize) -> Option<Value> {
         }
         TAG_DICT => {
             let n = r.u32()? as usize;
-            let mut map = BTreeMap::new();
+            let mut map = ahash::AHashMap::new();
             for _ in 0..n {
                 let k = r.str()?;
                 let v = read_value(r, depth + 1)?;

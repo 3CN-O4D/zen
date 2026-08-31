@@ -1,11 +1,10 @@
 //! Zen `hashlib` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_hashlib_module(vm: &mut Vm) {
-let hashlib = Value::Dict(Arc::new(BTreeMap::from([
+let hashlib = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("sha256".into(), Value::NativeFunction("crypto_sha256".into())),
     ("sha1".into(), Value::NativeFunction("crypto_sha1".into())),
     ("md5".into(), Value::NativeFunction("crypto_md5".into())),

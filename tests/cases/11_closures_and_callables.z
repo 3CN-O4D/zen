@@ -1,0 +1,84 @@
+# Closures (shared-cell captures) + calling function values
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+# 1. escaped closure keeps mutable state
+func make_counter() {
+    var n = 0
+    return lambda() { n = n + 1; return n }
+}
+var c1 = make_counter()
+c1()
+c1()
+check(c1() == 3, "escaped closure persists state")
+
+# 2. independent counters do not share
+var c2 = make_counter()
+check(c2() == 1, "fresh closure starts clean")
+
+# 3. sibling closures share the captured cell
+func make_pair() {
+    var n = 0
+    var inc = lambda(by) { n = n + by; return n }
+    var get = lambda() { return n }
+    return [inc, get]
+}
+var pair = make_pair()
+pair[0](5)
+pair[0](2)
+check(pair[1]() == 7, "siblings share captured cell")
+
+# 4. writes propagate to the live enclosing frame
+func outer() {
+    var total = 0
+    func add(v) { total = total + v; return total }
+    add(3)
+    add(4)
+    return total
+}
+check(outer() == 7, "live parent sees closure writes")
+
+# 5. reference containers were and remain shared
+func make_box() {
+    var box = {"n": 0}
+    return lambda() { box["n"] = box["n"] + 1; return box["n"] }
+}
+var b1 = make_box()
+b1()
+b1()
+check(b1() == 3, "dict capture still shared")
+
+# 6. calling function values: variable, dict member, list member, call result
+var double = lambda(x) { return x * 2 }
+check(double(21) == 42, "call value held in variable")
+var reg = {"fn": double}
+check(reg["fn"](5) == 10, "call value from dict index")
+var lst = [double]
+check(lst[0](8) == 16, "call value from list index")
+func apply_twice(f, v) { return f(f(v)) }
+check(apply_twice(double, 3) == 12, "call value passed as argument")
+
+# 7. recursive lambda via self-capture
+var fact = lambda(n) {
+    if n <= 1 { return 1 }
+    return n * fact(n - 1)
+}
+check(fact(6) == 720, "recursive lambda through captured name")
+
+# 8. closure over a function parameter
+funcadder = 0
+func make_adder(base) {
+    return lambda(x) { return base + x }
+}
+var add10 = make_adder(10)
+check(add10(7) == 17, "closure captures parameter by cell")
+add10(1)
+add10(1)
+check(add10(7) == 17, "parameter cell stable across calls")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

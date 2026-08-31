@@ -1,6 +1,6 @@
 use std::{
     sync::Arc,
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     env,
     fmt,
     fs,
@@ -162,10 +162,15 @@ fn pending_error_classes() -> &'static std::sync::Mutex<Vec<(String, Option<Stri
     PENDING_ERROR_CLASSES.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
+/// Internal marker for a `Flow::Throw` that crossed a tree-walk call boundary.
+/// The thrown `Value` is pushed onto `Vm::thrown_values` until `exec` can turn
+/// the `Err` back into a `Flow::Throw(value)`.
+const INTERNAL_THROW_SENTINEL: &str = "\u{1}[1mzen\u{1}[0m internal throw sentinel (cannot be re-raised as data)";
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Instance {
     class_name: String,
-    fields: BTreeMap<String, Value>,
+    fields: ahash::AHashMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -178,13 +183,57 @@ pub enum Value {
     // or Value::Dict is O(1); mutations go through Arc::make_mut which clones
     // only when the container is shared.
     List(Arc<Vec<Value>>),
-    Dict(Arc<BTreeMap<String, Value>>),
+    Dict(Arc<ahash::AHashMap<String, Value>>),
     Instance(InstanceRef),
     Socket(Arc<Mutex<TcpStream>>),
     UdpSocket(Arc<Mutex<std::net::UdpSocket>>),
     Listener(Arc<Mutex<std::net::TcpListener>>),
     NativeFunction(String),
     Function(String),
+    // Shared mutable cell used for closure captures. Cloning a Cell shares
+    // the same storage, so a captured variable read/written through different
+    // closures (or the defining frame) observes one value.
+    Cell(Arc<Mutex<Value>>),
+}
+
+/// Dereference any chain of `Value::Cell` boxes, returning the inner value.
+pub(crate) fn deref_cells(v: &Value) -> Value {
+    let mut cur = v.clone();
+    loop {
+        let next = if let Value::Cell(c) = &cur {
+            let g = c.lock().unwrap_or_else(|p| p.into_inner());
+            Some(g.clone())
+        } else {
+            None
+        };
+        match next {
+            Some(inner) => cur = inner,
+            None => break,
+        }
+    }
+    cur
+}
+
+/// Single-level cell read with the same cost as a plain clone for non-cells.
+#[inline]
+pub(crate) fn deref_cell(v: &Value) -> Value {
+    if let Value::Cell(c) = v {
+        c.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    } else {
+        v.clone()
+    }
+}
+
+/// If `v` is a cell, store `nv` inside it and return true; otherwise return
+/// false so callers fall back to plain binding assignment.
+pub(crate) fn cell_set(v: &Value, nv: Value) -> bool {
+    if let Value::Cell(c) = v {
+        let mut g = c.lock().unwrap_or_else(|p| p.into_inner());
+        *g = nv;
+        true
+    } else {
+        false
+    }
 }
 
 impl PartialEq for Value {
@@ -200,6 +249,11 @@ impl PartialEq for Value {
             (Self::Socket(_), Self::Socket(_)) => false,
             (Self::UdpSocket(_), Self::UdpSocket(_)) => false,
             (Self::Listener(_), Self::Listener(_)) => false,
+            (Self::Cell(a), Self::Cell(b)) => {
+                Arc::ptr_eq(a, b)
+                    || *a.lock().unwrap_or_else(|p| p.into_inner())
+                        == *b.lock().unwrap_or_else(|p| p.into_inner())
+            }
             _ => false,
         }
     }
@@ -216,6 +270,7 @@ impl Value {
             Self::Dict(_) => "dict",
             Self::Instance(_) => "object",
             Self::Socket(_) => "socket",
+            Self::Cell(v) => v.lock().unwrap_or_else(|p| p.into_inner()).type_name(),
             Self::UdpSocket(_) => "udp_socket",
             Self::Listener(_) => "listener",
             Self::NativeFunction(_) | Self::Function(_) => "function",
@@ -229,6 +284,7 @@ impl Value {
             Self::String(v) => !v.is_empty(),
             Self::List(v) => !v.is_empty(),
             Self::Dict(v) => !v.is_empty(),
+            Self::Cell(v) => v.lock().unwrap_or_else(|p| p.into_inner()).truthy(),
             Self::Instance(_) | Self::Socket(_) | Self::UdpSocket(_) | Self::Listener(_) | Self::NativeFunction(_) | Self::Function(_) => true,
         }
     }
@@ -269,6 +325,10 @@ impl fmt::Display for Value {
             Self::Listener(_) => write!(f, "<Listener>"),
             Self::NativeFunction(name) => write!(f, "<native:{name}>"),
             Self::Function(name) => write!(f, "<function:{name}>"),
+            Self::Cell(inner) => {
+                let g = inner.lock().unwrap_or_else(|p| p.into_inner());
+                write!(f, "{g}")
+            }
         }
     }
 }
@@ -320,7 +380,11 @@ pub(crate) enum Kind {
     Switch,
     Case,
     Default,
+    Match,
+    When,
+    FatArrow,
     Lambda,
+    With,
     Ellipsis,
     DotDot,
     Pow,
@@ -453,11 +517,12 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             }
             continue;
         }
-        if c == '"' || c == '\'' {
+        if c == '"' || c == '\'' || c == '`' {
             let quote = c;
-            let triple = bytes.get(i + 1) == Some(&(quote as u8))
+            let triple = c != '`'
+                && bytes.get(i + 1) == Some(&(quote as u8))
                 && bytes.get(i + 2) == Some(&(quote as u8));
-            let is_interpolated = c == '"';
+            let is_interpolated = c == '"' || c == '`';
             let mut text = String::new();
             let mut closed = false;
             let mut parts: Vec<InterpPart> = Vec::new();
@@ -668,6 +733,35 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             }
             continue;
         }
+        if c == '0' && matches!(bytes.get(i + 1), Some(b'x' | b'X' | b'b' | b'B' | b'o' | b'O')) {
+            let begin = i;
+            let radix_digits = match bytes[i + 1] {
+                b'b' | b'B' => (2u32, b"01".as_slice()),
+                b'o' | b'O' => (8u32, b"01234567".as_slice()),
+                _ => (16u32, b"0123456789abcdefABCDEF".as_slice()),
+            };
+            i += 2;
+            col += 2;
+            let digit_begin = i;
+            while i < bytes.len() && radix_digits.1.contains(&bytes[i]) {
+                i += 1;
+                col += 1;
+            }
+            if i == digit_begin {
+                return Err(format!(
+                    "{}:{}: invalid numeric literal (no digits after prefix)",
+                    start.0, start.1
+                ));
+            }
+            let n = u64::from_str_radix(&source[digit_begin..i], radix_digits.0)
+                .map_err(|_| format!("{}:{}: invalid numeric literal", start.0, start.1))?;
+            out.push(Token {
+                kind: Kind::Number(n as f64),
+                line: start.0,
+                col: start.1,
+            });
+            continue;
+        }
         if c.is_ascii_digit()
             || (c == '.'
                 && bytes
@@ -692,6 +786,26 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     col += 1;
                 }
             }
+            // Optional exponent: `1e10`, `1e-6`, `2.5E+3`
+            if i < bytes.len() && matches!(bytes[i], b'e' | b'E') {
+                let mut j = i;
+                let mut ci = col;
+                j += 1;
+                ci += 1;
+                if matches!(bytes.get(j), Some(b'+' | b'-')) {
+                    j += 1;
+                    ci += 1;
+                }
+                let exp_start = j;
+                while j < bytes.len() && (bytes[j] as char).is_ascii_digit() {
+                    j += 1;
+                    ci += 1;
+                }
+                if j > exp_start {
+                    i = j;
+                    col = ci;
+                }
+            }
             let n = source[begin..i]
                 .parse()
                 .map_err(|_| format!("{}:{}: invalid number", start.0, start.1))?;
@@ -714,7 +828,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             let kind = match word {
                 "let" => Kind::Let,
                 "const" => Kind::Const,
-                "var" => Kind::Var,
+                "var" | "global" => Kind::Var,
                 "print" => Kind::Print,
                 "if" => Kind::If,
                 "elif" => Kind::Elif,
@@ -724,7 +838,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 "in" => Kind::In,
                 "break" => Kind::Break,
                 "continue" => Kind::Continue,
-                "function" | "func" => Kind::Function,
+                "function" | "func" | "fn" | "procedure" | "proc" => Kind::Function,
                 "def" => Kind::Def,
                 "return" => Kind::Return,
                 "class" => Kind::Class,
@@ -740,14 +854,17 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 "try" => Kind::Try,
                 "catch" | "except" => Kind::Catch,
                 "finally" => Kind::Finally,
-                "throw" => Kind::Throw,
+                "throw" | "raise" => Kind::Throw,
                 "super" => Kind::Super,
                 "typeof" => Kind::Typeof,
                 "is" => Kind::Is,
                 "switch" => Kind::Switch,
                 "case" => Kind::Case,
                 "default" => Kind::Default,
+                "match" => Kind::Match,
+                "when" => Kind::When,
                 "lambda" => Kind::Lambda,
+                "with" => Kind::With,
                 "and" => Kind::And,
                 "or" => Kind::Or,
                 "not" => Kind::Not,
@@ -829,6 +946,11 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 i += 1;
                 col += 1;
                 Kind::Eq
+            }
+            Some([b'=', b'>']) => {
+                i += 1;
+                col += 1;
+                Kind::FatArrow
             }
             Some([b'.', b'.']) => {
                 i += 1;
@@ -984,6 +1106,8 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
 pub(crate) enum DictEntry {
     Pair(String, Expr),
     Spread(Expr),
+    /// `{[key_expr]: value}` — key computed at runtime.
+    Computed(Expr, Expr),
 }
 
 #[derive(Clone, Debug)]
@@ -997,7 +1121,7 @@ pub(crate) enum Expr {
     Binary(Box<Expr>, Kind, Box<Expr>),
     Range(Box<Expr>, Box<Expr>, bool),
     Index(Box<Expr>, Box<Expr>),
-    Slice(Box<Expr>, Box<Expr>, Box<Expr>),
+    Slice(Box<Expr>, Option<Box<Expr>>, Option<Box<Expr>>),
     Member(Box<Expr>, String),
     SafeMember(Box<Expr>, String),
     Call(Box<Expr>, Vec<Expr>),
@@ -1008,12 +1132,33 @@ pub(crate) enum Expr {
     Lambda(Vec<(String, Option<Expr>)>, Vec<Stmt>),
     Spread(Box<Expr>),
     Super(Vec<Expr>),
+    SuperMethod(String, Vec<Expr>),
+    Match(Option<Box<Expr>>, Vec<MatchArm>),
+    /// Chained comparison: `1 < x < 10` → operands + operators between them.
+    Chain(Vec<Expr>, Vec<Kind>),
+    /// List comprehension: output expr, `(var, iterable)` clauses, guard exprs.
+    Comprehension(Box<Expr>, Vec<(String, Expr)>, Vec<Expr>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MatchArm {
+    pub(crate) pattern: Expr,
+    pub(crate) guard: Option<Expr>,
+    pub(crate) body: Vec<Stmt>,
 }
 #[derive(Clone, Debug)]
 pub(crate) enum LetTarget {
     Var(String),
-    List(Vec<String>),
+    List(Vec<PatternItem>),
     Dict(Vec<String>),
+}
+
+/// A single element in a `let [..] = ..` list pattern.
+#[derive(Clone, Debug)]
+pub(crate) enum PatternItem {
+    Name(String),
+    /// `...rest` collects the remaining elements.
+    Rest(String),
 }
 
 #[derive(Clone, Debug)]
@@ -1030,7 +1175,7 @@ pub(crate) enum StmtKind {
     Print(Vec<Expr>, Option<String>, Option<String>),
     If(Expr, Vec<Stmt>, Vec<Stmt>),
     While(Expr, Vec<Stmt>),
-    For(String, Expr, Vec<Stmt>),
+    For(Vec<String>, Expr, Vec<Stmt>),
     Break,
     Continue,
     Function(String, Vec<(String, Option<Expr>)>, Vec<Stmt>),
@@ -1047,9 +1192,10 @@ pub(crate) enum StmtKind {
     Load(String),
     SetMember(Expr, String, Expr),
     SetIndex(Expr, Expr, Expr),
-    Switch(Expr, Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>),
-    Expr(Expr),
-}
+     Switch(Expr, Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>),
+     With(Expr, Option<String>, Vec<Stmt>),
+     Expr(Expr),
+ }
 
 #[derive(Clone, Debug)]
 struct CatchClause {
@@ -1087,6 +1233,23 @@ impl Parser {
         }
         kind
     }
+    fn preview(&self, n: usize) -> Kind {
+        let mut i = self.pos;
+        let mut seen = 0;
+        while i < self.tokens.len() {
+            let k = &self.tokens[i].kind;
+            if matches!(k, Kind::Newline | Kind::Semi) {
+                i += 1;
+                continue;
+            }
+            if seen == n {
+                return k.clone();
+            }
+            seen += 1;
+            i += 1;
+        }
+        Kind::Eof
+    }
     /// Human-readable rendering of a token kind for error messages, e.g.
     /// `==` for Eq, `{` for LBrace, `func` for Function.
     fn kind_text(k: &Kind) -> String {
@@ -1103,6 +1266,9 @@ impl Parser {
             Kind::SlashAssign => "`/=`".into(),
             Kind::PercentAssign => "`%=`".into(),
             Kind::Arrow => "`->`".into(),
+            Kind::FatArrow => "`=>`".into(),
+            Kind::Match => "`match`".into(),
+            Kind::When => "`when`".into(),
             Kind::DotDot => "`..`".into(),
             Kind::Ellipsis => "`...`".into(),
             Kind::Nullish => "`??`".into(),
@@ -1133,6 +1299,7 @@ impl Parser {
             Kind::Eof => "end of file".into(),
             Kind::Function => "`func`".into(),
             Kind::Lambda => "`lambda`".into(),
+            Kind::With => "`with`".into(),
             other => format!("`{other:?}`"),
         }
     }
@@ -1250,8 +1417,13 @@ impl Parser {
                     let mut names = vec![];
                     if !self.take(Kind::RBracket) {
                         loop {
+                            let spread = self.take(Kind::Ellipsis);
                             match self.advance() {
-                                Kind::Ident(name) => names.push(name),
+                                Kind::Ident(name) => names.push(if spread {
+                                    PatternItem::Rest(name)
+                                } else {
+                                    PatternItem::Name(name)
+                                }),
                                 _ => return Err("expected variable name in list pattern".into()),
                             }
                             if self.take(Kind::Comma) {
@@ -1290,10 +1462,10 @@ impl Parser {
                         _ => return Err("expected variable name".into()),
                     };
                     if self.take(Kind::Comma) {
-                        let mut names = vec![first];
+                        let mut names: Vec<PatternItem> = vec![PatternItem::Name(first)];
                         loop {
                             match self.advance() {
-                                Kind::Ident(name) => names.push(name),
+                                Kind::Ident(name) => names.push(PatternItem::Name(name)),
                                 _ => return Err("expected variable name in list pattern".into()),
                             }
                             if !self.take(Kind::Comma) {
@@ -1314,6 +1486,45 @@ impl Parser {
                     LetTarget::Var(first)
                 };
                 self.expect(Kind::Assign)?;
+                // `let Dog = class { ... }` / `let Child = class extends Parent { ... }`
+                if self.take(Kind::Class) {
+                    if let LetTarget::Var(binding) = &target {
+                        let name = match self.current().kind.clone() {
+                            Kind::Ident(explicit) => {
+                                self.advance();
+                                explicit
+                            }
+                            _ => binding.clone(),
+                        };
+                        let parent = if self.take(Kind::Extends) || self.take(Kind::Lt) {
+                            let mut parent_name = match self.advance() {
+                                Kind::Ident(parent_name) => parent_name,
+                                _ => return Err("expected parent class name".into()),
+                            };
+                            while self.take(Kind::Dot) {
+                                let part = match self.advance() {
+                                    Kind::Ident(part) => part,
+                                    _ => {
+                                        return Err(
+                                            "expected parent class member after '.'".into()
+                                        )
+                                    }
+                                };
+                                parent_name = format!("{parent_name}.{part}");
+                            }
+                            Some(parent_name)
+                        } else {
+                            None
+                        };
+                        self.class_depth += 1;
+                        let body = self.block()?;
+                        self.class_depth -= 1;
+                        return Ok(mk(StmtKind::Class(name, parent, body)));
+                    }
+                    return Err(
+                        "anonymous classes must be assigned to a variable name".into()
+                    );
+                }
                 Ok(mk(StmtKind::Let(target, self.expr()?, is_const)))
             }
             Kind::Print => {
@@ -1379,13 +1590,20 @@ impl Parser {
             }
             Kind::For => {
                 self.advance();
-                let name = match self.advance() {
-                    Kind::Ident(s) => s,
-                    _ => return Err("expected loop variable".into()),
-                };
+                let mut names = vec![];
+                loop {
+                    let name = match self.advance() {
+                        Kind::Ident(s) => s,
+                        _ => return Err("expected loop variable".into()),
+                    };
+                    names.push(name);
+                    if !self.take(Kind::Comma) {
+                        break;
+                    }
+                }
                 self.expect(Kind::In)?;
                 let items = self.expr()?;
-                Ok(mk(StmtKind::For(name, items, self.block()?)))
+                Ok(mk(StmtKind::For(names, items, self.block()?)))
             }
             Kind::Break => {
                 self.advance();
@@ -1404,6 +1622,7 @@ impl Parser {
                 self.expect(Kind::LParen)?;
                 let mut params = vec![];
                 if !self.take(Kind::RParen) {
+                    let mut closed = false;
                     loop {
                         let pname = match self.advance() {
                             Kind::Ident(name) => name,
@@ -1423,8 +1642,14 @@ impl Parser {
                         if !self.take(Kind::Comma) {
                             break;
                         }
+                        if self.take(Kind::RParen) {
+                            closed = true;
+                            break;
+                        }
                     }
-                    self.expect(Kind::RParen)?;
+                    if !closed {
+                        self.expect(Kind::RParen)?;
+                    }
                 }
                 let saved_depth = self.class_depth;
                 self.class_depth = 0;
@@ -1442,6 +1667,7 @@ impl Parser {
                 self.expect(Kind::LParen)?;
                 let mut params = vec![];
                 if !self.take(Kind::RParen) {
+                    let mut closed = false;
                     loop {
                         match self.advance() {
                             Kind::Ident(name) => params.push(name),
@@ -1455,8 +1681,14 @@ impl Parser {
                         if !self.take(Kind::Comma) {
                             break;
                         }
+                        if self.take(Kind::RParen) {
+                            closed = true;
+                            break;
+                        }
                     }
-                    self.expect(Kind::RParen)?;
+                    if !closed {
+                        self.expect(Kind::RParen)?;
+                    }
                 }
                 Ok(mk(StmtKind::Native(name, params)))
             }
@@ -1688,6 +1920,24 @@ impl Parser {
                         Expr::Member(object, member) if matches!(op, Kind::Assign) => {
                             Ok(mk(StmtKind::SetMember(*object, member, value)))
                         }
+                        Expr::Index(object, index) => {
+                            let bin_op = match &op {
+                                Kind::PlusAssign => Kind::Plus,
+                                Kind::MinusAssign => Kind::Minus,
+                                Kind::StarAssign => Kind::Star,
+                                Kind::SlashAssign => Kind::Slash,
+                                Kind::PercentAssign => Kind::Percent,
+                                Kind::AmpAssign => Kind::Amp,
+                                Kind::PipeAssign => Kind::Pipe,
+                                Kind::CaretAssign => Kind::Caret,
+                                Kind::LShiftAssign => Kind::LShift,
+                                Kind::RShiftAssign => Kind::RShift,
+                                _ => return Err("invalid compound assignment target".into()),
+                            };
+                            let read = Expr::Index(object.clone(), index.clone());
+                            let new_val = Expr::Binary(Box::new(read), bin_op, Box::new(value));
+                            Ok(mk(StmtKind::SetIndex(*object, *index, new_val)))
+                        }
                         Expr::Member(object, member) => {
                             let bin_op = match &op {
                                 Kind::PlusAssign => Kind::Plus,
@@ -1723,6 +1973,21 @@ impl Parser {
                     Ok(mk(StmtKind::Expr(expression)))
                 }
             }
+            Kind::With => {
+                self.advance();
+                let context = self.expr()?;
+                let var = if self.take(Kind::As) {
+                    match self.advance() {
+                        Kind::Ident(name) => Some(name),
+                        _ => return Err("expected variable name after 'as' in 'with'".into()),
+                    }
+                } else {
+                    None
+                };
+                self.expect(Kind::Colon)?;
+                let body = self.block()?;
+                Ok(mk(StmtKind::With(context, var, body)))
+            }
             Kind::Try => {
                 self.advance();
                 let body = self.block()?;
@@ -1732,7 +1997,7 @@ impl Parser {
                     let mut kind = None;
                     let mut var = None;
                     // Optional error type: `catch TypeError as e`, `except errors.ValueError`
-                    if !matches!(self.current().kind, Kind::LBrace | Kind::As) {
+                    if !matches!(self.current().kind, Kind::LBrace | Kind::As | Kind::LParen) {
                         let mut name = match self.advance() {
                             Kind::Ident(name) => name,
                             _ => return Err("expected catch error type".into()),
@@ -1796,6 +2061,110 @@ impl Parser {
             _ => Ok(mk(StmtKind::Expr(self.expr()?))),
         }
     }
+        /// Decide whether the token stream at `self.pos` looks like arrow params:
+        /// `( [Ident (`,` Ident)*] ) =>`. Only committed to when followed by `=>`,
+        /// so `(a + b)` and similar grouping/call forms still parse normally.
+    fn lookahead_is_arrow_params(&self) -> bool {
+        let mut i = self.pos;
+        let tokens = &self.tokens;
+        // The opening `(` has already been consumed by `atom()`.
+        let mut depth = 1usize;
+        loop {
+            let k = &tokens[i].kind;
+            match k {
+                Kind::LParen => {
+                    depth += 1;
+                    i += 1;
+                }
+                Kind::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        // Next non-newline token must be `=>` to be an arrow.
+                        let mut j = i + 1;
+                        loop {
+                            match &tokens[j].kind {
+                                Kind::Newline | Kind::Semi => j += 1,
+                                Kind::FatArrow => return true,
+                                _ => return false,
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+                Kind::Ident(_) => i += 1,
+                Kind::Comma => i += 1,
+                Kind::Assign => i += 1,
+                Kind::String(_) | Kind::Number(_) | Kind::True | Kind::False | Kind::Null => i += 1,
+                Kind::Newline | Kind::Semi | Kind::Eof => return false,
+                _ => return false,
+            }
+        }
+    }
+    /// Parse `(x, y) => body` as a `Lambda`. The leading `(` is the current
+    /// token. Supports simple params (with optional defaults), a single
+    /// expression body, or a `{ ... }` block body.
+    fn parse_arrow_function(&mut self) -> Result<Expr, String> {
+        // The leading `(` was already consumed by `atom()`.
+        let mut params: Vec<(String, Option<Expr>)> = vec![];
+        if !self.take(Kind::RParen) {
+            let mut closed = false;
+            loop {
+                let pname = match self.advance() {
+                    Kind::Ident(name) => name,
+                    _ => return Err(format!(
+                        "{}:{}: expected parameter name in arrow function",
+                        self.previous().line,
+                        self.previous().col
+                    )),
+                };
+                let default = if self.take(Kind::Assign) {
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
+                params.push((pname, default));
+                if !self.take(Kind::Comma) {
+                    break;
+                }
+                if self.take(Kind::RParen) {
+                    closed = true;
+                    break;
+                }
+            }
+            if !closed {
+                self.expect(Kind::RParen)?;
+            }
+        }
+        self.expect(Kind::FatArrow)?;
+        if self.take(Kind::LBrace) {
+            let mut body = self.program()?;
+            self.expect(Kind::RBrace)?;
+            if let Some(last) = body.last() {
+                if let StmtKind::Expr(e) = &last.kind {
+                    let e = e.clone();
+                    let line = last.line;
+                    let col = last.col;
+                    body.pop();
+                    body.push(Stmt {
+                        kind: StmtKind::Return(Some(e)),
+                        line,
+                        col,
+                    });
+                }
+            }
+            Ok(Expr::Lambda(params, body))
+        } else {
+            let body = self.expr()?;
+            Ok(Expr::Lambda(
+                params,
+                vec![Stmt {
+                    kind: StmtKind::Return(Some(body)),
+                    line: self.current().line,
+                    col: self.current().col,
+                }],
+            ))
+        }
+    }
         /// Parse `cond { .. } [elif/else if] { .. } [else] { .. }` as an expression
     /// whose value is the last expression of the chosen branch. The leading
     /// `if` token has already been consumed by `atom()`.
@@ -1826,6 +2195,80 @@ impl Parser {
             vec![]
         };
         Ok(Expr::IfExpr(Box::new(condition), yes, no))
+    }
+
+    /// Parse `match value { pattern: expr, ... }` or `when { cond: expr, ... }`.
+    /// The leading `match`/`when` token has already been consumed by `atom()`.
+    /// Arm separators accept both `:` and `=>`.
+    fn parse_match_expr(&mut self) -> Result<Expr, String> {
+        let is_when = matches!(self.previous().kind, Kind::When);
+        let value = if is_when {
+            None
+        } else {
+            self.separators();
+            Some(Box::new(self.expr()?))
+        };
+        self.separators();
+        self.expect(Kind::LBrace)?;
+        let mut arms = vec![];
+        self.separators();
+        while !matches!(self.current().kind, Kind::RBrace | Kind::Eof) {
+            self.separators();
+            if self.take(Kind::RBrace) {
+                break;
+            }
+            let pattern = self.expr()?;
+            let guard = if self.take(Kind::If) {
+                self.separators();
+                Some(self.expr()?)
+            } else {
+                None
+            };
+            self.separators();
+            if !(self.take(Kind::Colon) || self.take(Kind::FatArrow)) {
+                return Err(format!(
+                    "{}:{}: expected `:` or `=>` after pattern in {}",
+                    self.previous().line,
+                    self.previous().col,
+                    if is_when { "when" } else { "match" }
+                ));
+            }
+            self.separators();
+            let body = if matches!(self.current().kind, Kind::LBrace)
+                && !(matches!(
+                    self.preview(1),
+                    Kind::String(_) | Kind::Ident(_)
+                ) && matches!(self.preview(2), Kind::Colon))
+            {
+                // `{ ... }` block body (dict literal bodies are parsed as expressions).
+                self.advance();
+                let b = self.program()?;
+                self.expect(Kind::RBrace)?;
+                b
+            } else {
+                vec![self.stmt()?]
+            };
+            arms.push(MatchArm {
+                pattern,
+                guard,
+                body,
+            });
+            self.separators();
+            if !self.take(Kind::Comma) {
+                // Allow newline-separated arms (already consumed by separators).
+                if !matches!(self.current().kind, Kind::RBrace | Kind::Eof) {
+                    return Err(format!(
+                        "{}:{}: expected `,` or `}}` after {} arm",
+                        self.current().line,
+                        self.current().col,
+                        if is_when { "when" } else { "match" }
+                    ));
+                }
+            }
+            self.separators();
+        }
+        self.expect(Kind::RBrace)?;
+        Ok(Expr::Match(value, arms))
     }
 
     fn if_tail(&mut self) -> Result<Stmt, String> {
@@ -1865,6 +2308,23 @@ impl Parser {
             let no = self.expr()?;
             left = Expr::Ternary(Box::new(left), Box::new(yes), Box::new(no));
         }
+        // Python-style conditional: `then if cond else els`
+        // Python-style conditional: `then if cond else els`. Speculative so an
+        // `if` that is not followed by `else` (e.g. a match-arm guard) is left
+        // for the enclosing parser to consume.
+        if matches!(self.current().kind, Kind::If) {
+            let saved_pos = self.pos;
+            let saved_prev = self.prev;
+            self.advance();
+            let cond = self.or()?;
+            if self.take(Kind::Else) {
+                let els = self.expr()?;
+                left = Expr::Ternary(Box::new(cond), Box::new(left), Box::new(els));
+            } else {
+                self.pos = saved_pos;
+                self.prev = saved_prev;
+            }
+        }
         Ok(left)
     }
     fn nullish(&mut self) -> Result<Expr, String> {
@@ -1901,14 +2361,43 @@ impl Parser {
     }
     fn comparison(&mut self) -> Result<Expr, String> {
         let mut left = self.bit_or()?;
-        while matches!(
+        // `not in`: `x not in xs` → `not (x in xs)`.
+        if self.current().kind == Kind::Not
+            && self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&Kind::In)
+        {
+            self.advance();
+            self.advance();
+            let right = self.bit_or()?;
+            return Ok(Expr::Unary(
+                Kind::Not,
+                Box::new(Expr::Binary(Box::new(left), Kind::In, Box::new(right))),
+            ));
+        }
+        if matches!(
             self.current().kind,
             Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge | Kind::In
         ) {
-            let op = self.advance();
-            left = Expr::Binary(Box::new(left), op, Box::new(self.bit_or()?));
+            let mut operands = vec![left];
+            let mut ops = Vec::new();
+            while matches!(
+                self.current().kind,
+                Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge | Kind::In
+            ) {
+                ops.push(self.advance());
+                operands.push(self.bit_or()?);
+            }
+            if operands.len() == 2 {
+                Ok(Expr::Binary(
+                    Box::new(operands.remove(0)),
+                    ops.remove(0),
+                    Box::new(operands.remove(0)),
+                ))
+            } else {
+                Ok(Expr::Chain(operands, ops))
+            }
+        } else {
+            Ok(left)
         }
-        Ok(left)
     }
     fn bit_or(&mut self) -> Result<Expr, String> {
         let mut left = self.bit_xor()?;
@@ -1981,14 +2470,35 @@ impl Parser {
         let mut left = self.atom()?;
         loop {
             if self.take(Kind::LBracket) {
-                let index = self.expr()?;
-                if self.take(Kind::Comma) {
-                    let end = self.expr()?;
-                    self.expect(Kind::RBracket)?;
-                    left = Expr::Slice(Box::new(left), Box::new(index), Box::new(end));
+                // Slice forms: `s[a:b]`, `s[a:]`, `s[:b]`, `s[:]`, or `a, b` (comma-separated bounds).
+                if self.take(Kind::Colon) {
+                    let end = if self.take(Kind::RBracket) {
+                        None
+                    } else {
+                        let e = self.expr()?;
+                        self.expect(Kind::RBracket)?;
+                        Some(Box::new(e))
+                    };
+                    left = Expr::Slice(Box::new(left), None, end);
                 } else {
-                    self.expect(Kind::RBracket)?;
-                    left = Expr::Index(Box::new(left), Box::new(index));
+                    let index = self.expr()?;
+                    if self.take(Kind::Colon) {
+                        let end = if self.take(Kind::RBracket) {
+                            None
+                        } else {
+                            let e = self.expr()?;
+                            self.expect(Kind::RBracket)?;
+                            Some(Box::new(e))
+                        };
+                        left = Expr::Slice(Box::new(left), Some(Box::new(index)), end);
+                    } else if self.take(Kind::Comma) {
+                        let end = self.expr()?;
+                        self.expect(Kind::RBracket)?;
+                        left = Expr::Slice(Box::new(left), Some(Box::new(index)), Some(Box::new(end)));
+                    } else {
+                        self.expect(Kind::RBracket)?;
+                        left = Expr::Index(Box::new(left), Box::new(index));
+                    }
                 }
             } else if self.take(Kind::Dot) {
                 let name = match self.advance() {
@@ -2024,13 +2534,17 @@ impl Parser {
                 let mut args = vec![];
                 if !self.take(Kind::RParen) {
                     args.push(self.arg()?);
+                    let mut closed = false;
                     while self.take(Kind::Comma) {
                         if self.take(Kind::RParen) {
+                            closed = true;
                             break;
                         }
                         args.push(self.arg()?);
                     }
-                    self.expect(Kind::RParen)?;
+                    if !closed {
+                        self.expect(Kind::RParen)?;
+                    }
                 }
                 left = Expr::Call(Box::new(left), args);
             } else {
@@ -2040,6 +2554,9 @@ impl Parser {
         Ok(left)
     }
     fn arg(&mut self) -> Result<Expr, String> {
+        if self.take(Kind::Ellipsis) {
+            return Ok(Expr::Spread(Box::new(self.expr()?)));
+        }
         if matches!(self.current().kind, Kind::Ident(_))
             && self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&Kind::Assign)
         {
@@ -2082,6 +2599,7 @@ impl Parser {
             Kind::Null => Ok(Expr::Value(Value::Null)),
             Kind::Ident(s) => Ok(Expr::Var(s)),
             Kind::If => self.parse_if_expr(),
+            Kind::Match | Kind::When => self.parse_match_expr(),
             Kind::Function | Kind::Lambda => {
                 let mut params = vec![];
                 if self.take(Kind::LParen) {
@@ -2192,6 +2710,31 @@ impl Parser {
                 Ok(Expr::New(class_name, args))
             }
             Kind::Super => {
+                if matches!(self.preview(0), Kind::Dot) {
+                    // super.methodName(...) — call a parent method.
+                    self.advance(); // consume '.'
+                    let name = match self.advance() {
+                        Kind::Ident(name) => name,
+                        other => {
+                            return Err(format!(
+                                "{}:{}: expected method name after super., found {}",
+                                self.current().line,
+                                self.current().col,
+                                Self::kind_text(&other)
+                            ))
+                        }
+                    };
+                    self.expect(Kind::LParen)?;
+                    let mut sargs = vec![];
+                    if !self.take(Kind::RParen) {
+                        sargs.push(self.expr()?);
+                        while self.take(Kind::Comma) {
+                            sargs.push(self.expr()?);
+                        }
+                        self.expect(Kind::RParen)?;
+                    }
+                    return Ok(Expr::SuperMethod(name, sargs));
+                }
                 self.expect(Kind::LParen)?;
                 let mut args = vec![];
                 if !self.take(Kind::RParen) {
@@ -2204,23 +2747,57 @@ impl Parser {
                 Ok(Expr::Super(args))
             }
             Kind::LParen => {
+                if self.lookahead_is_arrow_params() {
+                    return self.parse_arrow_function();
+                }
                 let e = self.expr()?;
                 self.expect(Kind::RParen)?;
                 Ok(e)
             }
             Kind::LBracket => {
                 let mut values = vec![];
+                self.separators();
                 if !self.take(Kind::RBracket) {
                     loop {
-                        if self.take(Kind::Ellipsis) {
-                            let spread = self.expr()?;
-                            values.push(Expr::Spread(Box::new(spread)));
+                        self.separators();
+                        let spread = self.take(Kind::Ellipsis);
+                        let elem = if spread {
+                            self.expr()?
                         } else {
-                            values.push(self.expr()?);
+                            self.expr()?
+                        };
+                        // Comprehension: `[out for x in it (for y in it2)* (if c)*]`
+                        if values.is_empty() && self.take(Kind::For) {
+                            let mut clauses = vec![];
+                            loop {
+                                let vname = match self.advance() {
+                                    Kind::Ident(s) => s,
+                                    _ => return Err("expected comprehension variable after 'for'".into()),
+                                };
+                                self.expect(Kind::In)?;
+                                let iterable = self.expr()?;
+                                clauses.push((vname, iterable));
+                                if !self.take(Kind::For) {
+                                    break;
+                                }
+                            }
+                            let mut guards = vec![];
+                            while self.take(Kind::If) {
+                                guards.push(self.expr()?);
+                            }
+                            self.expect(Kind::RBracket)?;
+                            return Ok(Expr::Comprehension(Box::new(elem), clauses, guards));
                         }
+                        values.push(if spread {
+                            Expr::Spread(Box::new(elem))
+                        } else {
+                            elem
+                        });
+                        self.separators();
                         if self.take(Kind::Comma) {
+                            self.separators();
                             if self.take(Kind::RBracket) {
-                                break;
+                                return Ok(Expr::List(values));
                             }
                             continue;
                         }
@@ -2238,6 +2815,12 @@ impl Parser {
                             self.separators();
                             if self.take(Kind::Ellipsis) {
                                 entries.push(DictEntry::Spread(self.expr()?));
+                            } else if self.take(Kind::LBracket) {
+                                let key_expr = self.expr()?;
+                                self.expect(Kind::RBracket)?;
+                                self.expect(Kind::Colon)?;
+                                self.separators();
+                                entries.push(DictEntry::Computed(key_expr, self.expr()?));
                             } else {
                                 let key = match self.advance() {
                                     Kind::String(key) | Kind::Ident(key) => key,
@@ -2250,9 +2833,15 @@ impl Parser {
                                     }
                                 };
                                 self.separators();
-                                self.expect(Kind::Colon)?;
-                                self.separators();
-                                entries.push(DictEntry::Pair(key, self.expr()?));
+                                if self.take(Kind::Colon) {
+                                    self.separators();
+                                    entries.push(DictEntry::Pair(key, self.expr()?));
+                                } else if matches!(self.previous().kind, Kind::Ident(_)) {
+                                    // Shorthand: `{a}` is short for `{a: a}`.
+                                    entries.push(DictEntry::Pair(key.clone(), Expr::Var(key)));
+                                } else {
+                                    return Err("expected ':' after dict key".into());
+                                }
                             }
                             self.separators();
                             if !self.take(Kind::Comma) {
@@ -2312,6 +2901,23 @@ impl Function {
     fn has_defaults(&self) -> bool {
         self.params.iter().any(|(_, d)| d.is_some())
     }
+    /// True when `values` ends with a kwargs dict whose keys all name real
+    /// parameters of this function.
+    fn is_named_call<'a>(&self, values: &'a [Value]) -> Option<&'a ahash::AHashMap<String, Value>> {
+        let Value::Dict(map) = values.last()? else {
+            return None;
+        };
+        let mut param_names = Vec::new();
+        for (n, _) in &self.params {
+            param_names.push(n.as_str());
+        }
+        for key in map.keys() {
+            if !param_names.contains(&key.as_str()) {
+                return None;
+            }
+        }
+        Some(map)
+    }
 }
 
 fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String>, free: &mut std::collections::HashSet<String>) {
@@ -2324,12 +2930,13 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
                 match entry {
                     DictEntry::Pair(k, v) => { collect_free_vars_expr(v, params, free); }
                     DictEntry::Spread(e) => { collect_free_vars_expr(e, params, free); }
+                    DictEntry::Computed(k, v) => { collect_free_vars_expr(k, params, free); collect_free_vars_expr(v, params, free); }
                 }
             }
         }
         Expr::Range(s, e, _) => { collect_free_vars_expr(s, params, free); collect_free_vars_expr(e, params, free); }
         Expr::Index(o, i) => { collect_free_vars_expr(o, params, free); collect_free_vars_expr(i, params, free); }
-        Expr::Slice(o, s, e) => { collect_free_vars_expr(o, params, free); collect_free_vars_expr(s, params, free); collect_free_vars_expr(e, params, free); }
+        Expr::Slice(o, s, e) => { collect_free_vars_expr(o, params, free); if let Some(s) = s { collect_free_vars_expr(s, params, free); } if let Some(e) = e { collect_free_vars_expr(e, params, free); } }
         Expr::Member(o, _) => { collect_free_vars_expr(o, params, free); }
         Expr::SafeMember(o, _) => { collect_free_vars_expr(o, params, free); }
         Expr::Call(callee, args) => { collect_free_vars_expr(callee, params, free); for a in args { collect_free_vars_expr(a, params, free); } }
@@ -2338,14 +2945,35 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
         Expr::Named(n, e) => { collect_free_vars_expr(e, params, free); }
         Expr::Spread(e) => { collect_free_vars_expr(e, params, free); }
         Expr::Super(args) => { for a in args { collect_free_vars_expr(a, params, free); } }
+        Expr::SuperMethod(_, args) => { for a in args { collect_free_vars_expr(a, params, free); } }
         Expr::New(_, args) => { for a in args { collect_free_vars_expr(a, params, free); } }
         Expr::Ternary(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_expr(y, params, free); collect_free_vars_expr(n, params, free); }
         Expr::IfExpr(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_stmts(y, params, free); collect_free_vars_stmts(n, params, free); }
+        Expr::Match(v, arms) => {
+            if let Some(v) = v { collect_free_vars_expr(v, params, free); }
+            for arm in arms {
+                collect_free_vars_expr(&arm.pattern, params, free);
+                if let Some(g) = &arm.guard { collect_free_vars_expr(g, params, free); }
+                collect_free_vars_stmts(&arm.body, params, free);
+            }
+        }
         Expr::Increment(e, _) => { collect_free_vars_expr(e, params, free); }
         Expr::Lambda(lambda_params, lambda_body) => {
             let mut inner = params.clone();
             for p in lambda_params { inner.insert(p.0.clone()); }
             collect_free_vars_stmts(lambda_body, &inner, free);
+        }
+        Expr::Chain(operands, _) => {
+            for o in operands { collect_free_vars_expr(o, params, free); }
+        }
+        Expr::Comprehension(out, clauses, guards) => {
+            collect_free_vars_expr(out, params, free);
+            let mut inner = params.clone();
+            for (var, iterable) in clauses {
+                collect_free_vars_expr(iterable, params, free);
+                inner.insert(var.clone());
+            }
+            for g in guards { collect_free_vars_expr(g, &inner, free); }
         }
     }
 }
@@ -2362,7 +2990,8 @@ fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<St
             collect_free_vars_expr(e, params, free);
             match target {
                 LetTarget::Var(n) => { /* n is now in scope, but we don't remove from free since outer scope still applies */ }
-                LetTarget::List(ps) | LetTarget::Dict(ps) => { for p in ps { let _ = p; } }
+                LetTarget::List(ps) => { for p in ps { let _ = p; } }
+                LetTarget::Dict(ps) => { for p in ps { let _ = p; } }
             }
         }
         StmtKind::Assign(n, _, e) => {
@@ -2372,10 +3001,10 @@ fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<St
         StmtKind::Print(exprs, _, _) => { for e in exprs { collect_free_vars_expr(e, params, free); } }
         StmtKind::If(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_stmts(y, params, free); collect_free_vars_stmts(n, params, free); }
         StmtKind::While(c, b) => { collect_free_vars_expr(c, params, free); collect_free_vars_stmts(b, params, free); }
-        StmtKind::For(n, e, b) => {
+        StmtKind::For(names, e, b) => {
             collect_free_vars_expr(e, params, free);
             let mut inner_params = params.clone();
-            inner_params.insert(n.clone());
+            for n in names { inner_params.insert(n.clone()); }
             collect_free_vars_stmts(b, &inner_params, free);
         }
         StmtKind::Function(_, fn_params, fn_body) => {
@@ -2383,16 +3012,22 @@ fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<St
             for p in fn_params { inner_params.insert(p.0.clone()); }
             collect_free_vars_stmts(fn_body, &inner_params, free);
         }
-        StmtKind::Try(t_body, catches, finally_body) => {
-            collect_free_vars_stmts(t_body, params, free);
-            for catch in catches {
-                let mut catch_params = params.clone();
-                if let Some(cv) = &catch.var { catch_params.insert(cv.clone()); }
-                collect_free_vars_stmts(&catch.body, &catch_params, free);
-            }
-            if let Some(fb) = finally_body { collect_free_vars_stmts(fb, params, free); }
-        }
-        StmtKind::Throw(e) => { collect_free_vars_expr(e, params, free); }
+         StmtKind::Try(t_body, catches, finally_body) => {
+             collect_free_vars_stmts(t_body, params, free);
+             for catch in catches {
+                 let mut catch_params = params.clone();
+                 if let Some(cv) = &catch.var { catch_params.insert(cv.clone()); }
+                 collect_free_vars_stmts(&catch.body, &catch_params, free);
+             }
+             if let Some(fb) = finally_body { collect_free_vars_stmts(fb, params, free); }
+         }
+         StmtKind::With(context, var, body) => {
+             collect_free_vars_expr(context, params, free);
+             let mut inner_params = params.clone();
+             if let Some(n) = var { inner_params.insert(n.clone()); }
+             collect_free_vars_stmts(body, &inner_params, free);
+         }
+         StmtKind::Throw(e) => { collect_free_vars_expr(e, params, free); }
         StmtKind::Return(Some(e)) => { collect_free_vars_expr(e, params, free); }
         StmtKind::Return(None) => {}
         StmtKind::Class(_, parent, body) => {
@@ -2467,6 +3102,11 @@ pub struct Vm {
     /// Start index into `locals` for each active tree-walk frame. Keeps
     /// `bind_let` from updating bindings that belong to an enclosing call.
     frame_starts: Vec<usize>,
+    /// Thrown values currently crossing a tree-walk function-call boundary.
+    /// `call()` can only surface them as an `Err`; the sentinel message lets a
+    /// statement-level `exec` reconstitute the original value as `Flow::Throw`
+    /// so typed `catch` clauses keep working across calls.
+    thrown_values: Vec<Value>,
 }
 
 /// Fast-path cache for repeated calls to the same compiled function.
@@ -2484,6 +3124,29 @@ enum Flow {
     Return(Value),
     Throw(Value),
 }
+
+fn bind_list_pattern(
+    vars: &mut ahash::AHashMap<String, Value>,
+    patterns: &[PatternItem],
+    items: &[Value],
+) {
+    for (i, item) in patterns.iter().enumerate() {
+        match item {
+            PatternItem::Name(name) => {
+                if let Some(value) = items.get(i) {
+                    vars.insert(name.clone(), value.clone());
+                }
+            }
+            PatternItem::Rest(name) => {
+                vars.insert(
+                    name.clone(),
+                    Value::List(Arc::new(items.get(i..).unwrap_or(&[]).to_vec())),
+                );
+            }
+        }
+    }
+}
+
 impl Vm {
     fn new() -> Vm {
         let mut vm = Vm {
@@ -2512,6 +3175,7 @@ impl Vm {
             call_cache: None,
             capture_frames: Vec::new(),
             frame_starts: Vec::new(),
+            thrown_values: Vec::new(),
         };
         vm.register_builtins();
         vm.register_error_classes();
@@ -2578,7 +3242,7 @@ impl Vm {
 
         // The `errors` module: a dict exposing every error type so that
         // `import errors`, `print errors.ValueError`, etc. work.
-        let mut errors_map = BTreeMap::new();
+        let mut errors_map = ahash::AHashMap::new();
         errors_map.insert("define".into(), Value::NativeFunction("errors_define".into()));
         for leaf in [
             "Error",
@@ -2637,17 +3301,27 @@ impl Vm {
         self.native_functions.insert(
             "range".into(),
             |args| {
-                let (start, end) = match args.as_slice() {
-                    [Value::Number(n)] => (0.0, *n),
-                    [Value::Number(a), Value::Number(b)] => (*a, *b),
-                    _ => return Err("range expects (end) or (start, end)".into()),
+                let (start, end, step) = match args.as_slice() {
+                    [Value::Number(n)] => (0.0, *n, 1.0),
+                    [Value::Number(a), Value::Number(b)] => (*a, *b, 1.0),
+                    [Value::Number(a), Value::Number(b), Value::Number(s)] => (*a, *b, *s),
+                    _ => return Err("range expects (end), (start, end) or (start, end, step)".into()),
                 };
+                if step == 0.0 {
+                    return Err("range step cannot be zero".into());
+                }
                 let mut values = Vec::new();
-                let mut i = start as i64;
-                let stop = end as i64;
-                while i < stop {
-                    values.push(Value::Number(i as f64));
-                    i += 1;
+                let mut i = start;
+                if step > 0.0 {
+                    while i < end {
+                        values.push(Value::Number(i));
+                        i += step;
+                    }
+                } else {
+                    while i > end {
+                        values.push(Value::Number(i));
+                        i += step;
+                    }
                 }
                 Ok(Value::List(Arc::new(values)))
             },
@@ -2685,6 +3359,83 @@ impl Vm {
             "bool".into(),
             |args| Ok(Value::Bool(args.first().map_or(false, |v| v.truthy()))),
         );
+        macro_rules! arith_native {
+            ($name:literal, $f:expr) => {
+                self.native_functions.insert(
+                    $name.into(),
+                    |args| {
+                        let n = match args.first() {
+                            Some(Value::Number(n)) => *n,
+                            Some(other) => return Err(format!("{} expects a number, got {} of type {}", $name, other, other.type_name())),
+                            None => return Err(format!("{} expects one argument", $name)),
+                        };
+                        Ok(Value::Number(($f)(n)))
+                    },
+                );
+            };
+        }
+        arith_native!("abs", |n: f64| n.abs());
+        arith_native!("round", |n: f64| n.round());
+        arith_native!("trunc", |n: f64| n.trunc());
+        arith_native!("floor", |n: f64| n.floor());
+        arith_native!("ceil", |n: f64| n.ceil());
+        arith_native!("sqrt", |n: f64| n.sqrt());
+        arith_native!("sin", |n: f64| n.sin());
+        arith_native!("cos", |n: f64| n.cos());
+        arith_native!("tan", |n: f64| n.tan());
+        arith_native!("log", |n: f64| n.ln());
+        arith_native!("log10", |n: f64| n.log10());
+        arith_native!("exp", |n: f64| n.exp());
+        macro_rules! minmax_native {
+            ($name:literal, $f:expr) => {
+                self.native_functions.insert(
+                    $name.into(),
+                    |args| {
+                        let mut nums: Vec<f64> = Vec::new();
+                        let mut push_num = |n: f64| nums.push(n);
+                        let _ = &mut push_num;
+                        for v in &args {
+                            match v {
+                                Value::Number(n) => nums.push(*n),
+                                Value::List(items) => {
+                                    for it in items.iter() {
+                                        if let Value::Number(n) = it {
+                                            nums.push(*n);
+                                        }
+                                    }
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "{} expects numbers, got {} of type {}",
+                                        $name, other, other.type_name()
+                                    ))
+                                }
+                            }
+                        }
+                        if nums.is_empty() {
+                            return Err(format!("{} expects at least one number", $name));
+                        }
+                        let mut acc = nums[0];
+                        for &n in &nums[1..] {
+                            acc = ($f)(acc, n);
+                        }
+                        Ok(Value::Number(acc))
+                    },
+                );
+            };
+        }
+        minmax_native!("min", f64::min);
+        minmax_native!("max", f64::max);
+        self.native_functions.insert(
+            "hex".into(),
+            |args| {
+                let n = match args.first() {
+                    Some(Value::Number(n)) => *n as i64,
+                    _ => return Err("hex expects one integer argument".into()),
+                };
+                Ok(Value::String(format!("0x{n:x}")))
+            },
+        );
         self.native_functions.insert(
             "type".into(),
             |args| {
@@ -2701,6 +3452,19 @@ impl Vm {
                     _ => return Err("sleep expects a number of seconds".into()),
                 };
                 std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+                Ok(Value::Null)
+            },
+        );
+        // `wait(ms)` — millisecond sleep. Was documented in help text and
+        // used by examples but never implemented (phantom builtin).
+        self.native_functions.insert(
+            "wait".into(),
+            |args| {
+                let ms = match args.first() {
+                    Some(Value::Number(n)) => *n,
+                    _ => return Err("wait expects milliseconds".into()),
+                };
+                std::thread::sleep(std::time::Duration::from_secs_f64((ms.max(0.0)) / 1000.0));
                 Ok(Value::Null)
             },
         );
@@ -2962,18 +3726,22 @@ impl Vm {
         self.native_functions.insert(
             "enumerate".into(),
             |args| {
+                let start_idx = match args.get(1) {
+                    Some(Value::Number(n)) => *n as usize,
+                    _ => 0,
+                };
                 match args.first() {
                     Some(Value::List(l)) => Ok(Value::List(Arc::new(
                         l.iter().enumerate().map(|(i, v)| {
-                            Value::List(Arc::new(vec![Value::Number(i as f64), v.clone()]))
+                            Value::List(Arc::new(vec![Value::Number((i + start_idx) as f64), v.clone()]))
                         }).collect::<Vec<Value>>(),
                     ))),
                     Some(Value::String(s)) => Ok(Value::List(Arc::new(
                         s.chars().enumerate().map(|(i, c)| {
-                            Value::List(Arc::new(vec![Value::Number(i as f64), Value::String(c.to_string())]))
+                            Value::List(Arc::new(vec![Value::Number((i + start_idx) as f64), Value::String(c.to_string())]))
                         }).collect::<Vec<Value>>(),
                     ))),
-                    _ => Err("enumerate expects a list or string".into()),
+                    _ => Err("enumerate expects a list, string or (collection, start)".into()),
                 }
             },
         );
@@ -3023,7 +3791,7 @@ impl Vm {
             |args| {
                 match args.first() {
                     Some(Value::List(pairs)) => {
-                        let mut map = BTreeMap::new();
+                        let mut map = ahash::AHashMap::new();
                         for pair in pairs.iter().cloned() {
                             if let Value::List(kv) = pair {
                                 if kv.len() >= 2 {
@@ -3036,7 +3804,7 @@ impl Vm {
                         Ok(Value::Dict(Arc::new(map)))
                     }
                     Some(Value::Dict(d)) => Ok(Value::Dict(d.clone())),
-                    _ => Ok(Value::Dict(Arc::new(BTreeMap::new()))),
+                    _ => Ok(Value::Dict(Arc::new(ahash::AHashMap::new()))),
                 }
             },
         );
@@ -3128,6 +3896,9 @@ impl Vm {
         // ftp module (pure-Rust FTP client)
         crate::ftp::init_ftp_module(self);
 
+        // wa module (WhatsApp bridge over Node/Baileys)
+        crate::wa::init_wa_module(self);
+
         // smtp module (pure-Rust SMTP client)
         crate::smtp::init_smtp_module(self);
 
@@ -3195,7 +3966,7 @@ impl Vm {
         crate::binascii::init_binascii_module(self);
 
         // Register all core native functions eagerly
-          const NATIVES: [&str; 403] = [
+          const NATIVES: [&str; 411] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -3433,6 +4204,14 @@ impl Vm {
             "socket_recv_all",
             "socket_scan",
             "socket_set_timeout",
+            "wa_connect",
+            "wa_state",
+            "wa_qr",
+            "wa_pairing_code",
+            "wa_poll",
+            "wa_send_text",
+            "wa_logout",
+            "wa_disconnect",
             "ftp_connect",
             "ftp_login",
             "ftp_pwd",
@@ -3635,10 +4414,10 @@ impl Vm {
                     }
                 }
                 if let Some(i) = found {
-                    return Ok(self.locals[i].1.clone());
+                    return Ok(deref_cells(&self.locals[i].1));
                 }
                 if let Some(v) = self.vars.get(n) {
-                    return Ok(v.clone());
+                    return Ok(deref_cells(v));
                 }
                 if let Some(f) = self.functions.get(n) {
                     return Ok(Value::Function(n.clone()));
@@ -3647,7 +4426,7 @@ impl Vm {
                     return Ok(if let Some(Value::Dict(module_dict)) = vars.get(n) {
                         Value::Dict(module_dict.clone())
                     } else {
-                        Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<BTreeMap<String, Value>>()))
+                        Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<ahash::AHashMap<String, Value>>()))
                     });
                 }
                 if let Some(v) = self.self_field_get(n) {
@@ -3677,11 +4456,27 @@ impl Vm {
                 Ok(Value::List(Arc::new(list)))
             }
             Expr::Dict(entries) => {
-                let mut dict = BTreeMap::new();
+                let mut dict = ahash::AHashMap::new();
                 for entry in entries {
                     match entry {
                         DictEntry::Pair(key, expr) => {
                             dict.insert(key.clone(), self.eval(expr)?);
+                        }
+                        DictEntry::Computed(key_expr, value_expr) => {
+                            let v = self.eval(value_expr)?;
+                            let key = match self.eval(key_expr)? {
+                                Value::String(s) => s,
+                                Value::Number(n) if n.fract() == 0.0 => {
+                                    (n as i64).to_string()
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "dict key must be a string or integer, got {}",
+                                        other.type_name()
+                                    ))
+                                }
+                            };
+                            dict.insert(key, v);
                         }
                         DictEntry::Spread(expr) => match self.eval(expr)? {
                             Value::Dict(map) => {
@@ -3722,30 +4517,47 @@ impl Vm {
                         .get(&key)
                         .cloned()
                         .ok_or_else(|| format!("dictionary has no key: {key}")),
-                    (Value::String(value), Value::Number(index)) if index.fract() == 0.0 => value
-                        .chars()
-                        .nth(index as usize)
-                        .map(|c| Value::String(c.to_string()))
-                        .ok_or_else(|| "string index out of bounds".into()),
+                    (Value::String(value), Value::Number(index)) if index.fract() == 0.0 => {
+                        let chars: Vec<char> = value.chars().collect();
+                        let index = if index < 0.0 {
+                            chars.len() as i64 + index as i64
+                        } else {
+                            index as i64
+                        };
+                        chars
+                            .get(index as usize)
+                            .map(|c| Value::String(c.to_string()))
+                            .ok_or_else(|| "string index out of bounds".into())
+                    }
                     _ => Err("invalid index operation".into()),
                 }
             }
             Expr::Slice(object, start, end) => {
                 let object = self.eval(object)?;
-                let Value::Number(s) = self.eval(start)? else {
-                    return Err("slice start must be a number".into());
+                let s = match start {
+                    Some(start) => {
+                        let Value::Number(s) = self.eval(start)? else {
+                            return Err("slice start must be a number".into());
+                        };
+                        s as i64
+                    }
+                    None => i64::MIN,
                 };
-                let Value::Number(e) = self.eval(end)? else {
-                    return Err("slice end must be a number".into());
+                let e = match end {
+                    Some(end) => {
+                        let Value::Number(e) = self.eval(end)? else {
+                            return Err("slice end must be a number".into());
+                        };
+                        e as i64
+                    }
+                    None => i64::MAX,
                 };
-                let s = s as i64;
-                let e = e as i64;
                 match object {
                     Value::String(value) => {
                         let chars: Vec<char> = value.chars().collect();
                         let len = chars.len() as i64;
-                        let a = if s < 0 { len + s } else { s };
-                        let b = if e < 0 { len + e } else { e };
+                        let a = if s == i64::MIN { 0 } else if s < 0 { len + s } else { s };
+                        let b = if e == i64::MAX { len } else if e < 0 { len + e } else { e };
                         let a = a.max(0).min(len) as usize;
                         let b = b.max(0).min(len) as usize;
                         Ok(Value::String(
@@ -3754,8 +4566,8 @@ impl Vm {
                     }
                     Value::List(values) => {
                         let len = values.len() as i64;
-                        let a = if s < 0 { len + s } else { s };
-                        let b = if e < 0 { len + e } else { e };
+                        let a = if s == i64::MIN { 0 } else if s < 0 { len + s } else { s };
+                        let b = if e == i64::MAX { len } else if e < 0 { len + e } else { e };
                         let a = a.max(0).min(len) as usize;
                         let b = b.max(0).min(len) as usize;
                         Ok(Value::List(Arc::new(values.get(a..b).unwrap_or(&[]).to_vec())))
@@ -3789,28 +4601,202 @@ impl Vm {
                     self.eval_block_expr(no)
                 }
             }
+            Expr::Match(value_opt, arms) => {
+                let target = match value_opt {
+                    Some(v) => Some(self.eval(v)?),
+                    None => None,
+                };
+                for arm in arms {
+                    // Determine whether this arm's pattern matches the value.
+                    // For a bare identifier the value is bound; for `when`
+                    // (no scrutinee) the pattern is a condition expression.
+                    let mut binding: Option<String> = None;
+                    let matched = if let Some(t) = &target {
+                        match &arm.pattern {
+                            Expr::Var(name) if name == "_" => true,
+                            Expr::Var(name) => {
+                                binding = Some(name.clone());
+                                true
+                            }
+                            pat => self.eval(pat)? == *t,
+                        }
+                    } else {
+                        match &arm.pattern {
+                            Expr::Var(name) if name == "_" => true,
+                            cond => self.eval(cond)?.truthy(),
+                        }
+                    };
+                    if !matched {
+                        continue;
+                    }
+                    let saved_locals = self.locals.len();
+                    if let (Some(name), Some(t)) = (&binding, &target) {
+                        self.locals.push((name.clone(), t.clone()));
+                    }
+                    let mut guard_ok = true;
+                    if let Some(guard_expr) = &arm.guard {
+                        let g = self.eval(guard_expr);
+                        guard_ok = match g {
+                            Ok(v) => v.truthy(),
+                            Err(e) => {
+                                self.locals.truncate(saved_locals);
+                                return Err(e);
+                            }
+                        };
+                    }
+                    if !guard_ok {
+                        self.locals.truncate(saved_locals);
+                        continue;
+                    }
+                    let body = self.eval_block_expr(&arm.body);
+                    self.locals.truncate(saved_locals);
+                    return body;
+                }
+                Ok(Value::Null)
+            }
+            Expr::Chain(operands, ops) => {
+                if operands.is_empty() {
+                    return Err("empty comparison chain".into());
+                }
+                let mut acc = self.eval(&operands[0])?;
+                for (i, op) in ops.iter().enumerate() {
+                    let right = self.eval(&operands[i + 1])?;
+                    if !self.binary(acc.clone(), op, right.clone())?.truthy() {
+                        return Ok(Value::Bool(false));
+                    }
+                    acc = right;
+                }
+                Ok(Value::Bool(true))
+            }
+            Expr::Comprehension(out, clauses, guards) => {
+                let mut results = Vec::new();
+                self.eval_comprehension(out, clauses, guards, 0, &mut results)?;
+                Ok(Value::List(Arc::new(results)))
+            }
             Expr::Increment(target, amount) => {
-                let Expr::Var(name) = target.as_ref() else {
-                    return Err("increment/decrement requires a variable".into());
-                };
-                let Value::Number(value) = self
-                    .vars
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
-                        candidates.extend(self.functions.keys().map(|s| s.as_str()).filter(|k| !k.contains("::")));
-                        let hint = suggest_name(name, &candidates, 3)
-                            .map(|s| format!("\n  \x1b[1;33m= help:\x1b[0m did you mean `{s}` instead of `{name}`?"))
-                            .unwrap_or_else(|| format!("\n  \x1b[1;33m= note:\x1b[0m  `{name}` has not been defined yet"));
-                        format!("undefined variable: `{name}`{hint}")
-                    })?
-                else {
-                    return Err("increment/decrement requires a number".into());
-                };
-                let result = Value::Number(value + *amount as f64);
-                self.vars.insert(name.clone(), result.clone());
-                Ok(result)
+                match target.as_ref() {
+                    Expr::Var(name) => {
+                        let Value::Number(value) = self
+                            .vars
+                            .get(name)
+                            .cloned()
+                            .ok_or_else(|| {
+                                let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
+                                candidates.extend(self.functions.keys().map(|s| s.as_str()).filter(|k| !k.contains("::")));
+                                let hint = suggest_name(name, &candidates, 3)
+                                    .map(|s| format!("\n  \x1b[1;33m= help:\x1b[0m did you mean `{s}` instead of `{name}`?"))
+                                    .unwrap_or_else(|| format!("\n  \x1b[1;33m= note:\x1b[0m  `{name}` has not been defined yet"));
+                                format!("undefined variable: `{name}`{hint}")
+                            })?
+                        else {
+                            return Err("increment/decrement requires a number".into());
+                        };
+                        let result = Value::Number(value + *amount as f64);
+                        self.vars.insert(name.clone(), result.clone());
+                        Ok(result)
+                    }
+                    Expr::Member(obj, member) => {
+                        let parent_var = match obj.as_ref() {
+                            Expr::Var(n) => Some(n.clone()),
+                            _ => None,
+                        };
+                        let obj_val = self.eval(obj)?;
+                        match obj_val {
+                            Value::Instance(instance) => {
+                                let mut inst = instance.lock().unwrap();
+                                let current = inst.fields.get(member).cloned().ok_or_else(|| {
+                                    format!(
+                                        "increment/decrement requires a number (no member `{member}` yet)"
+                                    )
+                                })?;
+                                let Value::Number(value) = current else {
+                                    return Err("increment/decrement requires a number".into());
+                                };
+                                let result = Value::Number(value + *amount as f64);
+                                inst.fields.insert(member.clone(), result.clone());
+                                Ok(result)
+                            }
+                            Value::Dict(mut map) => {
+                                let current = map.get(member).cloned().ok_or_else(|| {
+                                    format!(
+                                        "increment/decrement requires a number (no member `{member}` yet)"
+                                    )
+                                })?;
+                                let Value::Number(value) = current else {
+                                    return Err("increment/decrement requires a number".into());
+                                };
+                                let result = Value::Number(value + *amount as f64);
+                                if let Some(name) = &parent_var {
+                                    self.release_binding_arc(name, &Value::Dict(map.clone()));
+                                }
+                                Arc::make_mut(&mut map).insert(member.clone(), result.clone());
+                                if let Some(name) = &parent_var {
+                                    self.set_var(name, Value::Dict(map));
+                                }
+                                Ok(result)
+                            }
+                            other => Err(format!(
+                                "cannot increment `{member}`: {} has no such member",
+                                other.type_name()
+                            )),
+                        }
+                    }
+Expr::Index(obj, idx) => {
+                        let parent_var = match obj.as_ref() {
+                            Expr::Var(n) => Some(n.clone()),
+                            _ => None,
+                        };
+                        let obj_val = self.eval(obj)?;
+                        let idx_val = self.eval(idx)?;
+                        let (mut values, index) = match (obj_val, idx_val) {
+                            (Value::List(mut values), Value::Number(index)) if index.fract() == 0.0 => {
+                                let index = if index < 0.0 {
+                                    values.len() as i64 + index as i64
+                                } else {
+                                    index as i64
+                                };
+                                (values, index)
+                            }
+                            (Value::Dict(mut dvalues), Value::String(key)) => {
+                                let current = dvalues.get(&key).cloned().ok_or_else(|| {
+                                    format!("dictionary has no key: {key}")
+                                })?;
+                                let Value::Number(value) = current else {
+                                    return Err("increment/decrement requires a number".into());
+                                };
+                                let result = Value::Number(value + *amount as f64);
+                                if let Some(name) = &parent_var {
+                                    self.release_binding_arc(name, &Value::Dict(dvalues.clone()));
+                                }
+                                Arc::make_mut(&mut dvalues).insert(key, result.clone());
+                                if let Some(name) = &parent_var {
+                                    self.set_var(name, Value::Dict(dvalues));
+                                }
+                                return Ok(result);
+                            }
+                            _ => {
+                                return Err("increment/decrement requires a list index".into())
+                            }
+                        };
+                        let current = values.get(index as usize).cloned().ok_or_else(|| {
+                            "list index out of bounds".to_string()
+                        })?;
+                        let Value::Number(value) = current else {
+                            return Err("increment/decrement requires a number".into());
+                        };
+                        let result = Value::Number(value + *amount as f64);
+                        if let Some(name) = &parent_var {
+                            self.release_binding_arc(name, &Value::List(values.clone()));
+                        }
+                        let slot = Arc::make_mut(&mut values);
+                        slot[index as usize] = result.clone();
+                        if let Some(name) = &parent_var {
+                            self.set_var(name, Value::List(values));
+                        }
+                        Ok(result)
+                    }
+                    _ => Err("increment/decrement requires a variable, member, or index".into()),
+                }
             }
             Expr::Lambda(params, body) => {
                 let fname = format!("__lambda_{}", self.lambda_counter);
@@ -3819,21 +4805,7 @@ impl Vm {
                 let param_set: std::collections::HashSet<String> = names.iter().cloned().collect();
                 let mut free = std::collections::HashSet::new();
                 collect_free_vars_stmts(body, &param_set, &mut free);
-                let captured: HashMap<String, Value> = free.iter()
-                    .filter_map(|k| {
-                        if let Some(v) = self.vars.get(k) {
-                            return Some((k.clone(), v.clone()));
-                        }
-                        // Enclosing function params/captures live on the locals
-                        // stack; grab the nearest binding so closures can close
-                        // over parameters of the defining function.
-                        self.locals
-                            .iter()
-                            .rev()
-                            .find(|(n, _)| n == k)
-                            .map(|(n, v)| (n.clone(), v.clone()))
-                    })
-                    .collect();
+                let captured: HashMap<String, Value> = self.capture_cells(&free);
                 let effective_captured: Vec<(String, Value)> = captured.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 let mut captured_names: Vec<String> = captured
                     .keys()
@@ -3883,51 +4855,52 @@ impl Vm {
                 for arg in args {
                     values.push(self.eval(arg)?);
                 }
-                let total = function.params.len();
-                if values.len() > total || values.len() < function.required_count() {
-                    return Err(format!(
-                        "{parent_name}.{method_name} expects {} arguments, got {}",
-                        total, values.len()
-                    ));
+                self.call_super_method(parent_name, method_name, function, values)
+            }
+            Expr::SuperMethod(name, args) => {
+                let class_name = self.current_class.clone()
+                    .ok_or("super.method() can only be used inside a class method")?;
+                let class = self.classes.get(&class_name)
+                    .ok_or_else(|| format!("unknown class: {class_name}"))?;
+                let parent_name = class.parent.clone()
+                    .ok_or_else(|| format!("{class_name} has no parent class"))?;
+                let parent_class = self.classes.get(&parent_name)
+                    .ok_or_else(|| format!("unknown parent class: {parent_name}"))?;
+                let parent_func = parent_class.methods.get(name)
+                    .ok_or_else(|| format!("{parent_name} has no method: {name}"))?;
+                let function = parent_func.clone();
+                let mut values = Vec::new();
+                for arg in args {
+                    values.push(self.eval(arg)?);
                 }
-                for i in values.len()..total {
-                    values.push(function.default_values[i].clone().unwrap_or(Value::Null));
-                }
-                let instance = self.eval(&Expr::Var("self".into()))?;
-                let saved_len = self.locals.len();
-                self.frame_starts.push(saved_len);
-                self.locals.reserve(1 + function.params.len());
-                self.locals.push(("self".into(), instance));
-                for (param, val) in function.params.iter().zip(values) {
-                    self.locals.push((param.0.clone(), val));
-                }
-                let prev_class = self.current_class.take();
-                let prev_method = self.current_method.take();
-                self.current_class = Some(parent_name.clone());
-                self.current_method = Some(method_name.clone());
-                self.stack.push(format!("{parent_name}.{method_name}"));
-                let flow = self.exec(&function.body);
-                self.stack.pop();
-                self.locals.truncate(saved_len);
-                self.frame_starts.pop();
-                let result = match flow? {
-                    Flow::Return(v) => Ok(v),
-                    Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
-                    Flow::Normal => Ok(Value::Null),
-                    _ => Err("loop control escaped super call".into()),
-                };
-                self.current_class = prev_class;
-                self.current_method = prev_method;
-                result
+                self.call_super_method(parent_name, name.clone(), function, values)
             }
             Expr::Call(callee, arguments) => {
                 let mut values = Vec::new();
-                let mut named = BTreeMap::new();
+                let mut named = ahash::AHashMap::new();
                 for argument in arguments {
                     match argument {
                         Expr::Named(name, value) => {
                             named.insert(name.clone(), self.eval(value)?);
                         }
+                        Expr::Spread(inner) => match self.eval(inner)? {
+                            Value::List(items) => {
+                                for item in items.iter() {
+                                    values.push(item.clone());
+                                }
+                            }
+                            Value::Dict(map) => {
+                                for (k, v) in map.iter() {
+                                    named.insert(k.clone(), v.clone());
+                                }
+                            }
+                            other => {
+                                return Err(format!(
+                                    "can only spread a list or dict into a call, got {}",
+                                    other.type_name()
+                                ));
+                            }
+                        },
                         other => values.push(self.eval(other)?),
                     }
                 }
@@ -3937,13 +4910,13 @@ impl Vm {
                 match callee.as_ref() {
                     Expr::Var(name) => match self.call(name, values)? {
                         Flow::Return(v) => Ok(v),
-                        Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
+                        Flow::Throw(v) => Err(self.escape_throw(v)),
                         _ => unreachable!(),
                     },
                     Expr::Member(object, method) => {
-                        // Mutating list methods on a bare variable (push/pop) update the var in place
+                        // Mutating list methods on a bare variable (push/append/pop) update the var in place
                         if let Expr::Var(name) = &**object {
-                            if matches!(method.as_str(), "push" | "pop") {
+                            if matches!(method.as_str(), "push" | "append" | "pop") {
                                 // The target may be a global or a function-local.
                                 let local_idx = self.locals.iter().rposition(|(n, _)| n == name);
                                 let current = match local_idx {
@@ -3954,9 +4927,16 @@ impl Vm {
                                     None => self.vars.get(name).cloned(),
                                 };
                                 if let Some(Value::List(mut list)) = current {
+                                    // Drop the binding's own Arc reference so
+                                    // make_mut mutates in place instead of
+                                    // cloning the whole list on every push/pop.
+                                    self.release_binding_arc(
+                                        name,
+                                        &Value::List(list.clone()),
+                                    );
                                     let slot = Arc::make_mut(&mut list);
                                     let result = match method.as_str() {
-                                        "push" => {
+                                        "push" | "append" => {
                                             if let Some(item) = values.first() {
                                                 slot.push(item.clone());
                                             }
@@ -3966,7 +4946,14 @@ impl Vm {
                                     };
                                     let updated = Value::List(list);
                                     match local_idx {
-                                        Some(i) => self.locals[i].1 = updated,
+                                        Some(i) => {
+                                            // Preserve shared closure cells.
+                                            if matches!(self.locals[i].1, Value::Cell(_)) {
+                                                cell_set(&self.locals[i].1, updated);
+                                            } else {
+                                                self.locals[i].1 = updated;
+                                            }
+                                        }
                                         None => {
                                             self.vars.insert(name.clone(), updated);
                                         }
@@ -3980,60 +4967,32 @@ impl Vm {
                         Ok(v)
                     }
                     _ => {
-                        return Err(
-                            "only named and instance method calls are supported currently".into(),
-                        )
+                        // General callee: any expression evaluating to a
+                        // callable (function value, native, or lambda).
+                        let target = self.eval(callee)?;
+                        let name = match &target {
+                            Value::Function(n) | Value::NativeFunction(n) => n.clone(),
+                            other => {
+                                return Err(format!(
+                                    "cannot call {other}: value is not a function"
+                                ))
+                            }
+                        };
+                        return match self.call(&name, values)? {
+                            Flow::Return(v) => Ok(v),
+                            Flow::Throw(v) => Err(self.escape_throw(v)),
+                            Flow::Normal => Ok(Value::Null),
+                            _ => Err("loop control escaped call".into()),
+                        };
                     }
                 }
             }
             Expr::New(class_name, args) => {
-                if !self.classes.contains_key(class_name) {
-                    return Err(format!("undefined class: {class_name}\n  \x1b[1;33m= help:\x1b[0m check that the class is defined before using `new`\n  \x1b[1;33m= help:\x1b[0m class definitions must appear before the `new` statement"));
-                }
                 let values = args
                     .iter()
                     .map(|argument| self.eval(argument))
                     .collect::<Result<Vec<_>, _>>()?;
-                let instance = Arc::new(Mutex::new(Instance {
-                    class_name: class_name.clone(),
-                    fields: BTreeMap::new(),
-                }));
-                {
-                    let mut seen = std::collections::HashSet::new();
-                    let mut cur = Some(class_name.clone());
-                    while let Some(cname) = cur {
-                        let (fields, parent): (Vec<(String, Option<Expr>)>, Option<String>) =
-                            match self.classes.get(&cname) {
-                                Some(c) => (c.fields.clone(), c.parent.clone()),
-                                None => break,
-                            };
-                        for (fname, init) in fields {
-                            if seen.insert(fname.clone()) {
-                                let val = match init {
-                                    Some(e) => self.eval(&e)?,
-                                    None => Value::Null,
-                                };
-                                instance.lock().unwrap().fields.insert(fname, val);
-                            }
-                        }
-                        cur = parent;
-                    }
-                }
-                if self.find_method(class_name, "init").is_some() {
-                    let init_values = if values.is_empty() && self.is_error_class(class_name) {
-                        vec![Value::String(String::new())]
-                    } else {
-                        values
-                    };
-                    match self.call_method(instance.clone(), "init", init_values)? {
-                        Flow::Return(_) => {}
-                        Flow::Throw(v) => return Err(format!("unhandled exception in init: {v}")),
-                        _ => unreachable!(),
-                    }
-                } else if !values.is_empty() {
-                    return Err(format!("{class_name} has no constructor"));
-                }
-                Ok(Value::Instance(instance))
+                self.construct_class(class_name, values)
             }
             Expr::Unary(op, x) => {
                 let v = self.eval(x)?;
@@ -4298,13 +5257,6 @@ impl Vm {
                     value.split(&sep).map(|s| Value::String(s.into())).collect::<Vec<Value>>(),
                 )))
             }
-            "replace" => {
-                let (from, to) = match args.as_slice() {
-                    [Value::String(f), Value::String(t)] => (f.clone(), t.clone()),
-                    _ => return Err("replace expects (from, to)".into()),
-                };
-                Ok(Value::String(value.replace(&from, &to)))
-            }
             "indexOf" => {
                 let needle = one()?;
                 match value.find(&needle) {
@@ -4326,18 +5278,153 @@ impl Vm {
             "toList" => Ok(Value::List(Arc::new(
                 value.chars().map(|c| Value::String(c.to_string())).collect::<Vec<Value>>(),
             ))),
+            "lstrip" | "ltrim" => Ok(Value::String(value.trim_start().into())),
+            "rstrip" | "rtrim" => Ok(Value::String(value.trim_end().into())),
+            "capitalize" | "capfirst" => {
+                let mut out = String::new();
+                for (i, c) in value.chars().enumerate() {
+                    if i == 0 {
+                        out.push(c.to_uppercase().to_string().chars().next().unwrap_or(c));
+                    } else {
+                        out.push(c);
+                    }
+                }
+                Ok(Value::String(out))
+            }
+            "title" => {
+                let mut out = String::new();
+                let mut word_start = true;
+                for c in value.chars() {
+                    if c.is_whitespace() {
+                        word_start = true;
+                        out.push(c);
+                    } else if word_start {
+                        out.push(c.to_uppercase().to_string().chars().next().unwrap_or(c));
+                        word_start = false;
+                    } else {
+                        out.push(c.to_lowercase().to_string().chars().next().unwrap_or(c));
+                    }
+                }
+                Ok(Value::String(out))
+            }
+            "center" => {
+                let width = match args.first() {
+                    Some(Value::Number(n)) => *n as usize,
+                    _ => return Err("center expects a width".into()),
+                };
+                let fill = match args.get(1) {
+                    Some(Value::String(s)) if !s.is_empty() => s.chars().next().unwrap(),
+                    _ => ' ',
+                };
+                let len = value.chars().count();
+                if len >= width {
+                    Ok(Value::String(value))
+                } else {
+                    let pads = width - len;
+                    let left = pads / 2;
+                    let right = pads - left;
+                    Ok(Value::String(format!(
+                        "{}{}{}",
+                        std::iter::repeat(fill).take(left).collect::<String>(),
+                        value,
+                        std::iter::repeat(fill).take(right).collect::<String>()
+                    )))
+                }
+            }
+            "zfill" => {
+                let width = match args.first() {
+                    Some(Value::Number(n)) => *n as usize,
+                    _ => return Err("zfill expects a width".into()),
+                };
+                let len = value.chars().count();
+                if len >= width {
+                    Ok(Value::String(value))
+                } else {
+                    let zeros = width - len;
+                    let pad = std::iter::repeat('0').take(zeros).collect::<String>();
+                    if let Some(rest) = value.strip_prefix(['-', '+']) {
+                        let sign = &value[..1];
+                        Ok(Value::String(format!("{sign}{pad}{rest}")))
+                    } else {
+                        Ok(Value::String(format!("{pad}{value}")))
+                    }
+                }
+            }
+            "isdigit" | "is_digit" => Ok(Value::Bool(value.chars().all(|c| c.is_ascii_digit()) && !value.is_empty())),
+            "isalpha" | "is_alpha" => Ok(Value::Bool(value.chars().all(|c| c.is_alphabetic()) && !value.is_empty())),
+            "isalnum" | "is_alnum" => Ok(Value::Bool(value.chars().all(|c| c.is_alphanumeric()) && !value.is_empty())),
+            "islower" | "is_lower" => Ok(Value::Bool(value.chars().any(|c| c.is_lowercase()) && value.chars().all(|c| !c.is_uppercase()))),
+            "isupper" | "is_upper" => Ok(Value::Bool(value.chars().any(|c| c.is_uppercase()) && value.chars().all(|c| !c.is_lowercase()))),
+            "isspace" | "is_space" => Ok(Value::Bool(value.chars().all(|c| c.is_whitespace()) && !value.is_empty())),
+            "isnum" | "is_numeric" | "is_number" => {
+                Ok(Value::Bool(value.trim().parse::<f64>().is_ok() && !value.trim().is_empty()))
+            }
+            "count" => {
+                let needle = one()?;
+                Ok(Value::Number(value.matches(&needle).count() as f64))
+            }
+            "splitlines" => {
+                Ok(Value::List(Arc::new(
+                    value.split_terminator('\n').map(|s| Value::String(s.trim_end_matches('\r').into())).collect::<Vec<Value>>(),
+                )))
+            }
+            "replace" => {
+                let (from, to, n) = match args.as_slice() {
+                    [Value::String(f), Value::String(t)] => (f.clone(), t.clone(), None),
+                    [Value::String(f), Value::String(t), Value::Number(c)] => (f.clone(), t.clone(), Some(*c as usize)),
+                    _ => return Err("replace expects (from, to[, count])".into()),
+                };
+                if from.is_empty() {
+                    return Err("replace: empty `from` string".into());
+                }
+                match n {
+                    Some(max) => {
+                        let mut out = String::new();
+                        let mut remaining = value.as_str();
+                        for _ in 0..max {
+                            match remaining.find(&from) {
+                                Some(i) => {
+                                    out.push_str(&remaining[..i]);
+                                    out.push_str(&to);
+                                    remaining = &remaining[i + from.len()..];
+                                }
+                                None => break,
+                            }
+                        }
+                        out.push_str(remaining);
+                        Ok(Value::String(out))
+                    }
+                    None => Ok(Value::String(value.replace(&from, &to))),
+                }
+            }
             _ => Err(format!("string has no method: {method}")),
         }
     }
     fn list_method(&mut self, list: Vec<Value>, method: &str, args: Vec<Value>) -> Result<Value, String> {
         match method {
-            "push" => {
+            "push" | "append" | "add" => {
                 let item = match args.first() {
                     Some(v) => v.clone(),
                     None => return Err("push expects an argument".into()),
                 };
                 let mut list = list;
                 list.push(item);
+                Ok(Value::List(Arc::new(list)))
+            }
+            "insert" => {
+                let (idx, item) = match args.as_slice() {
+                    [Value::Number(i), v] => (*i as usize, v.clone()),
+                    _ => return Err("insert expects (index, item)".into()),
+                };
+                let mut list = list;
+                let idx = idx.min(list.len());
+                list.insert(idx, item);
+                Ok(Value::List(Arc::new(list)))
+            }
+            "clear" => Ok(Value::List(Arc::new(Vec::new()))),
+            "sorted" => {
+                let mut list = list;
+                list.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
                 Ok(Value::List(Arc::new(list)))
             }
             "pop" => {
@@ -4666,7 +5753,7 @@ impl Vm {
             _ => Err(format!("list has no method: {method}")),
         }
     }
-    fn dict_method(&mut self, dict: BTreeMap<String, Value>, method: &str, args: Vec<Value>) -> Result<Value, String> {
+    fn dict_method(&mut self, dict: ahash::AHashMap<String, Value>, method: &str, args: Vec<Value>) -> Result<Value, String> {
         match method {
             "has" | "containsKey" | "has_key" | "contains" => {
                 let key = match args.first() {
@@ -4728,8 +5815,91 @@ impl Vm {
                 Ok(Value::Dict(Arc::new(dict)))
             }
             "length" => Ok(Value::Number(dict.len() as f64)),
+            "put" => {
+                let (key, value) = match args.as_slice() {
+                    [Value::String(k), v] => (k.clone(), v.clone()),
+                    _ => return Err("put expects (key, value)".into()),
+                };
+                let mut dict = dict;
+                dict.insert(key, value);
+                Ok(Value::Dict(Arc::new(dict)))
+            }
+            "clear" => Ok(Value::Dict(Arc::new(ahash::AHashMap::new()))),
+            "count" => Ok(Value::Number(dict.len() as f64)),
+            "invert" => {
+                let mut out: ahash::AHashMap<String, Value> = ahash::AHashMap::new();
+                for (k, v) in dict {
+                    out.insert(v.to_string(), Value::String(k));
+                }
+                Ok(Value::Dict(Arc::new(out)))
+            }
+            "pick" => {
+                let keys: Vec<String> = args.iter().filter_map(|a| match a {
+                    Value::String(k) => Some(k.clone()),
+                    _ => None,
+                }).collect();
+                let mut out: ahash::AHashMap<String, Value> = ahash::AHashMap::new();
+                for k in keys {
+                    if let Some(v) = dict.get(&k) {
+                        out.insert(k, v.clone());
+                    }
+                }
+                Ok(Value::Dict(Arc::new(out)))
+            }
+            "omit" => {
+                let keys: Vec<String> = args.iter().filter_map(|a| match a {
+                    Value::String(k) => Some(k.clone()),
+                    _ => None,
+                }).collect();
+                let mut out: ahash::AHashMap<String, Value> = ahash::AHashMap::new();
+                for (k, v) in dict {
+                    if !keys.contains(&k) {
+                        out.insert(k, v);
+                    }
+                }
+                Ok(Value::Dict(Arc::new(out)))
+            }
             _ => Err(format!("dictionary has no method: {method}")),
         }
+    }
+    fn call_super_method(&mut self, parent_name: String, method_name: String, function: Function, mut values: Vec<Value>) -> Result<Value, String> {
+        let total = function.params.len();
+        if values.len() > total || values.len() < function.required_count() {
+            return Err(format!(
+                "{parent_name}.{method_name} expects {} arguments, got {}",
+                total,
+                values.len()
+            ));
+        }
+        for i in values.len()..total {
+            values.push(function.default_values[i].clone().unwrap_or(Value::Null));
+        }
+        let instance = self.eval(&Expr::Var("self".into()))?;
+        let saved_len = self.locals.len();
+        self.frame_starts.push(saved_len);
+        self.locals.reserve(1 + function.params.len());
+        self.locals.push(("self".into(), instance));
+        for (param, val) in function.params.iter().zip(values) {
+            self.locals.push((param.0.clone(), val));
+        }
+        let prev_class = self.current_class.take();
+        let prev_method = self.current_method.take();
+        self.current_class = Some(parent_name.clone());
+        self.current_method = Some(method_name.clone());
+        self.stack.push(format!("{parent_name}.{method_name}"));
+        let flow = self.exec(&function.body);
+        self.stack.pop();
+        self.locals.truncate(saved_len);
+        self.frame_starts.pop();
+        let result = match flow? {
+            Flow::Return(v) => Ok(v),
+            Flow::Throw(v) => Err(self.escape_throw(v)),
+            Flow::Normal => Ok(Value::Null),
+            _ => Err("loop control escaped super call".into()),
+        };
+        self.current_class = prev_class;
+        self.current_method = prev_method;
+        result
     }
     #[inline(always)]
     fn binary(&self, a: Value, op: &Kind, b: Value) -> Result<Value, String> {
@@ -4780,6 +5950,16 @@ impl Vm {
                     Arc::make_mut(&mut x).extend(y.iter().cloned());
                     Ok(Value::List(x))
                 }
+                // Fast path: both strings — avoid Display/format overhead
+                (Value::String(x), Value::String(y)) => {
+                    let mut out = String::with_capacity(x.len() + y.len());
+                    out.push_str(&x);
+                    out.push_str(&y);
+                    Ok(Value::String(out))
+                }
+                // Fast path: string + anything
+                (Value::String(x), y) => Ok(Value::String(format!("{x}{y}"))),
+                (x, Value::String(y)) => Ok(Value::String(format!("{x}{y}"))),
                 (x, y) => Ok(Value::String(format!("{x}{y}"))),
             },
             Kind::Star => match (a, b) {
@@ -4891,20 +6071,32 @@ impl Vm {
             // vars under its REAL name (`import string as st`
             // must find vars["string"], not vars["st"]).
             if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned() {
+                // Resolve the .zen companion file (if any) BEFORE merging.
+                // A user-space file (relative to the current directory)
+                // overrides the builtin's entries so scripts can extend or
+                // stub native modules; PM/std sources only fill gaps.
+                let resolved = self.resolve_module(&module).ok();
+                let user_space = resolved
+                    .as_ref()
+                    .map(|p| !std::path::Path::new(p).is_absolute())
+                    .unwrap_or(false);
                 let mut map: HashMap<String, Value> = HashMap::new();
-                for (k, v) in Arc::unwrap_or_clone(existing) {
-                    map.insert(k, v);
-                }
-                // Also try to load the .zen file and merge exports
-                if let Ok(path) = self.resolve_module(&module) {
-                    if let Ok(module_vars) = self.run_module(&path, &name) {
+                if let Some(path) = &resolved {
+                    if let Ok(module_vars) = self.run_module(path, &name) {
                         for (k, v) in module_vars {
-                            map.entry(k).or_insert(v);
+                            map.insert(k, v);
                         }
                     }
                 }
+                for (k, v) in Arc::unwrap_or_clone(existing) {
+                    if user_space {
+                        map.entry(k).or_insert(v);
+                    } else {
+                        map.insert(k, v);
+                    }
+                }
                 self.imported_modules.insert(name.clone(), map.clone());
-                let btree: BTreeMap<String, Value> = map.into_iter().collect();
+                let btree: ahash::AHashMap<String, Value> = map.into_iter().collect();
                 self.vars.insert(name, Value::Dict(Arc::new(btree)));
                 continue;
             }
@@ -4951,13 +6143,13 @@ impl Vm {
                 // Register nested dicts so chained member access
                 // `pkg.sub.mod.func` resolves through vars.
                 let parts: Vec<&str> = module.split('.').collect();
-                let leaf: BTreeMap<String, Value> =
+                let leaf: ahash::AHashMap<String, Value> =
                     vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 let mut acc = Value::Dict(Arc::new(leaf));
                 // Nest every segment after the root var name,
                 // left-to-right: pkg.sub.mod -> {sub: {mod: exports}}.
                 for p in parts.iter().skip(1).rev() {
-                    let mut m = BTreeMap::new();
+                    let mut m = ahash::AHashMap::new();
                     m.insert(p.to_string(), acc);
                     acc = Value::Dict(Arc::new(m));
                 }
@@ -4977,14 +6169,14 @@ impl Vm {
                     }
                 }
                 if let Some(a) = &alias {
-                    let dict: BTreeMap<String, Value> =
+                    let dict: ahash::AHashMap<String, Value> =
                         vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     self.vars.insert(a.clone(), Value::Dict(Arc::new(dict)));
                 }
             } else if alias.is_some() {
                 // Bind the loaded module under the alias so direct
                 // member access (`alias.func()`) works.
-                let dict: BTreeMap<String, Value> =
+                let dict: ahash::AHashMap<String, Value> =
                     vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 self.vars.insert(name.clone(), Value::Dict(Arc::new(dict)));
             }
@@ -5029,7 +6221,7 @@ impl Vm {
                             map.insert(k.clone(), v.clone());
                         }
                         self.imported_modules.insert(sub_name.clone(), map);
-                        Value::Dict(Arc::new(sub_vars.into_iter().collect::<BTreeMap<String, Value>>()))
+                        Value::Dict(Arc::new(sub_vars.into_iter().collect::<ahash::AHashMap<String, Value>>()))
                     }
                     Err(_) => {
                         return Err(format!("item '{item}' not found in module '{module}'\n  \x1b[1;33m= help:\x1b[0m check the module's available exports with `from {module} import *`"));
@@ -5334,6 +6526,81 @@ impl Vm {
 
     /// Evaluate default-value expressions for a function's parameters at
     /// definition time, producing a value parallel to `params`.
+    /// Capture the given free variables as shared cells. Each captured name
+    /// becomes (or already is) a `Value::Cell`, and the cell is written back
+    /// into the source binding so the defining frame, this closure, and any
+    /// sibling closures all observe a single shared value.
+    fn capture_cells(
+        &mut self,
+        free: &std::collections::HashSet<String>,
+    ) -> HashMap<String, Value> {
+        let mut captured: HashMap<String, Value> = HashMap::new();
+        for k in free {
+            // Function-registry names outrank globals (see the bytecode
+            // DefineFunction handler): a `func k` visible here must win over
+            // an unrelated same-named native module dict seeded into vars.
+            if !self.locals.iter().any(|(n, _)| n == k)
+                && self.functions.contains_key(k.as_str())
+            {
+                captured.insert(k.clone(), Value::Function(k.clone()));
+                continue;
+            }
+            let from_global = self.vars.contains_key(k);
+            let current = if from_global {
+                self.vars.get(k).cloned()
+            } else {
+                self.locals
+                    .iter()
+                    .rev()
+                    .find(|(n, _)| n == k)
+                    .map(|(_, v)| v.clone())
+            };
+            let Some(v) = current else { continue };
+            let cell = match &v {
+                Value::Cell(_) => v,
+                _ => Value::Cell(Arc::new(Mutex::new(v))),
+            };
+            if from_global {
+                self.vars.insert(k.clone(), cell.clone());
+            } else if let Some(idx) = self.locals.iter().rposition(|(n, _)| n == k) {
+                self.locals[idx].1 = cell.clone();
+            }
+            captured.insert(k.clone(), cell);
+        }
+        captured
+    }
+
+    /// Temporarily clear a named binding that holds the same container Arc as
+    /// `cur`, dropping its reference so a following `Arc::make_mut` can mutate
+    /// in place instead of cloning (COW thrash made `d[k] = v` loops O(n^2)).
+    /// Returns true when a reference was released; the caller must restore the
+    /// binding afterwards (set_var). Cells are left untouched.
+    fn release_binding_arc(&mut self, name: &str, cur: &Value) -> bool {
+        let same_arc = |a: &Value| -> bool {
+            match (a, cur) {
+                (Value::Dict(x), Value::Dict(y)) => Arc::ptr_eq(x, y),
+                (Value::List(x), Value::List(y)) => Arc::ptr_eq(x, y),
+                _ => false,
+            }
+        };
+        if let Some((_, v)) = self.locals.iter_mut().rev().find(|(n, _)| n == name) {
+            if !matches!(v, Value::Cell(_) | Value::Function(_) | Value::NativeFunction(_))
+                && same_arc(v)
+            {
+                *v = Value::Null;
+                return true;
+            }
+            return false;
+        }
+        if let Some(v) = self.vars.get_mut(name) {
+            if !matches!(v, Value::Cell(_)) && same_arc(v) {
+                *v = Value::Null;
+                return true;
+            }
+        }
+        false
+    }
+
     fn eval_default_values(
         &mut self,
         params: &[(String, Option<Expr>)],
@@ -5364,13 +6631,9 @@ impl Vm {
                         StmtKind::Let(LetTarget::Var(n), _, _) => {
                             self.vars.insert(n.clone(), v.clone());
                         }
-                        StmtKind::Let(LetTarget::List(names), _, _) => {
+                        StmtKind::Let(LetTarget::List(patterns), _, _) => {
                             if let Value::List(items) = v.clone() {
-                                for (i, name) in names.iter().enumerate() {
-                                    if let Some(item) = items.get(i) {
-                                        self.vars.insert(name.clone(), item.clone());
-                                    }
-                                }
+                                bind_list_pattern(&mut self.vars, patterns, &items);
                             }
                         }
                         StmtKind::Let(LetTarget::Dict(names), _, _) => {
@@ -5391,12 +6654,62 @@ impl Vm {
                         Flow::Normal | Flow::Continue => {}
                         Flow::Return(v) => return Ok(v),
                         Flow::Break => break,
-                        Flow::Throw(v) => return Err(format!("unhandled exception: {v}")),
+                        Flow::Throw(v) => return Err(self.escape_throw(v)),
                     }
                 }
             }
         }
         Ok(result)
+    }
+
+    /// Evaluate a list comprehension recursively: for each clause bind its var
+    /// to each element of the iterable (evaluated once per depth), then run all
+    /// guards before evaluating the output expression. Restores prior bindings
+    /// after iterating so enclosing scopes are unaffected.
+    fn eval_comprehension(
+        &mut self,
+        out: &Expr,
+        clauses: &[(String, Expr)],
+        guards: &[Expr],
+        depth: usize,
+        results: &mut Vec<Value>,
+    ) -> Result<(), String> {
+        if depth == clauses.len() {
+            for guard in guards {
+                if !self.eval(guard)?.truthy() {
+                    return Ok(());
+                }
+            }
+            results.push(self.eval(out)?);
+            return Ok(());
+        }
+        let (var, iterable) = &clauses[depth];
+        let Value::List(items) = self.eval(iterable)? else {
+            return Err("comprehension requires a list".into());
+        };
+        let items = items.clone();
+        let saved_len = self.locals.len();
+        let local_idx = self.locals.iter().rposition(|(n, _)| n == var);
+        let prior_raw = match local_idx {
+            Some(i) => Some(self.locals[i].1.clone()),
+            None => self.vars.get(var).cloned(),
+        };
+        for item in items.iter().cloned() {
+            self.bind_let(var, item);
+            self.eval_comprehension(out, clauses, guards, depth + 1, results)?;
+        }
+        self.locals.truncate(saved_len);
+        match (local_idx, prior_raw) {
+            (Some(i), Some(v)) => self.locals[i].1 = v,
+            (None, Some(v)) => {
+                self.vars.insert(var.clone(), v);
+            }
+            (None, None) => {
+                self.vars.remove(var.as_str());
+            }
+            (Some(_), None) => {}
+        }
+        Ok(())
     }
 
     fn call(&mut self, name: &str, values: Vec<Value>) -> Result<Flow, String> {
@@ -5427,21 +6740,106 @@ impl Vm {
         if name == "help" {
             return Ok(Flow::Return(self.help(values.first())?));
         }
+        // Global higher-order list combinators (mirror the list methods).
+        if name == "map" || name == "filter" || name == "reduce" {
+            let list = match values.first() {
+                Some(Value::List(items)) => items.as_slice(),
+                _ => return Err(format!("{name} expects (list, function)")),
+            };
+            let f = match values.get(1) {
+                Some(v) => v.clone(),
+                None => return Err(format!("{name} expects (list, function)")),
+            };
+            let result = match name {
+                "map" => {
+                    let mut out = Vec::with_capacity(list.len());
+                    for item in list {
+                        out.push(self.apply_func(&f, vec![item.clone()])?);
+                    }
+                    Value::List(Arc::new(out))
+                }
+                "filter" => {
+                    let mut out = Vec::with_capacity(list.len());
+                    for item in list {
+                        if self.apply_func(&f, vec![item.clone()])?.truthy() {
+                            out.push(item.clone());
+                        }
+                    }
+                    Value::List(Arc::new(out))
+                }
+                _ => {
+                    let init = values.get(2).cloned().unwrap_or(Value::Null);
+                    let mut acc = init;
+                    let mut first = values.get(2).is_none();
+                    for item in list {
+                        if first {
+                            acc = item.clone();
+                            first = false;
+                            continue;
+                        }
+                        acc = self.apply_func(&f, vec![acc, item.clone()])?;
+                    }
+                    if first {
+                        acc = match list.first() {
+                            Some(v) => v.clone(),
+                            None => Value::Null,
+                        };
+                    }
+                    acc
+                }
+            };
+            return Ok(Flow::Return(result));
+        }
+        if name == "zip" {
+            let mut lists: Vec<Vec<Value>> = Vec::new();
+            for v in &values {
+                match v {
+                    Value::List(items) => lists.push(items.iter().cloned().collect()),
+                    _ => return Err(format!("zip expects lists, got {v} of type {}", v.type_name())),
+                }
+            }
+            let shortest = lists.iter().fold(usize::MAX, |acc, l| acc.min(l.len()));
+            let mut out = Vec::with_capacity(shortest);
+            for i in 0..shortest {
+                let row: Vec<Value> = lists.iter().map(|l| l[i].clone()).collect();
+                out.push(Value::List(Arc::new(row)));
+            }
+            return Ok(Flow::Return(Value::List(Arc::new(out))));
+        }
         if let Some(&native_fn) = self.native_functions.get(name) {
             return Ok(Flow::Return(native_fn(values)?));
         }
 
         // Check registered functions directly (hot path for user-defined functions)
         if let Some(function) = self.functions.get(name) {
+            // Support named arguments: `f(a = 1, b = 2)` binds by parameter name.
+            let mut values = if let Some(named) = function.is_named_call(&values) {
+                let positional = &values[..values.len() - 1];
+                let mut rebuilt = Vec::with_capacity(function.params.len());
+                for (i, (pname, _)) in function.params.iter().enumerate() {
+                    if i < positional.len() {
+                        if let Some(v) = named.get(pname) {
+                            return Err(format!(
+                                "{name}: parameter `{pname}` was provided both positionally and by name"
+                            ));
+                        }
+                        rebuilt.push(positional[i].clone());
+                    } else if let Some(v) = named.get(pname) {
+                        rebuilt.push(v.clone());
+                    } else {
+                        rebuilt.push(
+                            function.default_values[i]
+                                .clone()
+                                .unwrap_or(Value::Null),
+                        );
+                    }
+                }
+                rebuilt
+            } else {
+                values
+            };
             let argc = values.len();
             let required = function.required_count();
-            if argc > function.params.len() || argc < required {
-                return Err(format!(
-                    "{name} expects {} arguments, got {}",
-                    function.params.len(),
-                    argc
-                ));
-            }
             let bind_args = |function: &Function, values: &[Value]| -> Vec<Value> {
                 let mut bound = values.to_vec();
                 for i in bound.len()..function.params.len() {
@@ -5453,6 +6851,13 @@ impl Vm {
                 }
                 bound
             };
+            if argc > function.params.len() || argc < required {
+                return Err(format!(
+                    "{name} expects {} arguments, got {}",
+                    function.params.len(),
+                    argc
+                ));
+            }
             // Bytecode fast path: run the compiled body if available.
             if let Some(bc) = &function.bytecode {
                 let bc = Arc::clone(bc);
@@ -5516,16 +6921,24 @@ impl Vm {
             });
         }
 
-        // Fall back to variable-based function lookup (for function pointers stored in vars)
-        if let Some(val) = self.vars.get(name) {
+        // Fall back to variable-based function lookup (for function pointers
+        // stored in vars or bound as locals/parameters of the current frame).
+        if let Some(val) = self.get_var(name) {
             match val {
                 Value::NativeFunction(native_name) => {
-                    if let Some(&native_fn) = self.native_functions.get(native_name) {
+                    if let Some(&native_fn) =
+                        self.native_functions.get(native_name.as_str())
+                    {
                         return Ok(Flow::Return(native_fn(values)?));
                     }
                 }
                 Value::Function(fname) => {
                     let fname = fname.clone();
+                    // A class whose name is stored as its own constructor
+                    // (see StmtKind::Class) is constructed instead of recursing.
+                    if self.classes.contains_key(&fname) {
+                        return Ok(Flow::Return(self.construct_class(&fname, values)?));
+                    }
                     return self.call(&fname, values);
                 }
                 _ => {}
@@ -5620,13 +7033,20 @@ impl Vm {
                 Opcode::Null => stack.push(Value::Null),
                 Opcode::LoadLocal => {
                     let idx = base + inst.arg1 as usize;
-                    let v = locals.get(idx).cloned().unwrap_or(Value::Null);
-                    stack.push(v);
+                    match locals.get(idx) {
+                        // Hot path: plain slot, single clone.
+                        Some(v) => stack.push(deref_cell(v)),
+                        None => stack.push(Value::Null),
+                    }
                 }
                 Opcode::StoreLocal => {
                     if let Some(v) = stack.pop() {
                         let idx = base + inst.arg1 as usize;
                         if let Some(slot) = locals.get_mut(idx) {
+                            // Shared closure cell: write through it.
+                            if matches!(slot, Value::Cell(_)) && cell_set(slot, v.clone()) {
+                                continue;
+                            }
                             *slot = v.clone();
                         }
                         // Propagate captured variable mutations to enclosing scope
@@ -5650,14 +7070,14 @@ impl Vm {
                         return Err("bad constant in LoadGlobal".into());
                     };
                     if let Some(v) = self.vars.get(name.as_str()) {
-                        stack.push(v.clone());
+                        stack.push(deref_cells(v));
                     } else if let Some(_f) = self.functions.get(name.as_str()) {
                         stack.push(Value::Function(name.clone()));
                     } else if let Some(vars) = self.imported_modules.get(name.as_str()) {
                         let val = if let Some(Value::Dict(module_dict)) = vars.get(name.as_str()) {
                             Value::Dict(module_dict.clone())
                         } else {
-                            Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<BTreeMap<String, Value>>()))
+                            Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<ahash::AHashMap<String, Value>>()))
                         };
                         stack.push(val);
                     } else {
@@ -5669,7 +7089,14 @@ impl Vm {
                         return Err("bad constant in StoreGlobal".into());
                     };
                     let v = stack.pop().unwrap_or(Value::Null);
-                    self.vars.insert(name.clone(), v);
+                    match self.vars.get(name.as_str()) {
+                        Some(g @ Value::Cell(_)) => {
+                            cell_set(g, v);
+                        }
+                        _ => {
+                            self.vars.insert(name.clone(), v);
+                        }
+                    }
                 }
                 Opcode::CheckLockedAssign => {
                     let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
@@ -5717,7 +7144,8 @@ impl Vm {
                         ));
                     }
                     let rhs = stack.pop().unwrap_or(Value::Null);
-                    let current = self.vars.get(name.as_str()).cloned().unwrap_or(Value::Null);
+                    let raw = self.vars.get(name.as_str()).cloned().unwrap_or(Value::Null);
+                    let current = deref_cells(&raw);
                     let v = match (inst.opcode, current, rhs) {
                         (Opcode::AddGlobal, Value::Number(x), Value::Number(y)) => {
                             Value::Number(x + y)
@@ -5746,7 +7174,14 @@ impl Vm {
                             self.binary(current, k, rhs)?
                         }
                     };
-                    self.vars.insert(name.clone(), v);
+                    match self.vars.get(name.as_str()) {
+                        Some(g @ Value::Cell(_)) => {
+                            cell_set(g, v);
+                        }
+                        _ => {
+                            self.vars.insert(name.clone(), v);
+                        }
+                    }
                 }
                 Opcode::AddLocal
                 | Opcode::SubLocal
@@ -5755,7 +7190,7 @@ impl Vm {
                 | Opcode::ModLocal => {
                     let slot = base + inst.arg1 as usize;
                     let rhs = stack.pop().unwrap_or(Value::Null);
-                    let current = locals.get(slot).cloned().unwrap_or(Value::Null);
+                    let current = locals.get(slot).map(deref_cell).unwrap_or(Value::Null);
                     let v = match (inst.opcode, current, rhs) {
                         (Opcode::AddLocal, Value::Number(x), Value::Number(y)) => {
                             Value::Number(x + y)
@@ -5784,27 +7219,22 @@ impl Vm {
                             self.binary(current, k, rhs)?
                         }
                     };
-                    if let Some(slot_v) = locals.get_mut(slot) {
-                        *slot_v = v.clone();
-                    }
-                    // Propagate captured variable mutations to enclosing scope
-                    if slot >= cur.param_count as usize
-                        && slot < cur.param_count as usize + cur.captured_names.len()
-                    {
-                        let captured_idx = slot - cur.param_count as usize;
-                        if let Some(cname) = cur.captured_names.get(captured_idx) {
-                            self.vars.insert(cname.clone(), v.clone());
-                            if let Some(f) = self.functions.get_mut(&cur.name) {
-                                f.captured.insert(cname.clone(), v.clone());
-                            }
-                            // Invalidate call cache so next call uses updated captures
-                            self.call_cache = None;
+                    match locals.get_mut(slot) {
+                        Some(slot_v @ Value::Cell(_)) => {
+                            cell_set(slot_v, v.clone());
                         }
+                        Some(slot_v) => {
+                            *slot_v = v.clone();
+                        }
+                        None => return Err("bad slot in compound local assign".into()),
                     }
                 }
                 Opcode::Add => {
                     let b = stack.pop().unwrap_or(Value::Null);
                     let a = stack.pop().unwrap_or(Value::Null);
+                    if std::env::var("ZCELLDBG").is_ok() {
+                        eprintln!("[celldbg] Add a={} b={}", a, b);
+                    }
                     let v = match (a, b) {
                         (Value::Number(x), Value::Number(y)) => Value::Number(x + y),
                         (a, b) => self.binary(a, &Kind::Plus, b)?,
@@ -5928,7 +7358,7 @@ impl Vm {
                         }
                         (Some(a), Some(b)) => {
                             let k = if inst.opcode == Opcode::JmpLtLocal { Kind::Lt } else { Kind::Le };
-                            match self.binary(a.clone(), &k, b.clone())? {
+                            match self.binary(deref_cells(a), &k, deref_cells(b))? {
                                 Value::Bool(t) => !t,
                                 other => !other.truthy(),
                             }
@@ -5982,7 +7412,16 @@ impl Vm {
                     };
                     let imm = if inst.opcode == Opcode::AddLocalImm { imm } else { -imm };
                     match locals.get_mut(idx) {
+                        // Hot path: plain numeric slot, mutate in place.
                         Some(Value::Number(x)) => *x += imm,
+                        Some(slot @ Value::Cell(_)) => {
+                            let inner = deref_cell(slot);
+                            let nv = match inner {
+                                Value::Number(x) => Value::Number(x + imm),
+                                other => self.binary(other, &Kind::Plus, Value::Number(imm))?,
+                            };
+                            cell_set(slot, nv);
+                        }
                         Some(slot_val) => {
                             let old = std::mem::replace(slot_val, Value::Null);
                             let nv = self.binary(old, &Kind::Plus, Value::Number(imm))?;
@@ -6000,7 +7439,8 @@ impl Vm {
                     };
                     let owned;
                     let gv = if let Some(v) = self.vars.get(name.as_str()) {
-                        v
+                        owned = deref_cells(v);
+                        &owned
                     } else if self.functions.contains_key(name.as_str()) {
                         owned = Value::Function(name.clone());
                         &owned
@@ -6043,11 +7483,23 @@ impl Vm {
                         _ => return Err("bad constant in Add/SubGlobalImm".into()),
                     };
                     let imm = if inst.opcode == Opcode::AddGlobalImm { imm } else { -imm };
-                    match self.vars.get_mut(name.as_str()) {
-                        Some(Value::Number(x)) => *x += imm,
+                    let raw = self.vars.get(name.as_str()).cloned();
+                    match raw {
+                        Some(cell @ Value::Cell(_)) => {
+                            let cur_val = deref_cells(&cell);
+                            let nv = match cur_val {
+                                Value::Number(x) => Value::Number(x + imm),
+                                other => {
+                                    self.binary(other, &Kind::Plus, Value::Number(imm))?
+                                }
+                            };
+                            cell_set(&cell, nv);
+                        }
+                        Some(Value::Number(x)) => {
+                            self.vars.insert(name.clone(), Value::Number(x + imm));
+                        }
                         Some(slot_val) => {
-                            let old = std::mem::replace(slot_val, Value::Null);
-                            let nv = self.binary(old, &Kind::Plus, Value::Number(imm))?;
+                            let nv = self.binary(slot_val, &Kind::Plus, Value::Number(imm))?;
                             self.vars.insert(name.clone(), nv);
                         }
                         None => return Err(format!("undefined variable: `{name}`")),
@@ -6116,6 +7568,24 @@ impl Vm {
                         }
                         stack.truncate(start);
                         stack.push(native_fn(vals)?);
+                        // `errors.define()` registers classes lazily; drain so a
+                        // following `new ValidationError`/`throw new ...` works
+                        // in the bytecode VM too.
+                        self.drain_pending_error_classes();
+                        continue;
+                    }
+                    // 2b. Higher-order list combinators (bypass bytecode compile).
+                    if name == "map" || name == "filter" || name == "reduce" || name == "zip" {
+                        let mut vals = Vec::with_capacity(argc);
+                        for i in 0..argc {
+                            vals.push(stack[start + i].clone());
+                        }
+                        stack.truncate(start);
+                        let flow = self.call(&name.clone(), vals)?;
+                        match flow {
+                            Flow::Return(v) => stack.push(v),
+                            _ => stack.push(Value::Null),
+                        }
                         continue;
                     }
                     // 3. Registered user functions.
@@ -6210,7 +7680,75 @@ impl Vm {
                             _ => {}
                         }
                     }
+                    // Fall back to a callable VALUE stored under this name
+                    // (global, local, or parameter of the current frame).
+                    if let Some(val) = self.get_var(name.as_str()) {
+                        match val {
+                            Value::NativeFunction(n) => {
+                                if let Some(&native_fn) = self.native_functions.get(n.as_str()) {
+                                    let mut vals = Vec::with_capacity(argc);
+                                    for i in 0..argc {
+                                        vals.push(stack[start + i].clone());
+                                    }
+                                    stack.truncate(start);
+                                    stack.push(native_fn(vals)?);
+                                    continue;
+                                }
+                            }
+                            Value::Function(fname) => {
+                                let mut vals = Vec::with_capacity(argc);
+                                for i in 0..argc {
+                                    vals.push(stack[start + i].clone());
+                                }
+                                stack.truncate(start);
+                                let flow = self.call(&fname, vals)?;
+                                match flow {
+                                    Flow::Return(v) => stack.push(v),
+                                    Flow::Throw(v) => return Ok(Flow::Throw(v)),
+                                    _ => stack.push(Value::Null),
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
                     return Err(format!("undefined function: {name}"));
+                }
+                Opcode::CallValue => {
+                    let argc = inst.arg1 as usize;
+                    let start = stack.len().checked_sub(argc).unwrap_or(0);
+                    if start == 0 {
+                        return Err("call: missing callee".into());
+                    }
+                    let callee = stack[start - 1].clone();
+                    let mut vals = Vec::with_capacity(argc);
+                    for i in 0..argc {
+                        vals.push(stack[start + i].clone());
+                    }
+                    stack.truncate(start.saturating_sub(1));
+                    match callee {
+                        Value::NativeFunction(n) => {
+                            match self.native_functions.get(n.as_str()) {
+                                Some(&native_fn) => {
+                                    stack.push(native_fn(vals)?);
+                                }
+                                None => return Err(format!("undefined function: {n}")),
+                            }
+                        }
+                        Value::Function(fname) => {
+                            let flow = self.call(&fname, vals)?;
+                            match flow {
+                                Flow::Return(v) => stack.push(v),
+                                Flow::Throw(v) => return Ok(Flow::Throw(v)),
+                                _ => stack.push(Value::Null),
+                            }
+                        }
+                        other => {
+                            return Err(format!(
+                                "cannot call {other}: value is not a function"
+                            ))
+                        }
+                    }
                 }
                 Opcode::Return => {
                     let v = stack.pop().unwrap_or(Value::Null);
@@ -6268,7 +7806,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                 }
                 Opcode::BuildDict => {
                     let count = inst.arg1 as usize;
-                    let mut dict = BTreeMap::new();
+                    let mut dict = ahash::AHashMap::new();
                     for _ in 0..count {
                         let val = stack.pop().unwrap_or(Value::Null);
                         let key = stack.pop().unwrap_or(Value::Null);
@@ -6297,11 +7835,18 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                             .get(&key)
                             .cloned()
                             .ok_or_else(|| format!("dictionary has no key: {key}")),
-                        (Value::String(value), Value::Number(index)) if index.fract() == 0.0 => value
-                            .chars()
-                            .nth(index as usize)
-                            .map(|c| Value::String(c.to_string()))
-                            .ok_or_else(|| "string index out of bounds".into()),
+                        (Value::String(value), Value::Number(index)) if index.fract() == 0.0 => {
+                            let chars: Vec<char> = value.chars().collect();
+                            let index = if index < 0.0 {
+                                chars.len() as i64 + index as i64
+                            } else {
+                                index as i64
+                            };
+                            chars
+                                .get(index as usize)
+                                .map(|c| Value::String(c.to_string()))
+                                .ok_or_else(|| "string index out of bounds".into())
+                        }
                         _ => Err("invalid index operation".into()),
                     }?;
                     stack.push(v);
@@ -6398,8 +7943,49 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                     let name = cf.name.clone();
                     let mut captured_map = HashMap::new();
                     for cn in &cf.captured_names {
-                        if let Some(v) = self.vars.get(cn) {
-                            captured_map.insert(cn.clone(), v.clone());
+                        // Nearest binding first: frame locals (params/captures
+                        // of the enclosing compiled function), then the
+                        // function registry, then globals. The registry must
+                        // outrank globals: named functions live there, while
+                        // `vars` may hold an unrelated native module dict
+                        // sharing the name (e.g. a `func ftp` inside a module
+                        // vs. the seeded `ftp` tool namespace).
+                        let found = if let Some(idx) =
+                            self.locals.iter().rposition(|(n, _)| n == cn)
+                        {
+                            Some(self.locals[idx].1.clone())
+                        } else if self.functions.contains_key(cn.as_str()) {
+                            Some(Value::Function(cn.clone()))
+                        } else {
+                            self.vars.get(cn).cloned()
+                        };
+                        // Registry-sourced function captures stay immutable
+                        // (call-time lookup re-resolves the name); skip cell
+                        // wrapping and never clobber the source binding.
+                        if matches!(found, Some(Value::Function(_)))
+                            && !self.locals.iter().any(|(n, _)| n == cn)
+                        {
+                            if let Some(v @ Value::Function(_)) = found {
+                                captured_map.insert(cn.clone(), v);
+                            }
+                            continue;
+                        }
+                        if let Some(v) = found {
+                            let cell = match &v {
+                                Value::Cell(_) => v,
+                                _ => Value::Cell(Arc::new(Mutex::new(v))),
+                            };
+                            // Write the shared cell back into the source
+                            // binding so all holders observe one value.
+                            if let Some(idx) =
+                                self.locals.iter().rposition(|(n, _)| n == cn)
+                            {
+                                self.locals[idx].1 = cell.clone();
+                            }
+                            if self.vars.contains_key(cn.as_str()) {
+                                self.vars.insert(cn.clone(), cell.clone());
+                            }
+                            captured_map.insert(cn.clone(), cell);
                         }
                     }
                     let effective_captured: Vec<(String, Value)> = captured_map
@@ -6480,6 +8066,54 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
         }
         None
     }
+    /// Construct a new instance of `class_name` with the given constructor
+    /// arguments, running `init` if present. Used by both `new` and direct
+    /// class calls (`A(9)`).
+    fn construct_class(&mut self, class_name: &str, values: Vec<Value>) -> Result<Value, String> {
+        if !self.classes.contains_key(class_name) {
+            return Err(format!("undefined class: {class_name}\n  \x1b[1;33m= help:\x1b[0m check that the class is defined before using `new`\n  \x1b[1;33m= help:\x1b[0m class definitions must appear before the `new` statement"));
+        }
+        let instance = Arc::new(Mutex::new(Instance {
+            class_name: class_name.to_string(),
+            fields: ahash::AHashMap::new(),
+        }));
+        {
+            let mut seen = std::collections::HashSet::new();
+            let mut cur = Some(class_name.to_string());
+            while let Some(cname) = cur {
+                let (fields, parent): (Vec<(String, Option<Expr>)>, Option<String>) =
+                    match self.classes.get(&cname) {
+                        Some(c) => (c.fields.clone(), c.parent.clone()),
+                        None => break,
+                    };
+                for (fname, init) in fields {
+                    if seen.insert(fname.clone()) {
+                        let val = match init {
+                            Some(e) => self.eval(&e)?,
+                            None => Value::Null,
+                        };
+                        instance.lock().unwrap().fields.insert(fname, val);
+                    }
+                }
+                cur = parent;
+            }
+        }
+        if self.find_method(class_name, "init").is_some() {
+            let init_values = if values.is_empty() && self.is_error_class(class_name) {
+                vec![Value::String(String::new())]
+            } else {
+                values
+            };
+            match self.call_method(instance.clone(), "init", init_values)? {
+                Flow::Return(_) => {}
+                Flow::Throw(v) => return Err(self.escape_throw(v)),
+                _ => unreachable!(),
+            }
+        } else if !values.is_empty() {
+            return Err(format!("{class_name} has no constructor"));
+        }
+        Ok(Value::Instance(instance))
+    }
     /// Look up `name` as an instance field of the current method's `self`.
     /// Returns Some(field value) when the name is a declared field (and not a
     /// method name) of the instance's class or one of its ancestors.
@@ -6488,29 +8122,50 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
     fn get_var(&mut self, name: &str) -> Option<Value> {
         let resolve = if name == "this" { "self" } else { name };
         if let Some((_, v)) = self.locals.iter().rev().find(|(n, _)| n == resolve) {
-            return Some(v.clone());
+            return Some(deref_cells(v));
         }
-        self.vars.get(resolve).cloned()
+        self.vars.get(resolve).map(deref_cells)
+    }
+    /// Mutable reference to the raw value stored for `name` (bypasses
+    /// cell deref). Used by the `+=` fast-path to extend strings in place.
+    fn get_var_mut(&mut self, name: &str) -> Option<&mut Value> {
+        let resolve = if name == "this" { "self" } else { name };
+        if let Some(idx) = self.locals.iter().rposition(|(n, _)| n == resolve) {
+            return Some(&mut self.locals[idx].1);
+        }
+        self.vars.get_mut(resolve)
     }
     /// Locals-first write: update the nearest local binding if one exists,
-    /// otherwise store in the global scope.
+    /// otherwise store in the global scope. If either binding currently holds
+    /// a shared closure cell, the write goes THROUGH the cell so every holder
+    /// of that capture observes the new value.
     fn set_var(&mut self, name: &str, value: Value) {
         let resolve = if name == "this" { "self" } else { name };
-        let mut found_in_locals = false;
         if let Some(idx) = self.locals.iter().rposition(|(n, _)| n == resolve) {
-            self.locals[idx].1 = value.clone();
-            found_in_locals = true;
+            if matches!(self.locals[idx].1, Value::Cell(_))
+                && cell_set(&self.locals[idx].1, value.clone())
+            {
+                return;
+            }
+            self.locals[idx].1 = value;
+            // Propagate plain writes to a same-named global only under the
+            // legacy capture rules (kept for non-cell bindings).
+            let captured_here =
+                self.capture_frames.last().is_some_and(|f| f.contains(resolve));
+            if (captured_here || self.capture_frames.is_empty())
+                && self.vars.contains_key(resolve)
+            {
+                let value = self.locals[idx].1.clone();
+                self.vars.insert(resolve.to_string(), value);
+            }
+            return;
         }
-        // Propagate captured variable mutations back to the enclosing scope.
-        // Only names actually CAPTUREED by this frame propagate; a local that
-        // merely shadows an identically-named global stays isolated so module
-        // function locals cannot clobber caller variables.
-        let captured_here = self.capture_frames.last().is_some_and(|f| f.contains(resolve));
-        if found_in_locals && (captured_here || self.capture_frames.is_empty()) && self.vars.contains_key(resolve) {
-            self.vars.insert(resolve.to_string(), value);
-        } else if !found_in_locals {
-            self.vars.insert(resolve.to_string(), value);
+        if let Some(g) = self.vars.get(resolve).cloned() {
+            if matches!(g, Value::Cell(_)) && cell_set(&g, value.clone()) {
+                return;
+            }
         }
+        self.vars.insert(resolve.to_string(), value);
     }
 
     /// Bind a `let`-declared name. Inside a function body the declaration is
@@ -6845,7 +8500,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             },
             Value::Function(fname) => match self.call(fname, values)? {
                 Flow::Return(v) => Ok(v),
-                Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
+                Flow::Throw(v) => Err(self.escape_throw(v)),
                 _ => unreachable!(),
             },
             _ => Err("expected a function".into()),
@@ -6865,7 +8520,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
         match obj {
             Value::Instance(instance) => match self.call_method(instance, method, values)? {
                 Flow::Return(v) => Ok(v),
-                Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
+                Flow::Throw(v) => Err(self.escape_throw(v)),
                 _ => unreachable!(),
             },
             Value::Dict(dict) => {
@@ -6882,7 +8537,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                 if let Some(Value::Function(fname)) = dict.get(method) {
                     return match self.call(fname, values)? {
                         Flow::Return(v) => Ok(v),
-                        Flow::Throw(v) => Err(format!("unhandled exception: {v}")),
+                        Flow::Throw(v) => Err(self.escape_throw(v)),
                         _ => unreachable!(),
                     };
                 }
@@ -7052,7 +8707,16 @@ let function = self
     fn eval_expr_source(&mut self, source: &str) -> Result<Value, String> {
         let tokens = lex(source)?;
         let expr = Parser::new(tokens).expr()?;
-        self.eval(&expr)
+        match self.eval(&expr) {
+            Err(e) if e == INTERNAL_THROW_SENTINEL => {
+                // No statement list to reconstitute the throw here (REPL
+                // single-expression evaluator); surface it as a readable error.
+                let value = self.thrown_values.pop().unwrap_or(Value::Null);
+                let (ty, msg) = self.error_info(&value);
+                Err(format!("unhandled exception: {ty}: {msg}"))
+            }
+            other => other,
+        }
     }
     fn exec(&mut self, stmts: &[Stmt]) -> Result<Flow, String> {
         let mut prev_flow = Flow::Normal;
@@ -7060,7 +8724,20 @@ let function = self
             if !matches!(prev_flow, Flow::Normal) {
                 return Ok(prev_flow);
             }
-            prev_flow = self.exec_one(stmt)?;
+            match self.exec_one(stmt) {
+                Ok(f) => prev_flow = f,
+                Err(e) if e == INTERNAL_THROW_SENTINEL => {
+                    // A throw crossed a tree-walk call boundary; restore it as
+                    // a real `Flow::Throw` so `try`/`catch` matching and
+                    // top-level reporting keep the typed value.
+                    let value = self.thrown_values.pop().unwrap_or(Value::Null);
+                    return Ok(Flow::Throw(value));
+                }
+                Err(e) => return Err(e),
+            }
+            // `errors.define()` registers classes lazily; drain after each
+            // statement so a following `new X`/`throw new X` sees the class.
+            self.drain_pending_error_classes();
         }
         Ok(prev_flow)
     }
@@ -7189,13 +8866,24 @@ let function = self
                         }
                         LetTarget::List(patterns) => match v {
                             Value::List(items) => {
-                                for (i, name) in patterns.iter().enumerate() {
-                                    if *is_const && self.locked.contains(name) {
+                                for (i, item) in patterns.iter().enumerate() {
+                                    let (name, value) = match item {
+                                        PatternItem::Name(name) => (
+                                            name.clone(),
+                                            items.get(i).cloned().unwrap_or(Value::Null),
+                                        ),
+                                        PatternItem::Rest(name) => (
+                                            name.clone(),
+                                            Value::List(Arc::new(
+                                                items.get(i..).unwrap_or(&[]).to_vec(),
+                                            )),
+                                        ),
+                                    };
+                                    if *is_const && self.locked.contains(&name) {
                                         return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
                                     }
-                                    let item = items.get(i).cloned().unwrap_or(Value::Null);
-                                    self.bind_let(name, item);
-                                    names.push(name.clone());
+                                    self.bind_let(&name, value);
+                                    names.push(name);
                                 }
                             }
                             other => return Err(format!("cannot destructure {other} as a list")),
@@ -7226,6 +8914,9 @@ let function = self
                     Ok(Flow::Normal)
                 }
                 StmtKind::Assign(n, op, e) => {
+                    if self.locked.contains(n) && !self.is_self_field(n) {
+                        return Err(format!("cannot assign to constant: {n}\n  \x1b[1;33m= note:\x1b[0m  `{n}` was declared with `const` and cannot be reassigned\n  \x1b[1;33m= help:\x1b[0m use `let` instead of `const` if you need a mutable variable"));
+                    }
                     if self.is_self_field(n) {
                         let v = if matches!(op, Kind::Assign) {
                             self.eval(e)?
@@ -7264,6 +8955,18 @@ let function = self
                             return Err(format!("cannot assign to constant: {n}\n  \x1b[1;33m= note:\x1b[0m  `{n}` was declared with `const` and cannot be reassigned\n  \x1b[1;33m= help:\x1b[0m use `let` instead of `const` if you need a mutable variable"));
                         }
                         let rhs = self.eval(e)?;
+                        // Fast path: in-place string append for += avoids
+                        // the O(n²) allocation pattern in loops.
+                        if matches!(op, Kind::PlusAssign) {
+                            if let Some(val) = self.get_var_mut(n) {
+                                if let Value::String(s) = val {
+                                    if let Value::String(rhs_s) = &rhs {
+                                        s.push_str(rhs_s);
+                                        return Ok(Flow::Normal);
+                                    }
+                                }
+                            }
+                        }
                         if matches!(op, Kind::NullishAssign) {
                             let current = self
                                 .get_var(n)
@@ -7333,12 +9036,57 @@ let function = self
                     }
                     Ok(Flow::Normal)
                 }
-                StmtKind::For(n, e, body) => {
+                StmtKind::For(names, e, body) => {
                     let Value::List(items) = self.eval(e)? else {
                         return Err("for requires a list".into());
                     };
-                    for item in items.iter().cloned() {
-                        self.bind_let(n, item);
+                    let pairs: Vec<Vec<(String, Value)>> = if names.len() == 1 {
+                        items
+                            .iter()
+                            .map(|item| vec![(names[0].clone(), item.clone())])
+                            .collect()
+                    } else {
+                        let mut out = Vec::new();
+                        for item in items.iter() {
+                            match item {
+                                Value::List(parts) => {
+                                    let mut binds = Vec::new();
+                                    for (i, name) in names.iter().enumerate() {
+                                        binds.push((
+                                            name.clone(),
+                                            parts.get(i).cloned().unwrap_or(Value::Null),
+                                        ));
+                                    }
+                                    out.push(binds);
+                                }
+                                Value::Dict(d) => {
+                                    for (k, v) in d.iter() {
+                                        let mut binds =
+                                            vec![(names[0].clone(), Value::String(k.clone()))];
+                                        for (_, name) in names.iter().enumerate().skip(1) {
+                                            binds.push((name.clone(), v.clone()));
+                                        }
+                                        out.push(binds);
+                                    }
+                                }
+                                _ => {
+                                    let mut binds = Vec::new();
+                                    for (i, name) in names.iter().enumerate() {
+                                        binds.push((
+                                            name.clone(),
+                                            if i == 0 { item.clone() } else { Value::Null },
+                                        ));
+                                    }
+                                    out.push(binds);
+                                }
+                            }
+                        }
+                        out
+                    };
+                    for binds in pairs {
+                        for (name, value) in binds {
+                            self.bind_let(&name, value);
+                        }
                         match self.exec(body)? {
                             Flow::Normal | Flow::Continue => {}
                             Flow::Break => break,
@@ -7355,18 +9103,7 @@ let function = self
                     let param_set: std::collections::HashSet<String> = names.iter().cloned().collect();
                     let mut free = std::collections::HashSet::new();
                     collect_free_vars_stmts(body, &param_set, &mut free);
-                    let captured: HashMap<String, Value> = free.iter()
-                        .filter_map(|k| {
-                            if let Some(v) = self.vars.get(k) {
-                                return Some((k.clone(), v.clone()));
-                            }
-                            self.locals
-                                .iter()
-                                .rev()
-                                .find(|(n, _)| n == k)
-                                .map(|(n, v)| (n.clone(), v.clone()))
-                        })
-                        .collect();
+                    let captured: HashMap<String, Value> = self.capture_cells(&free);
                     let effective_captured: Vec<(String, Value)> = captured.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     let mut captured_names: Vec<String> = captured
                         .keys()
@@ -7402,7 +9139,14 @@ let function = self
                     self.vars.insert(name.clone(), Value::NativeFunction(name.clone()));
                     Ok(Flow::Normal)
                 }
-                StmtKind::Try(body, catches, finally_body) => {
+                 StmtKind::With(context, var, body) => {
+                     let value = self.eval(context)?;
+                     if let Some(name) = var {
+                         self.bind_let(&name, value.clone());
+                     }
+                     self.exec(body)
+                 }
+                 StmtKind::Try(body, catches, finally_body) => {
                     enum Outcome {
                         Flow(Flow),
                         Error(String),
@@ -7545,12 +9289,17 @@ let function = self
                                 .fields
                                 .insert(member.clone(), new_val);
                         }
-                        Value::Dict(dict) => {
-                            let mut dict = dict;
-                            Arc::make_mut(&mut dict).insert(member.clone(), self.eval(value)?);
+                        Value::Dict(mut dict) => {
+                            let new_val = self.eval(value)?;
+                            // Drop the binding's reference so make_mut mutates
+                            // in place when this is the only live handle.
+                            if let Expr::Var(vname) = object {
+                                self.release_binding_arc(vname, &Value::Dict(dict.clone()));
+                            }
+                            Arc::make_mut(&mut dict).insert(member.clone(), new_val);
                             // Only persist if assigned to a named variable
                             if let Expr::Var(name) = object {
-                                self.vars.insert(name.clone(), Value::Dict(dict));
+                                self.set_var(name, Value::Dict(dict));
                             }
                         }
                         _ => return Err("member assignment requires an object".into()),
@@ -7567,9 +9316,16 @@ let function = self
                                 Value::String(s) => s,
                                 _ => return Err("dictionary index must be a string".into()),
                             };
+                            // Drop the binding's reference so make_mut mutates
+                            // in place when this is the only live handle.
+                            if let Expr::Var(vname) = object {
+                                self.release_binding_arc(vname, &Value::Dict(dict.clone()));
+                            }
                             Arc::make_mut(&mut dict).insert(key, new_val);
                             if let Expr::Var(name) = object {
-                                self.vars.insert(name.clone(), Value::Dict(dict));
+                                // Route through set_var so captured cells and
+                                // frame locals are updated, not just globals.
+                                self.set_var(name, Value::Dict(dict));
                             }
                         }
                         Value::List(mut list) => {
@@ -7583,9 +9339,12 @@ let function = self
                             if i < 0 || i as usize >= list.len() {
                                 return Err("list index out of bounds".into());
                             }
+                            if let Expr::Var(vname) = object {
+                                self.release_binding_arc(vname, &Value::List(list.clone()));
+                            }
                             Arc::make_mut(&mut list)[i as usize] = new_val;
                             if let Expr::Var(name) = object {
-                                self.vars.insert(name.clone(), Value::List(list));
+                                self.set_var(name, Value::List(list));
                             }
                         }
                         _ => return Err("index assignment requires a dict or list".into()),
@@ -7693,7 +9452,7 @@ let function = self
             .rsplit_once("\nError: ")
             .map(|(_, m)| m.to_string())
             .unwrap_or_else(|| message.to_string());
-        let mut map = BTreeMap::new();
+        let mut map = ahash::AHashMap::new();
         map.insert("type".into(), Value::String("Error".into()));
         map.insert("message".into(), Value::String(msg));
         map.insert("file".into(), Value::String(self.file.clone()));
@@ -7726,7 +9485,7 @@ let function = self
                     .get("message")
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| class_name.clone());
-                let mut map = BTreeMap::new();
+                let mut map = ahash::AHashMap::new();
                 map.insert(
                     "type".into(),
                     Value::String(class_name.rsplit('.').next().unwrap_or(&class_name).into()),
@@ -7738,7 +9497,7 @@ let function = self
                 Value::Dict(Arc::new(map))
             }
             other => {
-                let mut map = BTreeMap::new();
+                let mut map = ahash::AHashMap::new();
                 map.insert("type".into(), Value::String("Error".into()));
                 map.insert("message".into(), Value::String(other.to_string()));
                 map.insert("file".into(), Value::String(self.file.clone()));
@@ -7802,12 +9561,27 @@ let function = self
             _ => "Error".into(),
         };
         for clause in catches {
-            let matches = match &clause.kind {
+            let mut clause_kind = clause.kind.clone();
+            let mut clause_var = clause.var.clone();
+            // `catch err { }` (bare name, no `as` and not a known error class)
+            // is parsed as a catch type by the parser, but the docs use it to
+            // bind the caught value. If the name is not an actual error class,
+            // reinterpret it as a catch-all binding.
+            if let Some(k) = &clause_kind {
+                if clause_var.is_none()
+                    && !k.contains('.')
+                    && !self.is_known_error_class(k)
+                {
+                    clause_var = Some(k.clone());
+                    clause_kind = None;
+                }
+            }
+            let matches = match &clause_kind {
                 None => true,
                 Some(kind) => self.error_is_a(&err_type, kind),
             };
             if matches {
-                if let Some(var) = &clause.var {
+                if let Some(var) = &clause_var {
                     let bind = match &value {
                         Value::Dict(map) => map
                             .get("message")
@@ -7821,6 +9595,22 @@ let function = self
             }
         }
         Ok(None)
+    }
+    /// Whether `name` refers to a registered error class (bare or qualified).
+    fn is_known_error_class(&self, name: &str) -> bool {
+        if self.classes.contains_key(name) {
+            return true;
+        }
+        self.classes
+            .keys()
+            .any(|k| k.rsplit('.').next() == Some(name))
+    }
+    /// Stash a thrown value so a later `exec` can reconstitute it as
+    /// `Flow::Throw` (preserving typed `catch` matching across call
+    /// boundaries), and return the sentinel error string.
+    fn escape_throw(&mut self, value: Value) -> String {
+        self.thrown_values.push(value);
+        INTERNAL_THROW_SENTINEL.to_string()
     }
     fn error_info(&self, value: &Value) -> (String, String) {
         match value {
@@ -8067,7 +9857,7 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
     };
     // Optional second arg: data (string) or dict options (headers, json, timeout)
     let mut body: Option<String> = None;
-    let mut headers = BTreeMap::new();
+    let mut headers = ahash::AHashMap::new();
     let mut timeout_secs: u64 = 30;
     if let Some(second) = args.get(1) {
         match second {
@@ -8110,7 +9900,7 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
     let body_text = resp
         .text()
         .map_err(|e| format!("http {method} {url}: {e}"))?;
-    let mut header_dict = BTreeMap::new();
+    let mut header_dict = ahash::AHashMap::new();
     for (name, value) in header_map.iter() {
         header_dict.insert(
             name.as_str().to_string(),
@@ -8132,7 +9922,7 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
             cache.retain(|&k, _| k >= cutoff);
         }
     }
-    let mut result = BTreeMap::new();
+    let mut result = ahash::AHashMap::new();
     result.insert("status".into(), Value::Number(status));
     result.insert("ok".into(), Value::Bool(status >= 200.0 && status < 400.0));
     result.insert("headers".into(), Value::Dict(Arc::new(header_dict)));
@@ -8431,7 +10221,7 @@ fn arg_number(args: &[Value], i: usize) -> Result<f64, String> {
     }
 }
 
-fn arg_dict(args: &[Value], i: usize) -> Result<BTreeMap<String, Value>, String> {
+fn arg_dict(args: &[Value], i: usize) -> Result<ahash::AHashMap<String, Value>, String> {
     match args.get(i) {
         Some(Value::Dict(d)) => Ok((**d).clone()),
         _ => Err(format!("argument {} must be a dict", i + 1)),
@@ -8726,7 +10516,7 @@ fn u32_to_ip(v: u32) -> String {
     )
 }
 
-fn layer_bytes(layer: &BTreeMap<String, Value>) -> Result<Vec<u8>, String> {
+fn layer_bytes(layer: &ahash::AHashMap<String, Value>) -> Result<Vec<u8>, String> {
     match layer.get("type") {
         Some(Value::String(t)) if t == "Raw" => match layer.get("data") {
             Some(Value::String(d)) => Ok(d.as_bytes().to_vec()),
@@ -9316,7 +11106,7 @@ fn dns_query_impl(name: &str, rtype: &str) -> Result<Vec<Value>, String> {
             _ => hexlify(rdata),
         };
         pos += rdlen;
-        let mut rec = BTreeMap::new();
+        let mut rec = ahash::AHashMap::new();
         rec.insert("name".into(), Value::String(rname));
         rec.insert("type".into(), Value::String(dns_type_name(rtype).into()));
         rec.insert("ttl".into(), Value::Number(ttl as f64));
@@ -9338,7 +11128,7 @@ fn parse_packet(data: &[u8]) -> Value {
     let dst = u32_to_ip(u32::from_be_bytes([data[16], data[17], data[18], data[19]]));
     let proto = data[9];
     let payload = &data[ihl..];
-    let mut ip_layer = BTreeMap::new();
+    let mut ip_layer = ahash::AHashMap::new();
     ip_layer.insert("type".into(), Value::String("IP".into()));
     ip_layer.insert("src".into(), Value::String(src));
     ip_layer.insert("dst".into(), Value::String(dst));
@@ -9354,7 +11144,7 @@ fn parse_packet(data: &[u8]) -> Value {
                 let ack = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]) as f64;
                 let flags = payload[13];
                 let data_offset = ((payload[12] >> 4) as usize) * 4;
-                let mut tcp_layer = BTreeMap::new();
+                let mut tcp_layer = ahash::AHashMap::new();
                 tcp_layer.insert("type".into(), Value::String("TCP".into()));
                 tcp_layer.insert("sport".into(), Value::Number(sport));
                 tcp_layer.insert("dport".into(), Value::Number(dport));
@@ -9377,7 +11167,7 @@ fn parse_packet(data: &[u8]) -> Value {
             } else {
                 let sport = u16::from_be_bytes([payload[0], payload[1]]) as f64;
                 let dport = u16::from_be_bytes([payload[2], payload[3]]) as f64;
-                let mut udp_layer = BTreeMap::new();
+                let mut udp_layer = ahash::AHashMap::new();
                 udp_layer.insert("type".into(), Value::String("UDP".into()));
                 udp_layer.insert("sport".into(), Value::Number(sport));
                 udp_layer.insert("dport".into(), Value::Number(dport));
@@ -9395,7 +11185,7 @@ fn parse_packet(data: &[u8]) -> Value {
             if payload.is_empty() {
                 Value::Null
             } else {
-                let mut icmp_layer = BTreeMap::new();
+                let mut icmp_layer = ahash::AHashMap::new();
                 icmp_layer.insert("type".into(), Value::String("ICMP".into()));
                 icmp_layer.insert("icmp_type".into(), Value::Number(payload[0] as f64));
                 icmp_layer.insert("icmp_code".into(), Value::Number(payload[1] as f64));
@@ -9411,7 +11201,7 @@ fn parse_packet(data: &[u8]) -> Value {
         _ => {
             ip_layer.insert("proto".into(), Value::Number(proto as f64));
             if !payload.is_empty() {
-                let mut raw = BTreeMap::new();
+                let mut raw = ahash::AHashMap::new();
                 raw.insert("type".into(), Value::String("Raw".into()));
                 raw.insert("data".into(), Value::String(hexlify(payload)));
                 Value::Dict(Arc::new(raw))
@@ -9888,7 +11678,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .map_err(|e| format!("failed to recv_from: {e}"))?;
             let data = buf[..n].to_vec();
             let bytes: Vec<Value> = data.iter().map(|b| Value::Number(*b as f64)).collect();
-            Ok(Value::Dict(Arc::new(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
                 ("data".into(), Value::List(Arc::new(bytes))),
                 ("addr".into(), Value::String(addr.to_string())),
                 ("text".into(), Value::String(String::from_utf8_lossy(&data).into_owned())),
@@ -10646,7 +12436,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .map_err(|e| format!("os.execute failed: {e}"))?;
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let mut result = BTreeMap::new();
+            let mut result = ahash::AHashMap::new();
             result.insert("ok".into(), Value::Bool(output.status.success()));
             result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
             result.insert("stdout".into(), Value::String(stdout));
@@ -10684,7 +12474,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .stdin(process::Stdio::null())
                 .output()
                 .map_err(|e| format!("os.popen failed: {e}"))?;
-            let mut result = BTreeMap::new();
+            let mut result = ahash::AHashMap::new();
             result.insert("ok".into(), Value::Bool(output.status.success()));
             result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
             result.insert("stdout".into(), Value::String(String::from_utf8_lossy(&output.stdout).to_string()));
@@ -11296,13 +13086,13 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::String(s)) => s.clone(),
                 _ => return Err("decimal.Decimal expects a number".into()),
             };
-            Ok(Value::Dict(Arc::new(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
                 ("value".into(), Value::String(v.clone())),
                 ("__repr__".into(), Value::String(format!("Decimal({v})"))),
             ]))))
         },
         "decimal_getcontext" => |_| {
-            Ok(Value::Dict(Arc::new(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
                 ("prec".into(), Value::Number(28.0)),
                 ("rounding".into(), Value::String("ROUND_HALF_EVEN".into())),
             ]))))
@@ -11333,7 +13123,7 @@ fn native_for(name: &str) -> NativeFunc {
             if let Ok(mut joins) = thread_joins().lock() {
                 joins.insert(id.clone(), handle);
             }
-            Ok(Value::Dict(Arc::new(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
                 ("name".into(), Value::String(format!("Thread-{name}"))),
                 ("id".into(), Value::String(id)),
                 ("daemon".into(), Value::Bool(true)),
@@ -11408,7 +13198,7 @@ fn native_for(name: &str) -> NativeFunc {
                     match listener.lock().unwrap().accept() {
                         Ok((stream, addr)) => {
                             stream.set_nonblocking(false).ok();
-                            let mut result = BTreeMap::new();
+                            let mut result = ahash::AHashMap::new();
                             result.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
                             result.insert("addr".into(), Value::String(addr.to_string()));
                             return Ok(Value::Dict(Arc::new(result)));
@@ -11425,11 +13215,19 @@ fn native_for(name: &str) -> NativeFunc {
             }
             let (stream, addr) = listener.lock().unwrap().accept()
                 .map_err(|e| format!("accept error: {e}"))?;
-            let mut result = BTreeMap::new();
+            let mut result = ahash::AHashMap::new();
             result.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             result.insert("addr".into(), Value::String(addr.to_string()));
             Ok(Value::Dict(Arc::new(result)))
         },
+        "wa_connect" => |args| crate::wa::wa_connect(&args),
+        "wa_state" => |args| crate::wa::wa_state(&args),
+        "wa_qr" => |args| crate::wa::wa_qr(&args),
+        "wa_pairing_code" => |args| crate::wa::wa_pairing_code(&args),
+        "wa_poll" => |args| crate::wa::wa_poll(&args),
+        "wa_send_text" => |args| crate::wa::wa_send_text(&args),
+        "wa_logout" => |args| crate::wa::wa_logout(&args),
+        "wa_disconnect" => |args| crate::wa::wa_disconnect(&args),
         "ftp_connect" => |args| {
             let host = arg_string(&args, 0)?;
             let port = match args.get(1) {
@@ -11446,7 +13244,7 @@ fn native_for(name: &str) -> NativeFunc {
             if code != 220 {
                 return Err(format!("ftp: server refused connection ({code}): {reply}"));
             }
-            let mut session = BTreeMap::new();
+            let mut session = ahash::AHashMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             Ok(Value::Dict(Arc::new(session)))
@@ -11662,7 +13460,7 @@ fn native_for(name: &str) -> NativeFunc {
             if code != 250 {
                 return Err(format!("smtp ehlo failed ({code}): {reply}"));
             }
-            let mut session = BTreeMap::new();
+            let mut session = ahash::AHashMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             Ok(Value::Dict(Arc::new(session)))
@@ -11774,7 +13572,7 @@ fn native_for(name: &str) -> NativeFunc {
             if !greeting.starts_with("+OK") {
                 return Err(format!("pop3 login failed: {greeting}"));
             }
-            let mut session = BTreeMap::new();
+            let mut session = ahash::AHashMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             Ok(Value::Dict(Arc::new(session)))
@@ -11790,7 +13588,7 @@ fn native_for(name: &str) -> NativeFunc {
             let parts: Vec<&str> = reply.split_whitespace().collect();
             let count = parts.get(1).and_then(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
             let size = parts.get(2).and_then(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
-            let mut out = BTreeMap::new();
+            let mut out = ahash::AHashMap::new();
             out.insert("count".into(), Value::Number(count));
             out.insert("size".into(), Value::Number(size));
             Ok(Value::Dict(Arc::new(out)))
@@ -11879,7 +13677,7 @@ fn native_for(name: &str) -> NativeFunc {
             let resp = imap_command(&mut stream, &format!("a{tag}"), &format!("LOGIN {user} {pass}"))?;
             let _ = resp;
             tag += 1;
-            let mut session = BTreeMap::new();
+            let mut session = ahash::AHashMap::new();
             let session_id = next_response_id();
             session.insert("__id".into(), Value::Number(session_id as f64));
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
@@ -11952,7 +13750,7 @@ fn native_for(name: &str) -> NativeFunc {
                     body = literal_section.trim_end().to_string();
                 }
             }
-            let mut out = BTreeMap::new();
+            let mut out = ahash::AHashMap::new();
             out.insert("flags".into(), Value::List(Arc::new(flags)));
             out.insert("body".into(), Value::String(body));
             Ok(Value::Dict(Arc::new(out)))
@@ -11999,7 +13797,7 @@ fn native_for(name: &str) -> NativeFunc {
             };
             let stream = TcpStream::connect((host.as_str(), port))
                 .map_err(|e| format!("telnet connect {host}:{port}: {e}"))?;
-            let mut session = BTreeMap::new();
+            let mut session = ahash::AHashMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             Ok(Value::Dict(Arc::new(session)))
@@ -12175,7 +13973,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Number(internet_checksum(data.as_bytes()) as f64))
         },
         "scapy_ip" => |args| {
-            let mut layer = BTreeMap::new();
+            let mut layer = ahash::AHashMap::new();
             layer.insert("type".into(), Value::String("IP".into()));
             if let Some(Value::String(s)) = args.first() {
                 layer.insert("src".into(), Value::String(s.clone()));
@@ -12192,7 +13990,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_tcp" => |args| {
-            let mut layer = BTreeMap::new();
+            let mut layer = ahash::AHashMap::new();
             layer.insert("type".into(), Value::String("TCP".into()));
             if let Some(Value::Number(s)) = args.get(0) {
                 layer.insert("sport".into(), Value::Number(*s));
@@ -12206,7 +14004,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_udp" => |args| {
-            let mut layer = BTreeMap::new();
+            let mut layer = ahash::AHashMap::new();
             layer.insert("type".into(), Value::String("UDP".into()));
             if let Some(Value::Number(s)) = args.get(0) {
                 layer.insert("sport".into(), Value::Number(*s));
@@ -12220,7 +14018,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_icmp" => |args| {
-            let mut layer = BTreeMap::new();
+            let mut layer = ahash::AHashMap::new();
             layer.insert("type".into(), Value::String("ICMP".into()));
             if let Some(Value::Number(t)) = args.get(0) {
                 layer.insert("icmp_type".into(), Value::Number(*t));
@@ -12235,7 +14033,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "scapy_raw" => |args| {
             let data = arg_string(&args, 0)?;
-            let mut layer = BTreeMap::new();
+            let mut layer = ahash::AHashMap::new();
             layer.insert("type".into(), Value::String("Raw".into()));
             layer.insert("data".into(), Value::String(data));
             Ok(Value::Dict(Arc::new(layer)))
@@ -12384,7 +14182,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .and_then(|s| s.split('\'').next())
                 .unwrap_or("")
                 .to_string();
-            let mut result = BTreeMap::new();
+            let mut result = ahash::AHashMap::new();
             result.insert("adapter".into(), Value::String("hci0".into()));
             result.insert("up".into(), Value::Bool(up));
             result.insert("address".into(), Value::String(addr));
@@ -12420,7 +14218,7 @@ fn native_for(name: &str) -> NativeFunc {
                 if let Some(rest) = line.strip_prefix("Device ") {
                     let parts: Vec<&str> = rest.splitn(2, ' ').collect();
                     if parts.len() >= 2 {
-                        let mut d = BTreeMap::new();
+                        let mut d = ahash::AHashMap::new();
                         d.insert("address".into(), Value::String(parts[0].to_string()));
                         d.insert("name".into(), Value::String(parts[1].trim().to_string()));
                         devices.push(Value::Dict(Arc::new(d)));
@@ -12454,7 +14252,7 @@ fn native_for(name: &str) -> NativeFunc {
                     let addr = parts[0].trim();
                     let name = parts[1].trim();
                     if !addr.contains(':') { continue; }
-                    let mut d = BTreeMap::new();
+                    let mut d = ahash::AHashMap::new();
                     d.insert("address".into(), Value::String(addr.to_string()));
                     d.insert("name".into(), Value::String(name.to_string()));
                     devices.push(Value::Dict(Arc::new(d)));
@@ -12532,7 +14330,7 @@ fn native_for(name: &str) -> NativeFunc {
                 let rate = if raw.len() > 8 { raw[8].replace("\\:", ":") } else { String::new() };
                 let signal = if raw.len() > 9 { raw[9].replace("\\:", ":") } else { String::new() };
                 let security = raw[raw.len()-1..].join("").replace("\\:", ":");
-                let mut net = BTreeMap::new();
+                let mut net = ahash::AHashMap::new();
                 net.insert("ssid".into(), Value::String(ssid));
                 net.insert("bssid".into(), Value::String(bssid));
                 net.insert("mode".into(), Value::String(mode));
@@ -12552,7 +14350,7 @@ fn native_for(name: &str) -> NativeFunc {
             let conn = Command::new("nmcli").args(["-t", "-f", "NAME,DEVICE,TYPE", "connection", "show", "--active"]).output()
                 .map_err(|e| format!("nmcli connection show: {e}"))?;
             let conn_out = String::from_utf8_lossy(&conn.stdout);
-            let mut result = BTreeMap::new();
+            let mut result = ahash::AHashMap::new();
             result.insert("wifi_enabled".into(), Value::Bool(enabled));
             result.insert("connected".into(), Value::Bool(false));
             for line in conn_out.lines() {
@@ -12608,7 +14406,7 @@ fn native_for(name: &str) -> NativeFunc {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() < 4 { continue; }
                 if !parts[1].contains("wireless") && parts[1] != "wifi" { continue; }
-                let mut d = BTreeMap::new();
+                let mut d = ahash::AHashMap::new();
                 d.insert("device".into(), Value::String(parts[0].to_string()));
                 d.insert("type".into(), Value::String(parts[1].to_string()));
                 d.insert("state".into(), Value::String(parts[2].to_string()));
@@ -12626,7 +14424,7 @@ fn native_for(name: &str) -> NativeFunc {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() < 4 { continue; }
                 if !parts[2].contains("wireless") && parts[2] != "802-11-wireless" { continue; }
-                let mut d = BTreeMap::new();
+                let mut d = ahash::AHashMap::new();
                 d.insert("name".into(), Value::String(parts[0].to_string()));
                 d.insert("uuid".into(), Value::String(parts[1].to_string()));
                 d.insert("device".into(), Value::String(parts[3].to_string()));
@@ -12952,7 +14750,7 @@ fn native_for(name: &str) -> NativeFunc {
             let output = command
                 .output()
                 .map_err(|e| format!("subprocess.run {cmd}: {e}"))?;
-            let mut result = BTreeMap::new();
+            let mut result = ahash::AHashMap::new();
             result.insert("ok".into(), Value::Bool(output.status.success()));
             result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
             result.insert(
@@ -13060,7 +14858,7 @@ fn native_for(name: &str) -> NativeFunc {
                 "blake2s" => crypto_digest(&data, "blake2s"),
                 _ => return Err(format!("hashlib.new: unknown algorithm {algo}")),
             };
-            Ok(Value::Dict(Arc::new(BTreeMap::from([
+            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
                 ("hexdigest".into(), Value::String(digest)),
                 ("name".into(), Value::String(algo)),
             ]))))
@@ -13137,7 +14935,7 @@ fn native_for(name: &str) -> NativeFunc {
                 let total = stat.f_blocks as f64 * bsize;
                 let free = stat.f_bfree as f64 * bsize;
                 let used = total - stat.f_bfree as f64 * bsize;
-                let mut out = BTreeMap::new();
+                let mut out = ahash::AHashMap::new();
                 out.insert("total".into(), Value::Number(total));
                 out.insert("used".into(), Value::Number(used));
                 out.insert("free".into(), Value::Number(free));
@@ -13345,7 +15143,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "urllib_parse" => |args| {
             let url = arg_string(&args, 0)?;
-            let mut out = BTreeMap::new();
+            let mut out = ahash::AHashMap::new();
             let rest = match url.find("://") {
                 Some(i) => {
                     out.insert("scheme".into(), Value::String(url[..i].to_string()));
@@ -13380,7 +15178,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "urllib_parse_qs" => |args| {
             let query = arg_string(&args, 0)?;
-            let mut out = BTreeMap::new();
+            let mut out = ahash::AHashMap::new();
             for pair in query.split('&') {
                 if pair.is_empty() {
                     continue;
@@ -13403,13 +15201,13 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "collections_counter" => |args| {
             let items = arg_list(&args, 0)?;
-            let mut counts = BTreeMap::new();
+            let mut counts = ahash::AHashMap::new();
             for item in items {
                 let key = item.to_string();
                 let entry = counts.entry(key).or_insert(0.0);
                 *entry += 1.0;
             }
-            let mut out = BTreeMap::new();
+            let mut out = ahash::AHashMap::new();
             for (k, v) in counts {
                 out.insert(k, Value::Number(v));
             }
@@ -13906,7 +15704,9 @@ pub fn list_modules() -> String {
         ("time", "Time functions (now, format, parse, sleep, etc.)"),
         ("os", "OS info and process control (platform, env, execute)"),
         ("base64", "Base64 encode/decode (encode, decode)"),
+        ("base32", "Base32 encode/decode, RFC 4648 (encode, decode)"),
         ("crypto", "Cryptographic hashes (sha256, md5, sha1, etc.)"),
+        ("cryptography", "Fernet-symmetric encryption (generate_key, encrypt, decrypt)"),
         ("datetime", "Date/time objects and formatting"),
         ("uuid", "UUID generation (v1, v3, v4, v5)"),
         ("color", "ANSI color helpers (rgb, hex, 256-color, styled text)"),
@@ -13941,6 +15741,7 @@ pub fn list_modules() -> String {
         ("hydra", "Brute-force password tester (SSH, FTP, HTTP, Telnet, SMTP)"),
         ("browser", "Browser automation via CDP (Chromium only)"),
         ("ssh", "System SSH/SCP wrapper (run, upload, download, available)"),
+        ("wa", "WhatsApp automation (connect, qr, send, sendText, state)"),
         ("scapy", "Packet crafting/sniffing (ip, tcp, udp, build, parse, send, sniff)"),
     ];
     let mut out = String::from("Available modules (all available as globals, no import needed):\n\n");
@@ -14736,6 +16537,7 @@ pub fn help_module(name: &str) -> String {
             "string", "subprocess", "struct", "shutil", "pathlib", "glob",
             "urllib", "collections", "itertools", "tempfile", "binascii",
             "ftp", "smtp", "pop3", "imap", "telnet", "dns", "ssh", "scapy",
+            "base32", "cryptography", "wa",
         ];
         let close = modules.iter()
             .filter(|m| levenshtein(name, m) <= 2)
@@ -15242,13 +17044,15 @@ pub fn help_builtin(name: &str) -> Option<String> {
         // Match/When
         "match" => Some(
             "match value { pattern => expr, ... }  — pattern matching\n\
-             Matches a value against patterns and returns the matching expression.\n\n\
+             Matches a value against patterns and returns the matching expression.\n\
+             Arm separators accept both `=>` and `:`.\n\n\
              Example:\n\
              match x {\n\
                1 => \"one\",\n\
-               2 => \"two\",\n\
+               2: \"two\",\n\
                _ => \"other\"\n\
              }\n\n\
+             Patterns: a bare name binds the matched value; `_` matches anything.\n\
              With guards:\n\
              match x {\n\
                n if n > 0 => \"positive\",\n\
@@ -15260,11 +17064,11 @@ pub fn help_builtin(name: &str) -> Option<String> {
         "when" => Some(
             "when { condition => expr, ... }  — expression-based branching\n\
              Like match, but evaluates conditions (like acond). Returns the value\n\
-             for the first true condition.\n\n\
+             for the first true condition. Arm separators accept both `=>` and `:`.\n\n\
              Example:\n\
              let label = when {\n\
                x > 10 => \"big\",\n\
-               x > 5 => \"medium\",\n\
+               x > 5: \"medium\",\n\
                _ => \"small\"\n\
              }"
                 .into(),
@@ -15931,7 +17735,13 @@ fn lint_block(
             StmtKind::Let(target, _, is_const) => {
                 let names = match target {
                     LetTarget::Var(n) => vec![n.clone()],
-                    LetTarget::List(names) | LetTarget::Dict(names) => names.clone(),
+                    LetTarget::List(patterns) => patterns
+                        .iter()
+                        .map(|p| match p {
+                            PatternItem::Name(n) | PatternItem::Rest(n) => n.clone(),
+                        })
+                        .collect(),
+                    LetTarget::Dict(names) => names.clone(),
                 };
                 for name in names {
                     if *is_const {
@@ -15961,7 +17771,8 @@ fn lint_block(
                 *globals = saved;
                 let _ = name;
             }
-            StmtKind::Try(body, catches, finally) => {
+             StmtKind::With(_, _, body) => lint_block(body, depth + 1, globals, consts, warnings),
+             StmtKind::Try(body, catches, finally) => {
                 lint_block(body, depth + 1, globals, consts, warnings);
                 for clause in catches {
                     lint_block(&clause.body, depth + 1, globals, consts, warnings);
@@ -16021,6 +17832,11 @@ fn find_std_file(name: &str) -> Option<String> {
                 if path.exists() {
                     return Some(path.to_string_lossy().into_owned());
                 }
+                // FHS layout: /usr/bin/zen → look in /usr/share/zen/std/
+                let path = dir.join("share").join("zen").join("std").join(name);
+                if path.exists() {
+                    return Some(path.to_string_lossy().into_owned());
+                }
                 if !dir.pop() {
                     break;
                 }
@@ -16075,6 +17891,7 @@ fn json_encode(v: &Value, pretty: bool) -> String {
         Value::Listener(_) => "\"<listener>\"".into(),
         Value::NativeFunction(name) => format!("\"<native:{name}>\""),
         Value::Function(name) => format!("\"<function:{name}>\""),
+        other => json_encode(&deref_cells(other), pretty),
     }
 }
 
@@ -16122,6 +17939,7 @@ fn json_encode_pretty(v: &Value, indent: usize) -> String {
         Value::Listener(_) => "\"<listener>\"".into(),
         Value::NativeFunction(name) => format!("\"<native:{name}>\""),
         Value::Function(name) => format!("\"<function:{name}>\""),
+        other => json_encode_pretty(&deref_cells(other), indent),
     }
 }
 
@@ -16144,7 +17962,7 @@ fn regex_replace(pattern: &str, text: &str, replacement: &str) -> String {
         .unwrap_or_else(|_| text.to_string())
 }
 
-fn json_decode(s: &str) -> Result<Value, String> {
+pub(crate) fn json_decode(s: &str) -> Result<Value, String> {
     let mut parser = JsonParser { s, pos: 0 };
     let v = parser.value()?;
     parser.skip_ws();
@@ -16303,7 +18121,7 @@ impl<'a> JsonParser<'a> {
     fn object(&mut self) -> Result<Value, String> {
         self.eat('{')?;
         self.skip_ws();
-        let mut map = BTreeMap::new();
+        let mut map = ahash::AHashMap::new();
         if self.peek() == Some('}') {
             self.pos += 1;
             return Ok(Value::Dict(Arc::new(map)));

@@ -1,11 +1,10 @@
 //! Zen `random` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_random_module(vm: &mut Vm) {
-let random = Value::Dict(Arc::new(BTreeMap::from([
+let random = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("random".into(), Value::NativeFunction("random_random".into())),
     ("randint".into(), Value::NativeFunction("random_randint".into())),
     ("randrange".into(), Value::NativeFunction("random_randrange".into())),

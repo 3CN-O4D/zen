@@ -1,11 +1,10 @@
 //! Zen `color` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_color_module(vm: &mut Vm) {
-let color = Value::Dict(Arc::new(BTreeMap::from([
+let color = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("reset".into(), Value::String("\x1b[0m".into())),
     ("bold".into(), Value::NativeFunction("color_style_bold".into())),
     ("dim".into(), Value::NativeFunction("color_style_dim".into())),

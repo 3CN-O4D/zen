@@ -1,11 +1,10 @@
 //! Zen `urllib` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_urllib_module(vm: &mut Vm) {
-let urllib = Value::Dict(Arc::new(BTreeMap::from([
+let urllib = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("urlopen".into(), Value::NativeFunction("urllib_urlopen".into())),
     ("quote".into(), Value::NativeFunction("urllib_quote".into())),
     ("unquote".into(), Value::NativeFunction("urllib_unquote".into())),

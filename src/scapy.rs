@@ -1,11 +1,10 @@
 //! Zen `scapy` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_scapy_module(vm: &mut Vm) {
-let scapy = Value::Dict(Arc::new(BTreeMap::from([
+let scapy = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("checksum".into(), Value::NativeFunction("scapy_checksum".into())),
     ("ip".into(), Value::NativeFunction("scapy_ip".into())),
     ("tcp".into(), Value::NativeFunction("scapy_tcp".into())),

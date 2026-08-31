@@ -1,11 +1,10 @@
 //! Zen `itertools` module.
 
 use crate::runtime::{Vm, Value};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn init_itertools_module(vm: &mut Vm) {
-let itertools = Value::Dict(Arc::new(BTreeMap::from([
+let itertools = Value::Dict(Arc::new(ahash::AHashMap::from([
     ("enumerate".into(), Value::NativeFunction("itertools_enumerate".into())),
     ("zip".into(), Value::NativeFunction("itertools_zip".into())),
     ("chain".into(), Value::NativeFunction("itertools_chain".into())),

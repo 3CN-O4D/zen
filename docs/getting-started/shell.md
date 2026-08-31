@@ -169,10 +169,9 @@ zen ❯ .run my_script.z
 Press **Tab** to autocomplete. The shell completes:
 
 - **Keywords:** `let`, `const`, `if`, `elif`, `else`, `for`, `while`, `function`, `return`, `class`, `try`, `catch`, `throw`, `import`, `from`, `switch`, `case`, `break`, `continue`
-- **Built-in functions:** `print`, `len`, `range`, `str`, `int`, `float`, `bool`, `type`, `sleep`, `input`, `exit`
-- **Browser commands:** `go`, `find`, `find_all`, `click`, `fill`, `wait`, `wait_for`, `back`, `forward`, `refresh`, `scroll`, `shot`
-- **Module functions:** `http.get`, `fs.read`, `json.parse`, `crypto.sha256`, etc.
-- **Special variables:** `_url`, `__url`, `___url`, `_time`, `_date`, `_dir`, `_version`, `_timeout`
+- **Built-in functions:** `print`, `len`, `range`, `str`, `int`, `float`, `bool`, `type`, `sleep`, `exit`
+- **Native module functions:** `http.get`, `fs.read`, `json.parse`, `crypto.sha256`, `os.env`, etc.
+- **Special variables:** `_url`, `_version`, `_dir`, etc.
 - **User-defined variables and functions** from the current session
 
 ---
@@ -259,24 +258,42 @@ zen ❯ print calc.result
 The shell integrates with a browser for automation:
 
 ```
-zen ❯ go "https://example.com"
+zen ❯ browser.launch({headful:true})
 true
 
-zen ❯ .url
-https://example.com/
+zen ❯ browser.navigate("https://example.com")
+true
 
-zen ❯ .title
+zen ❯ browser.click("h1")
+true
+
+zen ❯ browser.fill("input", "my text")
+true
+
+zen ❯ browser.query("h1")
 Example Domain
 
-zen ❯ find("h1").text
-Example Domain
-
-zen ❯ page.text
+zen ❯ browser.text
 "This domain is for use in illustrative examples..."
 
-zen ❯ find_all("a").attr("href")
-[https://www.iana.org/domains/example]
+zen ❯ browser.get_url()
+https://example.com/
+
+zen ❯ browser.quit()
+true
 ```
+
+The browser module provides CDP-based automation with the following methods:
+- `browser.launch({headful, headless})` — Launch browser
+- `browser.navigate(url)` — Navigate to a URL
+- `browser.click(selector)` — Click an element
+- `browser.fill(selector, text)` — Fill an input/textarea
+- `browser.query(selector)` — Get text content of first matching element
+- `browser.text` — Get the current page text
+- `browser.get_url()` — Get current URL
+- `browser.quit()` / `browser.close()` — Close browser
+
+For full API details, see [browser module overview](../browser/overview.md).
 
 ---
 
@@ -381,4 +398,4 @@ _url         // current URL variable
 - [Quick Start](quickstart.md) — First steps with Zen
 - [Scripts](scripts.md) — Running and writing script files
 - [CLI Reference](../cli.md) — All CLI commands and flags
-- [Language Overview](../language/overview.md) — Complete language reference
+- [Language Reference](../index.md) — Complete language reference
