@@ -1,4 +1,0 @@
-print "1";
-let a=5;
-print a;
-
