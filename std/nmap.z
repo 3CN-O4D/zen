@@ -1,0 +1,646 @@
+# nmap.z - Pentest-grade network scanning module for Zen
+#
+# Built on the raw `scapy` module (SYN scan, ARP discovery, TCP handshake,
+# raw send/sr1/sniff). Root is required for SYN/ARP/UDP raw-socket scans;
+# run with:  sudo zen <script>
+#
+# Scan types (like real nmap):
+#   "syn"       - SYN (half-open) scan. Fastest, stealthier, needs root.
+#   "connect"   - full TCP connect() scan. No root needed but slower/noisy.
+#   "udp"       - UDP scan (ICMP port-unreachable detection for closed ports). needs root.
+#
+# Timing templates (like nmap -T0..-T5):
+#   paranoid=0, sneaky=1, polite=2, normal=3, aggressive=4, insane=5
+#
+# Service/version detection (-sV): service() probes each open port with a
+#   protocol-appropriate request (HTTP GET, SMTP EHLO, FTP, MySQL, Redis,
+#   SSH banner, etc.) and extracts product + version.
+#
+# OS detection (-O): os_detect() crafts SYN probes and fingerprints using
+#   TTL distance, TCP window size, and service hints (Linux/Windows/etc).
+#
+# Host discovery: arp_discover() sends ARP who-has for every host in a subnet
+#   (the reliable LAN method, like nmap -sn / -PR).
+#
+# NSE-style scripts (--script): ssh_enum, smtp_userenum, redis_unauth,
+#   ftp_anon, http_headers, mysql_* vulnerability helpers.
+#
+# Target specification: single IP, comma lists, CIDR (/xx), octet ranges
+#   (192.168.1.1-20), space-separated multi-target, and --exclude filters.
+
+var IFACE = ""        # network interface to use (empty = autodetect from default route)
+var TIMING = 3        # 0..5 timing template
+var SRC_PORT = 40000  # base source port for raw scans
+
+import scapy
+import socket
+
+# ── helpers ────────────────────────────────────────────────────────────
+
+func _iface() {
+    if IFACE != "" { return IFACE }
+    return scapy.src_ip() + ""  # no-op reference (kept for symmetry)
+}
+
+func _default_iface() {
+    # We rely on scapy's default route detection; expose as lowercased iface guess.
+    return "auto"
+}
+
+# Resolve a timing template to (extra wait ms). Higher templates = more aggressive.
+func _timing_wait() {
+    if TIMING == 0 { return 3000 }
+    if TIMING == 1 { return 1000 }
+    if TIMING == 2 { return 500 }
+    if TIMING == 4 { return 80 }
+    if TIMING == 5 { return 30 }
+    return 250
+}
+
+# Parse a port spec like "1-1024" , "80,443", "1-1000,8080" into a flat list.
+func _expand_ports(spec) {
+    var out = []
+    var parts = spec.split(",")
+    for pt in parts {
+        pt = pt.strip()
+        if pt == "" { continue }
+        var r = pt.split("-")
+        if len(r) == 2 {
+            var a = int(r[0])
+            var b = int(r[1])
+            if a > b { var t = a; a = b; b = t }
+            var i = a
+            while i <= b {
+                if i > 0 and i < 65536 { out.push(i) }
+                i = i + 1
+            }
+        } else {
+            var p = int(r[0])
+            if p > 0 and p < 65536 { out.push(p) }
+        }
+    }
+    return out
+}
+
+func _chunks(lst, n) {
+    var res = []
+    var i = 0
+    while i < len(lst) {
+        var chunk = []
+        var j = 0
+        while j < n and i < len(lst) {
+            chunk.push(lst[i])
+            i = i + 1
+            j = j + 1
+        }
+        res.push(chunk)
+    }
+    return res
+}
+
+func _port_list_to_str(ports) {
+    var s = []
+    for p in ports { s.push(str(p)) }
+    return s.join(",")
+}
+
+# ── IP / target parsing (nmap-style target specification) ─────────────
+
+func _ip_to_int(ip) {
+    var p = ip.split(".")
+    if len(p) != 4 { return -1 }
+    var v = 0
+    for oct in p {
+        var n = int(oct)
+        if n < 0 or n > 255 { return -1 }
+        v = (v * 256) + n
+    }
+    return v
+}
+
+func _int_to_ip(n) {
+    return str((n >> 24) & 255) + "." + str((n >> 16) & 255) + "." + str((n >> 8) & 255) + "." + str(n & 255)
+}
+
+func _in_subnet(ip, cidr) {
+    var parts = cidr.split("/")
+    if len(parts) != 2 { return false }
+    var base = _ip_to_int(parts[0])
+    var prefix = int(parts[1])
+    if base < 0 { return false }
+    var ipn = _ip_to_int(ip)
+    var mk = 0
+    if prefix > 0 { mk = (0xffffffff << (32 - prefix)) & 0xffffffff }
+    return (ipn & mk) == (base & mk)
+}
+
+# Expand an nmap-style target spec into a flat list of host IPs.
+#   "192.168.193.0/24"            -> all hosts in subnet
+#   "10.0.0.1,10.0.0.5"          -> those two hosts
+#   "192.168.1.1-20"             -> octet range
+#   "host1 host2 ..."            -> space-separated multi-target
+#   "targets --exclude 1.2.3.4,1.2.3.5"  -> exclude list
+func _parse_targets(spec) {
+    var out = []
+    var exclude = []
+    var raw = str(spec)
+    if "--exclude" in raw {
+        var xs = raw.split("--exclude")
+        raw = xs[0]
+        if len(xs) > 1 {
+            for e in xs[1].split(",") {
+                var et = e.strip()
+                if et != "" { exclude.push(et) }
+            }
+        }
+    }
+    var tokens = raw.split(" ")
+    for tok in tokens {
+        tok = tok.strip()
+        if tok == "" { continue }
+        if "/" in tok {
+            var dh = scapy.cidr_expand(tok)
+            for h in dh { out.push(h) }
+        } elif "," in tok {
+            for h in tok.split(",") {
+                h = h.strip()
+                if h != "" { out.push(h) }
+            }
+        } elif ".." in tok {
+            var rr = tok.split("..")
+            var a = _ip_to_int(rr[0])
+            var b = int(rr[1])
+            var i = a
+            while i <= a + b {
+                out.push(_int_to_ip(i))
+                i = i + 1
+            }
+        } else {
+            var dots = tok.split(".")
+            if len(dots) == 4 and dots[3].contains("-") {
+                # octet range 192.168.1.1-20
+                var hh = dots[3].split("-")
+                var base = (int(dots[0]) * 256 + int(dots[1])) * 256 + int(dots[2])
+                var lo = int(hh[0])
+                var hi = int(hh[1])
+                var k = lo
+                while k <= hi {
+                    out.push(_int_to_ip(base * 256 + k))
+                    k = k + 1
+                }
+            } else {
+                out.push(tok)
+            }
+        }
+    }
+    # apply excludes
+    if len(exclude) > 0 {
+        var kept = []
+        for h in out {
+            var skip = false
+            for ex in exclude {
+                if "/" in ex {
+                    if _in_subnet(h, ex) { skip = true }
+                } elif h == ex {
+                    skip = true
+                }
+            }
+            if not skip { kept.push(h) }
+        }
+        out = kept
+    }
+    return out
+}
+
+# Convert a socket.recv() byte list (ASCII codes) into a readable string.
+func _bytes_to_str(bytes) {
+    if bytes == null { return "" }
+    if typeof(bytes) == "string" { return bytes }
+    var out = ""
+    for c in bytes {
+        if c > 0 and c < 128 { out = out + chr(c) }
+    }
+    return out
+}
+
+# Convert a byte list into a lowercase hex string (for binary parsing).
+func _bytes_to_hex(bytes) {
+    if bytes == null { return "" }
+    var hex = "0123456789abcdef"
+    var out = ""
+    for c in bytes {
+        var b = int(c)
+        out = out + hex[b / 16] + hex[b % 16]
+    }
+    return out
+}
+
+# ── host discovery ─────────────────────────────────────────────────────
+
+# ARP scan a subnet, e.g. arp_discover("192.168.193.0/24")
+func arp_discover(cidr, iface) {
+    var iv = iface or IFACE
+    return scapy.arp_scan(cidr, 3000, iv)
+}
+
+# ── port scanning ──────────────────────────────────────────────────────
+
+# SYN scan. Returns dict: {host, open, closed, filtered, state}
+func syn_scan(host, spec, iface) {
+    var ports = _expand_ports(spec)
+    var iv = iface or IFACE
+    var timeout = 250
+    var sport = SRC_PORT
+    # Chunk to keep source ports sane and allow incremental results
+    var all_open = []
+    var all_closed = []
+    var all_filtered = []
+    var chunks = _chunks(ports, 20000)
+    for ch in chunks {
+        var ps = _port_list_to_str(ch)
+        s = scapy.syn_scan(host, ps, 3000, sport, iv)
+        for p in s.open { all_open.push(p) }
+        for p in s.closed { all_closed.push(p) }
+        for p in s.filtered { all_filtered.push(p) }
+        sport = sport + 20000
+    }
+    var state = "filtered"
+    if len(all_open) > 0 { state = "open" }
+    elif len(all_closed) > 0 { state = "closed" }
+    d = {host: host, open: all_open, closed: all_closed, filtered: all_filtered, state: state}
+    return d
+}
+
+# TCP connect scan (no root). Uses raw handshake if root, else native socket.scan.
+func connect_scan(host, spec, iface) {
+    var ports = _expand_ports(spec)
+    var iv = iface or IFACE
+    var open = []
+    var closed = []
+    for p in ports {
+        var h = scapy.handshake(host, p, SRC_PORT, 800, iv)
+        if h.ok {
+            open.push(p)
+        } else {
+            closed.push(p)
+        }
+    }
+    var state = "closed"
+    if len(open) > 0 { state = "open" }
+    d = {host: host, open: open, closed: closed, filtered: [], state: state}
+    return d
+}
+
+# Generic scan(): pick connect (no root) or syn (root) automatically.
+func scan(host, spec, type, iface) {
+    if type == "syn" { return syn_scan(host, spec, iface) }
+    return connect_scan(host, spec, iface)
+}
+
+# Scan the top-N commonly open ports quickly. Top ports list (nmap default subset).
+func top_ports(host, n, iface) {
+    var top = [22, 80, 443, 21, 25, 110, 143, 53, 8080, 8443, 3306, 5432, 6379,
+               3389, 5900, 23, 445, 139, 993, 995, 1433, 1521, 11211, 27017,
+               7001, 8000, 8008, 8081, 8888, 9090, 9200, 2181, 5672, 61616,
+               22, 2222, 10000, 3000, 5000, 4567, 4444, 1080, 3128, 808, 81]
+    var ports = top[:n]
+    return syn_scan(host, _port_list_to_str(ports), iface)
+}
+
+# ── service / version detection (~ -sV) ────────────────────────────────
+
+# Read up to n bytes from an open TCP stream and return a cleaned string.
+func _recv_str(s, n) {
+    var b = socket.recv(s, n)
+    return _bytes_to_str(b).strip()
+}
+
+# Extract product+version from a banner. Splits on known delimiters.
+func _extract(banner, product) {
+    var b = str(banner)
+    var lo = b.lower()
+    var idx = lo.find(product.lower())
+    if idx >= 0 {
+        var rest = b[idx + len(product):]
+        # strip leading separators like _ / : space
+        while len(rest) > 0 {
+            var ch = rest[0]
+            if ch == "_" or ch == "/" or ch == ":" or ch == " " or ch == "\t" or ch == "\r" or ch == "\n" {
+                rest = rest[1:]
+            } else {
+                break
+            }
+        }
+        var v = rest.strip()
+        # take up to first space / CR / LF
+        var tok = v.split("\r")[0] and v.split("\n")[0]
+        # fall back to first token
+        var sp = v.split(" ")
+        if len(sp) > 0 { return sp[0] }
+        return tok
+    }
+    return ""
+}
+
+# Probe one open port with the right service request, extracting product/version.
+func _probe(host, port, proto_hint, iface) {
+    var r = {port: port, service: "unknown", product: "", version: "", banner: "", state: "closed"}
+    var s = socket.open(host, port)
+    if s == null {
+        return r
+    }
+    socket.set_timeout(s, 2500)
+    var probe = ""
+    # Choose a probe based on the protocol hint given by port heuristic or fallback.
+    if proto_hint == "http" { probe = "GET / HTTP/1.0\r\nHost: " + host + "\r\n\r\n" }
+    elif proto_hint == "smtp" { probe = "EHLO zen.test\r\n" }
+    elif proto_hint == "ftp" { probe = "" }
+    elif proto_hint == "pop3" { probe = "" }
+    elif proto_hint == "imap" { probe = "" }
+    elif proto_hint == "ssh" { probe = "" }
+    elif proto_hint == "mysql" { probe = chr(9) }
+    elif proto_hint == "redis" { probe = "PING\r\n" }
+    elif proto_hint == "dns" { probe = "" }
+    elif proto_hint == "nntp" { probe = "" }
+    elif proto_hint == "telnet" { probe = "\xff\xfd\x18\xff\xfd\x20\xff\xfd\x23\xff\xfd\x27" }
+    elif proto_hint == "rdp" { probe = "" }
+    elif proto_hint == "smb" {
+        # SMB1 Negotiate Protocol Request (elicits the server's OS string)
+        probe = "\x00\x00\x00\x2d\xff\x53\x4d\x42\x72\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    }
+    else { probe = "HEAD / HTTP/1.0\r\n\r\n" }
+    socket.send(s, probe)
+    if proto_hint == "smb" or proto_hint == "rdp" {
+        var raw = socket.recv(s, 2048)
+        var hx = _bytes_to_hex(raw)
+        r.banner = _bytes_to_str(raw)
+        socket.close(s)
+        if proto_hint == "rdp" {
+            r.service = "ms-wbt-server"
+            r.product = "Microsoft RDP"
+            if r.banner != "" { r.version = "" }
+        } else {
+            # SMB — look for Samba vs Windows from the negotiate response
+            var txt = r.banner.lower()
+            if "samba" in txt {
+                r.service = "netbios-ssn" if port == 139 else "microsoft-ds"
+                r.product = "Samba"
+                var si = txt.find("samba")
+                if si >= 0 { r.version = txt[si:].split(" ")[0] }
+            } elif "windows" in txt or hx.startswith("ff534d42") {
+                r.service = "netbios-ssn" if port == 139 else "microsoft-ds"
+                r.product = "Microsoft Windows"
+            }
+        }
+        return r
+    }
+    var banner = _recv_str(s, 1024)
+    r.banner = banner
+    socket.close(s)
+    # classify / extract product+version
+    var b = banner.lower()
+    r.service = "unknown"
+    if b.startswith("ssh-") or "openssh" in b {
+        r.service = "ssh"
+        r.product = "OpenSSH"
+        r.version = _extract(banner, "openssh")
+    } elif b.startswith("http") or "server:" in b {
+        r.service = "http"
+        # Server: nginx/1.18.0 etc.
+        var sidx = b.find("server:")
+        if sidx >= 0 {
+            var sline = banner[sidx + 7:].split("\r")[0].strip()
+            var parts = sline.split(" ")
+            if len(parts) > 0 { r.product = parts[0] }
+            var slash = sline.find("/")
+            if slash >= 0 {
+                r.product = sline[:slash]
+                r.version = sline[slash + 1:].split(" ")[0]
+            }
+        }
+        if r.product == "" { r.product = "http" }
+    } elif b.startswith("220") and ("ftpd" in b or "ftp" in b) {
+        r.service = "ftp"
+        r.product = "FTP"
+        if "vsftpd" in b { r.product = "vsftpd"; r.version = _extract(banner, "vsftpd") }
+        elif "proftpd" in b { r.product = "ProFTPD"; r.version = _extract(banner, "proftpd") }
+        elif "pure-ftpd" in b { r.product = "Pure-FTPd"; r.version = _extract(banner, "pure-ftpd") }
+    } elif b.startswith("220") and ("esmtp" in b or "smtp" in b or "postfix" in b or "exim" in b) {
+        r.service = "smtp"
+        if "postfix" in b { r.product = "Postfix" }
+        elif "exim" in b { r.product = "Exim" }
+        elif "hmailserver" in b { r.product = "hMailServer" }
+        elif "microsoft" in b or "e smtp" in b { r.product = "Microsoft ESMTP" }
+        else { r.product = "SMTP" }
+    } elif b.startswith("+ok") {
+        r.service = "pop3"
+        r.product = "POP3"
+        for p in ["dovecot", "courier", "qpopper"] {
+            if p in b {
+                r.product = p
+                r.version = _extract(banner, p)
+            }
+        }
+    } elif b.startswith("* ok") or "imap" in b {
+        r.service = "imap"
+        r.product = "IMAP"
+        for p in ["dovecot", "courier"] {
+            if p in b {
+                r.product = p
+                r.version = _extract(banner, p)
+            }
+        }
+    } elif b.startswith("mysql") or "mysql" in b {
+        r.service = "mysql"
+        r.product = "MySQL"
+        r.version = _extract(banner, "ver")
+    } elif b.startswith("+pong") or b.startswith("-err") {
+        r.service = "redis"
+        r.product = "Redis"
+    } elif b.startswith("220 ") or "nntp" in b {
+        r.service = "nntp"
+        r.product = "NNTP"
+    } elif b.startswith("telnet") {
+        r.service = "telnet"
+    } elif b.startswith("230") or "ftp" in b and "login" in b {
+        r.service = "ftp"
+    } elif b.startswith("200") and "esmtp" in b {
+        r.service = "smtp"
+    }
+    return r
+}
+
+# Guess the protocol hint for a port (like nmap's default port->service table).
+func _proto_hint(port) {
+    if port == 22 { return "ssh" }
+    if port == 21 { return "ftp" }
+    if port == 25 or port == 587 or port == 465 { return "smtp" }
+    if port == 110 or port == 995 { return "pop3" }
+    if port == 143 or port == 993 { return "imap" }
+    if port == 80 or port == 8080 or port == 8000 or port == 8888 or port == 443 or port == 8443 or port == 3000 or port == 8888 or port == 5000 or port == 1080 { return "http" }
+    if port == 3306 { return "mysql" }
+    if port == 6379 { return "redis" }
+    if port == 53 { return "dns" }
+    if port == 119 { return "nntp" }
+    if port == 23 { return "telnet" }
+    if port == 445 or port == 139 { return "smb" }
+    if port == 3389 { return "rdp" }
+    if port == 53 { return "dns" }
+    return "generic"
+}
+
+# Version-scan a single open port (~ -sV). Returns a rich result dict.
+func service(host, port, iface) {
+    var iv = iface or IFACE
+    var r = {port: port, state: "closed", service: "", product: "", version: "", banner: ""}
+    var h = scapy.handshake(host, port, SRC_PORT, 2000, iv)
+    if not h.ok { return r }
+    r.state = "open"
+    var hint = _proto_hint(port)
+    var v = nil
+    if hint == "dns" {
+        v = _probe_dns(host, port, iv)
+    } else {
+        v = _probe(host, port, hint, iv)
+    }
+    r.service = v.service
+    r.product = v.product
+    r.version = v.version
+    r.banner = v.banner
+    # If generic probe found nothing identifiable, retry with a banner-only probe
+    if r.service == "unknown" {
+        var v2 = _probe(host, port, "banner", iv)
+        r.service = v2.service
+        r.product = v2.product
+        r.version = v2.version
+        if v2.banner != "" { r.banner = v2.banner }
+    }
+    return r
+}
+
+# Version scan a list of open ports (like -sV). Returns list of service dicts.
+func version_scan(host, open_ports, iface) {
+    var out = []
+    for p in open_ports {
+        out.push(service(host, p, iface))
+    }
+    return out
+}
+
+# DNS is UDP — probe with a real A query and parse the response header.
+func _probe_dns(host, port, iface) {
+    var r = {port: port, service: "unknown", product: "", version: "", banner: ""}
+    var u = socket.open_udp(host, port)
+    if u == null { return r }
+    socket.set_timeout(u, 2500)
+    # Standard DNS query: id=0x1234, RD=1, QNAME example.com A, QTYPE=1, QCLASS=1
+    var q = []
+    for b in [0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00] { q.push(b) }
+    q.push(7)  # length of "example"
+    for ch in "example".split("") { if ch != "" { q.push(ord(ch)) } }
+    q.push(3)  # length of "com"
+    for ch in "com".split("") { if ch != "" { q.push(ord(ch)) } }
+    q.push(0)  # root
+    q.push(0); q.push(1)  # QTYPE A
+    q.push(0); q.push(1)  # QCLASS IN
+    socket.send(u, q)
+    var resp = socket.recv_from(u, 4096)
+    socket.close(u)
+    if resp == null { return r }
+    var data = resp.data
+    if len(data) < 12 { return r }
+    # flags: bytes 2-3. QR bit (bit15) + opcode. RD->RA implies a DNS server answered.
+    var flags = (int(data[2]) * 256) + int(data[3])
+    var qr = int(flags / 32768) % 2
+    r.service = "domain"
+    r.product = "DNS"
+    if qr == 0 { r.product = "DNS (no response)" }
+    if len(data) > 4 {
+        var ancount = (int(data[4]) * 256) + int(data[5])
+        var nscount = (int(data[6]) * 256) + int(data[7])
+        r.banner = "answers=" + str(ancount) + " ns=" + str(nscount)
+    }
+    return r
+}
+
+# ── OS detection (~ -O, TTL/window/options fingerprint + service hints) ─
+
+# Send one SYN to a port and fetch {open, closed, ttl, window, flags, options} from the reply.
+func _syn_probe(host, port, sp, iface) {
+    var p = {open: false, closed: false, ttl: 0, window: 0, flags: 0, options: []}
+    var sip = scapy.src_ip(iface)
+    var syn = {type: "IP", src: sip, dst: host, proto: "TCP", ttl: 64,
+               payload: {type: "TCP", src: sip, dst: host, sport: sp, dport: port, flags: "S", seq: 100000, window: 64240}}
+    var r = scapy.sr1(syn, 1200, iface)
+    if r == null { return p }
+    if "ttl" in r { p.ttl = r.ttl }
+    var pay = r.payload
+    if pay != null {
+        if "window" in pay { p.window = pay.window }
+        if "flags" in pay { p.flags = pay.flags }
+        var f = p.flags
+        var has_syn = int(f / 2) % 2
+        var has_ack = int(f / 16) % 2
+        var has_rst = int(f / 4) % 2
+        if has_syn == 1 and has_ack == 1 { p.open = true }
+        if has_rst == 1 { p.closed = true }
+        if "options" in pay {
+            var ol = pay.options
+            for o in ol { p.options.push(str(o)) }
+        }
+    }
+    return p
+}
+
+# Fingerprint the OS using TTL distance and window/option behavior.
+func _os_guess(probes, hints) {
+    var ttl_count = {}
+    var win_count = {}
+    for q in probes {
+        if q.ttl > 0 {
+            var k = str(q.ttl)
+            if k in ttl_count { ttl_count[k] = ttl_count[k] + 1 } else { ttl_count[k] = 1 }
+        }
+        if q.window > 0 {
+            var wk = str(q.window)
+            if wk in win_count { win_count[wk] = win_count[wk] + 1 } else { win_count[wk] = 1 }
+        }
+    }
+    # pick the modal TTL
+    var best_ttl = 0
+    var best_cnt = 0
+    for k in ttl_count.keys() {
+        if ttl_count[k] > best_cnt { best_cnt = ttl_count[k]; best_ttl = int(k) }
+    }
+    var osfamily = "unknown"
+    var dist = []
+    # TTL heuristic: Linux/BSD default 64, Windows 128, routers/Cisco 255.
+    if best_ttl >= 62 and best_ttl <= 66 {
+        osfamily = "linux/unix"
+        dist.push("ttl64")
+    } elif best_ttl >= 125 and best_ttl <= 131 {
+        osfamily = "windows"
+        dist.push("ttl128")
+    } elif best_ttl >= 250 {
+        osfamily = "network-device"
+        dist.push("ttl255")
+    } elif best_ttl >= 55 and best_ttl <= 61 {
+        osfamily = "linux"
+        dist.push("ttl60")
+    }
+    var win_hints = ""
+    for wk in win_count.keys() {
+        var w = int(wk)
+        if w >= 60000 { win_hints = win_hints + "bigwin:" + wk + " " }
+    }
+    if win_hints != "" { dist.push(win_hints.strip()) }
+    # service hints refine it
+    var linux_cnt = 0
+    var win_cnt = 0
+    for h in hints {
+        if h == "linux" { linux_cnt = linux_cnt + 1 }
+        if h == "windows" { win_cnt = win_cnt + 1 }
+    }
+    if win_cnt > 0 and win_cnt >= linux_cnt { osfamily = "windows" }
+    elif linux_cnt > 0 and (osfamily == "unknown" or "linux/unix" in osfamily) { osfamily = "linux" }
+    d = {osfamily: osfamily, ttl: best_ttl, accuracy: -1, hints: hints, evidence: dist}
