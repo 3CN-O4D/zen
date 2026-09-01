@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_ftp_module(vm: &mut Vm) {
-let ftp = Value::Dict(Arc::new(ahash::AHashMap::from([
+let ftp = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("connect".into(), Value::NativeFunction("ftp_connect".into())),
     ("login".into(), Value::NativeFunction("ftp_login".into())),
     ("pwd".into(), Value::NativeFunction("ftp_pwd".into())),

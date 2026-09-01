@@ -11,6 +11,10 @@ if [ ! -x "$ZEN_BIN" ]; then
     cargo build --quiet || exit 1
 fi
 
+# Tests (06_modules_core, 09_socket_hydra) and the FTP mock log reference this
+# scratch dir, so ensure it exists before running anything.
+mkdir -p /tmp/zen_test
+
 FTP_PID=""
 FTP_STARTED=0
 if nc -z 127.0.0.1 2121 2>/dev/null; then

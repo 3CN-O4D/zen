@@ -11,12 +11,14 @@ path = "src/main.rs"
 
 [dependencies]
 ahash = "=0.8.10"
+indexmap = "2"
 base64 = "0.23.1"
 base32 = "0.5"
 rustyline = "15"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 flate2 = "1"
 libc = "0.2"
+get_if_addrs = "0.5.3"
 hmac = "0.12"
 md-5 = "0.10"
 rand = "0.9"

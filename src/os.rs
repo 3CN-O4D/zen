@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_os_module(vm: &mut Vm) {
-let os = Value::Dict(Arc::new(ahash::AHashMap::from([
+let os = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("env".into(), Value::NativeFunction("os_getenv".into())),
     ("getenv".into(), Value::NativeFunction("os_getenv".into())),
     ("setenv".into(), Value::NativeFunction("os_setenv".into())),

@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_pathlib_module(vm: &mut Vm) {
-let pathlib = Value::Dict(Arc::new(ahash::AHashMap::from([
+let pathlib = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("join".into(), Value::NativeFunction("pathlib_join".into())),
     ("name".into(), Value::NativeFunction("pathlib_name".into())),
     ("parent".into(), Value::NativeFunction("pathlib_parent".into())),

@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_fs_module(vm: &mut Vm) {
-let fs = Value::Dict(Arc::new(ahash::AHashMap::from([
+let fs = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("list".into(), Value::NativeFunction("fs_list_dir".into())),
     ("read".into(), Value::NativeFunction("fs_read".into())),
     ("write".into(), Value::NativeFunction("fs_write".into())),

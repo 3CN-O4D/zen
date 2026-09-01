@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_imap_module(vm: &mut Vm) {
-let imap = Value::Dict(Arc::new(ahash::AHashMap::from([
+let imap = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("connect".into(), Value::NativeFunction("imap_connect".into())),
     ("select".into(), Value::NativeFunction("imap_select".into())),
     ("search".into(), Value::NativeFunction("imap_search".into())),

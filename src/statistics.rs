@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 /// Initialize the statistics module.
 pub fn init_statistics_module(vm: &mut Vm) {
-    let statistics = Value::Dict(Arc::new(ahash::AHashMap::from([
+    let statistics = Value::Dict(Arc::new(indexmap::IndexMap::from([
         ("mean".into(), Value::NativeFunction("statistics_mean".into())),
         ("median".into(), Value::NativeFunction("statistics_median".into())),
         ("mode".into(), Value::NativeFunction("statistics_mode".into())),

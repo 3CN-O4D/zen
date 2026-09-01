@@ -321,7 +321,7 @@ fn js_value_to_zen(result: serde_json::Value) -> Value {
             Value::List(Arc::new(items.into_iter().map(js_json_to_zen).collect::<Vec<_>>()))
         }
         serde_json::Value::Object(map) => {
-            let mut dict = ahash::AHashMap::new();
+            let mut dict = indexmap::IndexMap::new();
             for (k, v) in map {
                 dict.insert(k, js_json_to_zen(v));
             }
@@ -338,7 +338,7 @@ fn js_json_to_zen(v: serde_json::Value) -> Value {
         serde_json::Value::String(s) => Value::String(s),
         serde_json::Value::Array(items) => Value::List(Arc::new(items.into_iter().map(js_json_to_zen).collect::<Vec<_>>())),
         serde_json::Value::Object(map) => {
-            let mut dict = ahash::AHashMap::new();
+            let mut dict = indexmap::IndexMap::new();
             for (k, v) in map {
                 dict.insert(k, js_json_to_zen(v));
             }

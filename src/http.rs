@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_http_module(vm: &mut Vm) {
-let http = Value::Dict(Arc::new(ahash::AHashMap::from([
+let http = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("get".into(), Value::NativeFunction("http_get".into())),
     ("post".into(), Value::NativeFunction("http_post".into())),
     ("put".into(), Value::NativeFunction("http_put".into())),

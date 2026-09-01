@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_decimal_module(vm: &mut Vm) {
-let decimal = Value::Dict(Arc::new(ahash::AHashMap::from([
+let decimal = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("Decimal".into(), Value::NativeFunction("decimal_decimal".into())),
     ("getcontext".into(), Value::NativeFunction("decimal_getcontext".into())),
     ("setcontext".into(), Value::NativeFunction("decimal_setcontext".into())),

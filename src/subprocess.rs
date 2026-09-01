@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_subprocess_module(vm: &mut Vm) {
-let subprocess = Value::Dict(Arc::new(ahash::AHashMap::from([
+let subprocess = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("run".into(), Value::NativeFunction("subprocess_run".into())),
     ("call".into(), Value::NativeFunction("subprocess_call".into())),
     ("check_output".into(), Value::NativeFunction("subprocess_check_output".into())),

@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_time_module(vm: &mut Vm) {
-let time = Value::Dict(Arc::new(ahash::AHashMap::from([
+let time = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("now".into(), Value::NativeFunction("time_now".into())),
     ("unix".into(), Value::NativeFunction("time_unix".into())),
     ("utc".into(), Value::NativeFunction("time_utc".into())),

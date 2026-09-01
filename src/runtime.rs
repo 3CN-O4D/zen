@@ -170,7 +170,7 @@ const INTERNAL_THROW_SENTINEL: &str = "\u{1}[1mzen\u{1}[0m internal throw sentin
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Instance {
     class_name: String,
-    fields: ahash::AHashMap<String, Value>,
+    fields: indexmap::IndexMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -183,7 +183,7 @@ pub enum Value {
     // or Value::Dict is O(1); mutations go through Arc::make_mut which clones
     // only when the container is shared.
     List(Arc<Vec<Value>>),
-    Dict(Arc<ahash::AHashMap<String, Value>>),
+    Dict(Arc<indexmap::IndexMap<String, Value>>),
     Instance(InstanceRef),
     Socket(Arc<Mutex<TcpStream>>),
     UdpSocket(Arc<Mutex<std::net::UdpSocket>>),
@@ -2903,7 +2903,7 @@ impl Function {
     }
     /// True when `values` ends with a kwargs dict whose keys all name real
     /// parameters of this function.
-    fn is_named_call<'a>(&self, values: &'a [Value]) -> Option<&'a ahash::AHashMap<String, Value>> {
+    fn is_named_call<'a>(&self, values: &'a [Value]) -> Option<&'a indexmap::IndexMap<String, Value>> {
         let Value::Dict(map) = values.last()? else {
             return None;
         };
@@ -3056,7 +3056,7 @@ struct ZenClass {
 type NativeFunc = fn(Vec<Value>) -> Result<Value, String>;
 
 pub struct Vm {
-    pub vars: ahash::AHashMap<String, Value>,
+    pub vars: indexmap::IndexMap<String, Value>,
     functions: HashMap<String, Function>,
     native_functions: HashMap<String, NativeFunc>,
     classes: HashMap<String, ZenClass>,
@@ -3126,7 +3126,7 @@ enum Flow {
 }
 
 fn bind_list_pattern(
-    vars: &mut ahash::AHashMap<String, Value>,
+    vars: &mut indexmap::IndexMap<String, Value>,
     patterns: &[PatternItem],
     items: &[Value],
 ) {
@@ -3150,7 +3150,7 @@ fn bind_list_pattern(
 impl Vm {
     fn new() -> Vm {
         let mut vm = Vm {
-            vars: ahash::AHashMap::new(),
+            vars: indexmap::IndexMap::new(),
             functions: HashMap::new(),
             native_functions: HashMap::new(),
             classes: HashMap::new(),
@@ -3242,7 +3242,7 @@ impl Vm {
 
         // The `errors` module: a dict exposing every error type so that
         // `import errors`, `print errors.ValueError`, etc. work.
-        let mut errors_map = ahash::AHashMap::new();
+        let mut errors_map = indexmap::IndexMap::new();
         errors_map.insert("define".into(), Value::NativeFunction("errors_define".into()));
         for leaf in [
             "Error",
@@ -3791,7 +3791,7 @@ impl Vm {
             |args| {
                 match args.first() {
                     Some(Value::List(pairs)) => {
-                        let mut map = ahash::AHashMap::new();
+                        let mut map = indexmap::IndexMap::new();
                         for pair in pairs.iter().cloned() {
                             if let Value::List(kv) = pair {
                                 if kv.len() >= 2 {
@@ -3804,7 +3804,7 @@ impl Vm {
                         Ok(Value::Dict(Arc::new(map)))
                     }
                     Some(Value::Dict(d)) => Ok(Value::Dict(d.clone())),
-                    _ => Ok(Value::Dict(Arc::new(ahash::AHashMap::new()))),
+                    _ => Ok(Value::Dict(Arc::new(indexmap::IndexMap::new()))),
                 }
             },
         );
@@ -3966,7 +3966,7 @@ impl Vm {
         crate::binascii::init_binascii_module(self);
 
         // Register all core native functions eagerly
-          const NATIVES: [&str; 411] = [
+            const NATIVES: [&str; 422] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -4288,6 +4288,17 @@ impl Vm {
             "scapy_int_to_ip",
             "scapy_cidr_expand",
             "scapy_subnet_hosts",
+            "scapy_ether",
+            "scapy_arp",
+            "scapy_sendp",
+            "scapy_sr1",
+            "scapy_srp1",
+            "scapy_syn_scan",
+            "scapy_handshake",
+            "scapy_arp_scan",
+            "scapy_src_mac",
+            "scapy_src_ip",
+            "scapy_hostname",
             "str_upper",
             "str_lower",
             "str_title",
@@ -4426,7 +4437,7 @@ impl Vm {
                     return Ok(if let Some(Value::Dict(module_dict)) = vars.get(n) {
                         Value::Dict(module_dict.clone())
                     } else {
-                        Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<ahash::AHashMap<String, Value>>()))
+                        Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<indexmap::IndexMap<String, Value>>()))
                     });
                 }
                 if let Some(v) = self.self_field_get(n) {
@@ -4456,7 +4467,7 @@ impl Vm {
                 Ok(Value::List(Arc::new(list)))
             }
             Expr::Dict(entries) => {
-                let mut dict = ahash::AHashMap::new();
+                let mut dict = indexmap::IndexMap::new();
                 for entry in entries {
                     match entry {
                         DictEntry::Pair(key, expr) => {
@@ -4877,7 +4888,7 @@ Expr::Index(obj, idx) => {
             }
             Expr::Call(callee, arguments) => {
                 let mut values = Vec::new();
-                let mut named = ahash::AHashMap::new();
+                let mut named = indexmap::IndexMap::new();
                 for argument in arguments {
                     match argument {
                         Expr::Named(name, value) => {
@@ -5753,7 +5764,7 @@ Expr::Index(obj, idx) => {
             _ => Err(format!("list has no method: {method}")),
         }
     }
-    fn dict_method(&mut self, dict: ahash::AHashMap<String, Value>, method: &str, args: Vec<Value>) -> Result<Value, String> {
+    fn dict_method(&mut self, dict: indexmap::IndexMap<String, Value>, method: &str, args: Vec<Value>) -> Result<Value, String> {
         match method {
             "has" | "containsKey" | "has_key" | "contains" => {
                 let key = match args.first() {
@@ -5824,10 +5835,10 @@ Expr::Index(obj, idx) => {
                 dict.insert(key, value);
                 Ok(Value::Dict(Arc::new(dict)))
             }
-            "clear" => Ok(Value::Dict(Arc::new(ahash::AHashMap::new()))),
+            "clear" => Ok(Value::Dict(Arc::new(indexmap::IndexMap::new()))),
             "count" => Ok(Value::Number(dict.len() as f64)),
             "invert" => {
-                let mut out: ahash::AHashMap<String, Value> = ahash::AHashMap::new();
+                let mut out: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
                 for (k, v) in dict {
                     out.insert(v.to_string(), Value::String(k));
                 }
@@ -5838,7 +5849,7 @@ Expr::Index(obj, idx) => {
                     Value::String(k) => Some(k.clone()),
                     _ => None,
                 }).collect();
-                let mut out: ahash::AHashMap<String, Value> = ahash::AHashMap::new();
+                let mut out: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
                 for k in keys {
                     if let Some(v) = dict.get(&k) {
                         out.insert(k, v.clone());
@@ -5851,7 +5862,7 @@ Expr::Index(obj, idx) => {
                     Value::String(k) => Some(k.clone()),
                     _ => None,
                 }).collect();
-                let mut out: ahash::AHashMap<String, Value> = ahash::AHashMap::new();
+                let mut out: indexmap::IndexMap<String, Value> = indexmap::IndexMap::new();
                 for (k, v) in dict {
                     if !keys.contains(&k) {
                         out.insert(k, v);
@@ -6096,7 +6107,7 @@ Expr::Index(obj, idx) => {
                     }
                 }
                 self.imported_modules.insert(name.clone(), map.clone());
-                let btree: ahash::AHashMap<String, Value> = map.into_iter().collect();
+                let btree: indexmap::IndexMap<String, Value> = map.into_iter().collect();
                 self.vars.insert(name, Value::Dict(Arc::new(btree)));
                 continue;
             }
@@ -6143,13 +6154,13 @@ Expr::Index(obj, idx) => {
                 // Register nested dicts so chained member access
                 // `pkg.sub.mod.func` resolves through vars.
                 let parts: Vec<&str> = module.split('.').collect();
-                let leaf: ahash::AHashMap<String, Value> =
+                let leaf: indexmap::IndexMap<String, Value> =
                     vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 let mut acc = Value::Dict(Arc::new(leaf));
                 // Nest every segment after the root var name,
                 // left-to-right: pkg.sub.mod -> {sub: {mod: exports}}.
                 for p in parts.iter().skip(1).rev() {
-                    let mut m = ahash::AHashMap::new();
+                    let mut m = indexmap::IndexMap::new();
                     m.insert(p.to_string(), acc);
                     acc = Value::Dict(Arc::new(m));
                 }
@@ -6169,14 +6180,14 @@ Expr::Index(obj, idx) => {
                     }
                 }
                 if let Some(a) = &alias {
-                    let dict: ahash::AHashMap<String, Value> =
+                    let dict: indexmap::IndexMap<String, Value> =
                         vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     self.vars.insert(a.clone(), Value::Dict(Arc::new(dict)));
                 }
             } else if alias.is_some() {
                 // Bind the loaded module under the alias so direct
                 // member access (`alias.func()`) works.
-                let dict: ahash::AHashMap<String, Value> =
+                let dict: indexmap::IndexMap<String, Value> =
                     vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 self.vars.insert(name.clone(), Value::Dict(Arc::new(dict)));
             }
@@ -6221,7 +6232,7 @@ Expr::Index(obj, idx) => {
                             map.insert(k.clone(), v.clone());
                         }
                         self.imported_modules.insert(sub_name.clone(), map);
-                        Value::Dict(Arc::new(sub_vars.into_iter().collect::<ahash::AHashMap<String, Value>>()))
+                        Value::Dict(Arc::new(sub_vars.into_iter().collect::<indexmap::IndexMap<String, Value>>()))
                     }
                     Err(_) => {
                         return Err(format!("item '{item}' not found in module '{module}'\n  \x1b[1;33m= help:\x1b[0m check the module's available exports with `from {module} import *`"));
@@ -7077,7 +7088,7 @@ Expr::Index(obj, idx) => {
                         let val = if let Some(Value::Dict(module_dict)) = vars.get(name.as_str()) {
                             Value::Dict(module_dict.clone())
                         } else {
-                            Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<ahash::AHashMap<String, Value>>()))
+                            Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<indexmap::IndexMap<String, Value>>()))
                         };
                         stack.push(val);
                     } else {
@@ -7806,7 +7817,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                 }
                 Opcode::BuildDict => {
                     let count = inst.arg1 as usize;
-                    let mut dict = ahash::AHashMap::new();
+                    let mut dict = indexmap::IndexMap::new();
                     for _ in 0..count {
                         let val = stack.pop().unwrap_or(Value::Null);
                         let key = stack.pop().unwrap_or(Value::Null);
@@ -8075,7 +8086,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
         }
         let instance = Arc::new(Mutex::new(Instance {
             class_name: class_name.to_string(),
-            fields: ahash::AHashMap::new(),
+            fields: indexmap::IndexMap::new(),
         }));
         {
             let mut seen = std::collections::HashSet::new();
@@ -9452,7 +9463,7 @@ let function = self
             .rsplit_once("\nError: ")
             .map(|(_, m)| m.to_string())
             .unwrap_or_else(|| message.to_string());
-        let mut map = ahash::AHashMap::new();
+        let mut map = indexmap::IndexMap::new();
         map.insert("type".into(), Value::String("Error".into()));
         map.insert("message".into(), Value::String(msg));
         map.insert("file".into(), Value::String(self.file.clone()));
@@ -9485,7 +9496,7 @@ let function = self
                     .get("message")
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| class_name.clone());
-                let mut map = ahash::AHashMap::new();
+                let mut map = indexmap::IndexMap::new();
                 map.insert(
                     "type".into(),
                     Value::String(class_name.rsplit('.').next().unwrap_or(&class_name).into()),
@@ -9497,7 +9508,7 @@ let function = self
                 Value::Dict(Arc::new(map))
             }
             other => {
-                let mut map = ahash::AHashMap::new();
+                let mut map = indexmap::IndexMap::new();
                 map.insert("type".into(), Value::String("Error".into()));
                 map.insert("message".into(), Value::String(other.to_string()));
                 map.insert("file".into(), Value::String(self.file.clone()));
@@ -9857,7 +9868,7 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
     };
     // Optional second arg: data (string) or dict options (headers, json, timeout)
     let mut body: Option<String> = None;
-    let mut headers = ahash::AHashMap::new();
+    let mut headers = indexmap::IndexMap::new();
     let mut timeout_secs: u64 = 30;
     if let Some(second) = args.get(1) {
         match second {
@@ -9900,7 +9911,7 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
     let body_text = resp
         .text()
         .map_err(|e| format!("http {method} {url}: {e}"))?;
-    let mut header_dict = ahash::AHashMap::new();
+    let mut header_dict = indexmap::IndexMap::new();
     for (name, value) in header_map.iter() {
         header_dict.insert(
             name.as_str().to_string(),
@@ -9922,7 +9933,7 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
             cache.retain(|&k, _| k >= cutoff);
         }
     }
-    let mut result = ahash::AHashMap::new();
+    let mut result = indexmap::IndexMap::new();
     result.insert("status".into(), Value::Number(status));
     result.insert("ok".into(), Value::Bool(status >= 200.0 && status < 400.0));
     result.insert("headers".into(), Value::Dict(Arc::new(header_dict)));
@@ -10221,7 +10232,7 @@ fn arg_number(args: &[Value], i: usize) -> Result<f64, String> {
     }
 }
 
-fn arg_dict(args: &[Value], i: usize) -> Result<ahash::AHashMap<String, Value>, String> {
+fn arg_dict(args: &[Value], i: usize) -> Result<indexmap::IndexMap<String, Value>, String> {
     match args.get(i) {
         Some(Value::Dict(d)) => Ok((**d).clone()),
         _ => Err(format!("argument {} must be a dict", i + 1)),
@@ -10516,7 +10527,7 @@ fn u32_to_ip(v: u32) -> String {
     )
 }
 
-fn layer_bytes(layer: &ahash::AHashMap<String, Value>) -> Result<Vec<u8>, String> {
+fn layer_bytes(layer: &indexmap::IndexMap<String, Value>) -> Result<Vec<u8>, String> {
     match layer.get("type") {
         Some(Value::String(t)) if t == "Raw" => match layer.get("data") {
             Some(Value::String(d)) => Ok(d.as_bytes().to_vec()),
@@ -11106,7 +11117,7 @@ fn dns_query_impl(name: &str, rtype: &str) -> Result<Vec<Value>, String> {
             _ => hexlify(rdata),
         };
         pos += rdlen;
-        let mut rec = ahash::AHashMap::new();
+        let mut rec = indexmap::IndexMap::new();
         rec.insert("name".into(), Value::String(rname));
         rec.insert("type".into(), Value::String(dns_type_name(rtype).into()));
         rec.insert("ttl".into(), Value::Number(ttl as f64));
@@ -11128,7 +11139,7 @@ fn parse_packet(data: &[u8]) -> Value {
     let dst = u32_to_ip(u32::from_be_bytes([data[16], data[17], data[18], data[19]]));
     let proto = data[9];
     let payload = &data[ihl..];
-    let mut ip_layer = ahash::AHashMap::new();
+    let mut ip_layer = indexmap::IndexMap::new();
     ip_layer.insert("type".into(), Value::String("IP".into()));
     ip_layer.insert("src".into(), Value::String(src));
     ip_layer.insert("dst".into(), Value::String(dst));
@@ -11144,7 +11155,7 @@ fn parse_packet(data: &[u8]) -> Value {
                 let ack = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]) as f64;
                 let flags = payload[13];
                 let data_offset = ((payload[12] >> 4) as usize) * 4;
-                let mut tcp_layer = ahash::AHashMap::new();
+                let mut tcp_layer = indexmap::IndexMap::new();
                 tcp_layer.insert("type".into(), Value::String("TCP".into()));
                 tcp_layer.insert("sport".into(), Value::Number(sport));
                 tcp_layer.insert("dport".into(), Value::Number(dport));
@@ -11167,7 +11178,7 @@ fn parse_packet(data: &[u8]) -> Value {
             } else {
                 let sport = u16::from_be_bytes([payload[0], payload[1]]) as f64;
                 let dport = u16::from_be_bytes([payload[2], payload[3]]) as f64;
-                let mut udp_layer = ahash::AHashMap::new();
+                let mut udp_layer = indexmap::IndexMap::new();
                 udp_layer.insert("type".into(), Value::String("UDP".into()));
                 udp_layer.insert("sport".into(), Value::Number(sport));
                 udp_layer.insert("dport".into(), Value::Number(dport));
@@ -11185,7 +11196,7 @@ fn parse_packet(data: &[u8]) -> Value {
             if payload.is_empty() {
                 Value::Null
             } else {
-                let mut icmp_layer = ahash::AHashMap::new();
+                let mut icmp_layer = indexmap::IndexMap::new();
                 icmp_layer.insert("type".into(), Value::String("ICMP".into()));
                 icmp_layer.insert("icmp_type".into(), Value::Number(payload[0] as f64));
                 icmp_layer.insert("icmp_code".into(), Value::Number(payload[1] as f64));
@@ -11201,7 +11212,7 @@ fn parse_packet(data: &[u8]) -> Value {
         _ => {
             ip_layer.insert("proto".into(), Value::Number(proto as f64));
             if !payload.is_empty() {
-                let mut raw = ahash::AHashMap::new();
+                let mut raw = indexmap::IndexMap::new();
                 raw.insert("type".into(), Value::String("Raw".into()));
                 raw.insert("data".into(), Value::String(hexlify(payload)));
                 Value::Dict(Arc::new(raw))
@@ -11261,6 +11272,674 @@ fn sniff_packets(count: u32, timeout_secs: u64) -> Result<Value, String> {
     }
     unsafe { libc::close(fd) };
     Ok(Value::List(Arc::new(packets)))
+}
+
+fn mac_to_bytes(mac: &str) -> Result<[u8; 6], String> {
+    let mut out = [0u8; 6];
+    let parts: Vec<&str> = mac.split(':').collect();
+    if parts.len() != 6 {
+        return Err(format!("bad MAC address: {mac}"));
+    }
+    for (i, p) in parts.iter().enumerate() {
+        out[i] = u8::from_str_radix(p, 16).map_err(|_| format!("bad MAC address: {mac}"))?;
+    }
+    Ok(out)
+}
+
+fn bytes_to_mac(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(":")
+}
+
+fn local_mac(iface: Option<&str>) -> String {
+    // Prefer the requested interface, else the default route interface.
+    let ifname = iface.map(str::to_string).unwrap_or_else(|| default_route_iface());
+    let path = format!("/sys/class/net/{ifname}/address");
+    if let Ok(content) = fs::read_to_string(&path) {
+        return content.trim().to_string();
+    }
+    "00:00:00:00:00:00".into()
+}
+
+fn local_ip(iface: Option<&str>) -> String {
+    let ifname = iface.map(str::to_string).unwrap_or_else(|| default_route_iface());
+    if let Some(ip) = iface_ipv4(&ifname) {
+        return ip;
+    }
+    // fallback: first IPv4 address on any interface
+    if let Ok(ig) = get_if_addrs::get_if_addrs() {
+        for i in ig {
+            if i.addr.ip().is_ipv4() {
+                return i.addr.ip().to_string();
+            }
+        }
+    }
+    "127.0.0.1".into()
+}
+
+fn iface_ipv4(ifname: &str) -> Option<String> {
+    let ig = get_if_addrs::get_if_addrs().ok()?;
+    ig.into_iter()
+        .find(|i| i.name == ifname && i.addr.ip().is_ipv4())
+        .map(|i| i.addr.ip().to_string())
+}
+
+fn default_route_iface() -> String {
+    if let Ok(route) = fs::read_to_string("/proc/net/route") {
+        for line in route.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 3 && fields[1] == "00000000" {
+                return fields[0].to_string();
+            }
+        }
+    }
+    "eth0".into()
+}
+
+fn scapy_ports_from_args(args: &[Value], i: usize) -> Result<Vec<u16>, String> {
+    let mut ports = Vec::new();
+    match args.get(i) {
+        Some(Value::String(s)) => {
+            for part in s.split(',') {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                if let Some((a, b)) = part.split_once('-') {
+                    let lo: u16 = a.trim().parse().map_err(|_| format!("bad port range: {part}"))?;
+                    let hi: u16 = b.trim().parse().map_err(|_| format!("bad port range: {part}"))?;
+                    for p in lo..=hi {
+                        if p != 0 {
+                            ports.push(p);
+                        }
+                    }
+                } else {
+                    let p: u16 = part.parse().map_err(|_| format!("bad port: {part}"))?;
+                    if p != 0 {
+                        ports.push(p);
+                    }
+                }
+            }
+        }
+        Some(Value::List(l)) => {
+            for v in l.iter() {
+                if let Value::Number(n) = v {
+                    let p = *n as u16;
+                    if p != 0 {
+                        ports.push(p);
+                    }
+                }
+            }
+        }
+        Some(Value::Number(n)) => {
+            let p = *n as u16;
+            if p != 0 {
+                ports.push(p);
+            }
+        }
+        _ => {
+            for i in 1..=1024 {
+                ports.push(i as u16);
+            }
+        }
+    }
+    if ports.is_empty() {
+        return Err("no ports specified".into());
+    }
+    Ok(ports)
+}
+
+fn build_arp_frame(psrc: &str, pdst: &str, op: u16, hwsrc: &str, hwdst: &str, is_request: bool) -> Result<Vec<u8>, String> {
+    let mut frame = Vec::with_capacity(42);
+    // Ethernet header
+    let dst_mac = mac_to_bytes(if is_request { "ff:ff:ff:ff:ff:ff" } else { hwdst })?;
+    let src_mac = mac_to_bytes(hwsrc)?;
+    frame.extend_from_slice(&dst_mac);
+    frame.extend_from_slice(&src_mac);
+    frame.extend_from_slice(&[0x08, 0x06]); // ARP ethertype
+    // ARP header
+    frame.extend_from_slice(&[0x00, 0x01]); // htype Ethernet
+    frame.extend_from_slice(&[0x08, 0x00]); // ptype IPv4
+    frame.extend_from_slice(&[0x06, 0x04]); // hlen 6, plen 4
+    frame.extend_from_slice(&op.to_be_bytes()); // op
+    frame.extend_from_slice(&src_mac);
+    frame.extend_from_slice(&ip_str_to_u32(psrc)?.to_be_bytes());
+    let target_mac = if is_request { [0u8; 6] } else { mac_to_bytes(hwdst)? };
+    frame.extend_from_slice(&target_mac);
+    frame.extend_from_slice(&ip_str_to_u32(pdst)?.to_be_bytes());
+    Ok(frame)
+}
+
+fn open_l2_raw() -> Result<libc::c_int, String> {
+    let fd = unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW, (libc::ETH_P_ALL as u16).to_be() as libc::c_int) };
+    if fd < 0 {
+        return Err("raw L2 socket (AF_PACKET) requires root / CAP_NET_RAW; run with sudo".into());
+    }
+    Ok(fd)
+}
+
+fn bind_l2(fd: libc::c_int, iface: &str) -> Result<(), String> {
+    unsafe {
+        let mut index: libc::c_int = libc::if_nametoindex(std::ffi::CString::new(iface).unwrap().as_ptr()) as libc::c_int;
+        if index == 0 {
+            index = default_ifindex();
+        }
+        let sa = libc::sockaddr_ll {
+            sll_family: libc::AF_PACKET as u16,
+            sll_protocol: (libc::ETH_P_ALL as u16).to_be(),
+            sll_ifindex: index,
+            sll_hatype: 0,
+            sll_pkttype: 0,
+            sll_halen: 0,
+            sll_addr: [0u8; 8],
+        };
+        if libc::bind(fd, &sa as *const _ as *const libc::sockaddr, std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t) < 0 {
+            return Err(format!("bind to interface {iface} failed"));
+        }
+    }
+    Ok(())
+}
+
+fn default_ifindex() -> libc::c_int {
+    unsafe { libc::if_nametoindex(std::ffi::CString::new(default_route_iface()).unwrap().as_ptr()) as libc::c_int }
+}
+
+// Generate a random 16-bit source port
+fn random_sport() -> u16 {
+    use rand::Rng;
+    rand::rng().random_range(32768..=60999) as u16
+}
+
+// Build a TCP SYN packet (IPv4) for the given host:port with our src ip/mac
+fn build_syn(dst_ip: &str, dport: u16, sport: u16, seq: u32, src_ip: &str) -> Vec<u8> {
+    let mut tcp = Vec::with_capacity(20);
+    tcp.extend_from_slice(&sport.to_be_bytes());
+    tcp.extend_from_slice(&dport.to_be_bytes());
+    tcp.extend_from_slice(&seq.to_be_bytes());
+    tcp.extend_from_slice(&0u32.to_be_bytes()); // ack 0
+    tcp.push(0x50); // data offset 5
+    tcp.push(0x02); // SYN
+    tcp.extend_from_slice(&0xffffu16.to_be_bytes()); // window
+    tcp.extend_from_slice(&[0, 0]); // checksum placeholder
+    tcp.extend_from_slice(&[0, 0]); // urgent
+    // TCP pseudo-header checksum
+    let mut pseudo = Vec::new();
+    pseudo.extend_from_slice(&ip_str_to_u32(src_ip).unwrap().to_be_bytes());
+    pseudo.extend_from_slice(&ip_str_to_u32(dst_ip).unwrap().to_be_bytes());
+    pseudo.push(0);
+    pseudo.push(6);
+    pseudo.extend_from_slice(&20u16.to_be_bytes());
+    pseudo.extend_from_slice(&tcp);
+    let csum = internet_checksum(&pseudo);
+    tcp[16] = (csum >> 8) as u8;
+    tcp[17] = (csum & 0xff) as u8;
+    // IP header
+    let mut ip = Vec::with_capacity(20);
+    ip.push(0x45);
+    ip.push(0);
+    ip.extend_from_slice(&40u16.to_be_bytes()); // total len 20+20
+    ip.extend_from_slice(&rand::random::<u16>().to_be_bytes()); // id
+    ip.extend_from_slice(&[0x40, 0]); // flags+offset
+    ip.push(64); // ttl
+    ip.push(6); // tcp
+    ip.extend_from_slice(&[0, 0]); // checksum
+    ip.extend_from_slice(&ip_str_to_u32(src_ip).unwrap().to_be_bytes());
+    ip.extend_from_slice(&ip_str_to_u32(dst_ip).unwrap().to_be_bytes());
+    let ip_csum = internet_checksum(&ip);
+    ip[10] = (ip_csum >> 8) as u8;
+    ip[11] = (ip_csum & 0xff) as u8;
+    ip.extend_from_slice(&tcp);
+    ip
+}
+
+fn scapy_sendp(args: &[Value]) -> Result<Value, String> {
+    // send an Ethernet+ARP frame at layer 2 for discovery; configured iface optional
+    let is_root = unsafe { libc::geteuid() == 0 };
+    if !is_root {
+        return Err("scapy.sendp requires root (ARP needs layer-2 raw sockets). Run with: sudo zen".into());
+    }
+    let iface = args.get(2).and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None })
+        .unwrap_or_else(default_route_iface);
+    let psrc = arg_string(args, 0)?;
+    let pdst = arg_string(args, 1)?;
+    let hwsrc = local_mac(Some(&iface));
+    let fd = open_l2_raw()?;
+    bind_l2(fd, &iface)?;
+    let frame = build_arp_frame(&psrc, &pdst, 1, &hwsrc, "00:00:00:00:00:00", true)?;
+    let n = unsafe { libc::send(fd, frame.as_ptr() as *const libc::c_void, frame.len(), 0) };
+    unsafe { libc::close(fd) };
+    if n < 0 {
+        return Err(format!("scapy.sendp failed: {}", std::io::Error::last_os_error()));
+    }
+    Ok(Value::Bool(true))
+}
+
+fn scapy_sr1(args: &[Value], timeout_ms: u64, iface: Option<String>) -> Result<Value, String> {
+    // Send an IPv4 packet (dict or byte list) via IPPROTO_RAW, sniff one reply, parse it.
+    let is_root = unsafe { libc::geteuid() == 0 };
+    if !is_root {
+        return Err("scapy.sr1 requires root. Run with: sudo zen".into());
+    }
+    let bytes: Vec<u8> = match args.first() {
+        Some(Value::Dict(_)) => layer_bytes(&arg_dict(args, 0)?)?,
+        Some(Value::List(l)) => {
+            let mut v = Vec::new();
+            for item in l.iter().cloned() {
+                match item {
+                    Value::Number(n) => v.push(n as u8),
+                    _ => return Err("scapy.sr1 expects packet dict or byte list".into()),
+                }
+            }
+            v
+        }
+        _ => return Err("scapy.sr1 expects a packet dict or byte list".into()),
+    };
+    if bytes.len() < 20 {
+        return Err("scapy.sr1 packet too short".into());
+    }
+    let dst = std::net::Ipv4Addr::from([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    // Send via IPPROTO_RAW (Kernel will not add ip hdr since IP_HDRINCL)
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW) };
+    if fd < 0 {
+        return Err("scapy.sr1: could not open raw socket".into());
+    }
+    let on: libc::c_int = 1;
+    unsafe {
+        libc::setsockopt(fd, libc::IPPROTO_IP, libc::IP_HDRINCL, &on as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+    }
+    let sa = std::net::SocketAddr::new(std::net::IpAddr::V4(dst), 0);
+    let n = unsafe {
+        libc::sendto(fd, bytes.as_ptr() as *const libc::c_void, bytes.len(), 0,
+            &sa as *const _ as *const libc::sockaddr, std::mem::size_of::<std::net::SocketAddr>() as libc::socklen_t)
+    };
+    unsafe { libc::close(fd) };
+    if n < 0 {
+        return Err(format!("scapy.sr1 send failed: {}", std::io::Error::last_os_error()));
+    }
+    // Now sniff on AF_PACKET for a reply (any IP packet from the dst)
+    let l2 = open_l2_raw()?;
+    let tv = libc::timeval { tv_sec: (timeout_ms / 1000) as libc::time_t, tv_usec: ((timeout_ms % 1000) * 1000) as libc::suseconds_t };
+    unsafe {
+        libc::setsockopt(l2, libc::SOL_SOCKET, libc::SO_RCVTIMEO, &tv as *const _ as *const libc::c_void, std::mem::size_of::<libc::timeval>() as libc::socklen_t);
+    }
+    let mut buf = [0u8; 65535];
+    let deadline = std::time::SystemTime::now() + std::time::Duration::from_millis(timeout_ms);
+    let daddr = bytes[16..20].to_vec();
+    let mut reply = Value::Null;
+    while std::time::SystemTime::now() < deadline {
+        let nn = unsafe { libc::recv(l2, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+        if nn < 0 {
+            break;
+        }
+        let frame = &buf[..nn as usize];
+        if frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00 {
+            let pkt = parse_packet(&frame[14..]);
+            if let Value::Dict(d) = &pkt {
+                // match source ip equals our destination
+                if let Some(Value::String(s)) = d.get("src") {
+                    if s.as_bytes() == daddr.as_slice() {
+                        reply = pkt;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    unsafe { libc::close(l2) };
+    Ok(reply)
+}
+
+fn scapy_srp1(args: &[Value], timeout_ms: u64, iface: Option<String>) -> Result<Value, String> {
+    // Send an Ethernet+ARP frame, sniff for the ARP reply. args: (psrc,pdst,[op],[iface])
+    let is_root = unsafe { libc::geteuid() == 0 };
+    if !is_root {
+        return Err("scapy.srp1 requires root. Run with: sudo zen".into());
+    }
+    let ifname = iface.unwrap_or_else(default_route_iface);
+    let psrc = arg_string(args, 0)?;
+    let pdst = arg_string(args, 1)?;
+    let hwsrc = local_mac(Some(&ifname));
+    let fd = open_l2_raw()?;
+    bind_l2(fd, &ifname)?;
+    let frame = build_arp_frame(&psrc, &pdst, 1, &hwsrc, "00:00:00:00:00:00", true)?;
+    let n = unsafe { libc::send(fd, frame.as_ptr() as *const libc::c_void, frame.len(), 0) };
+    if n < 0 {
+        unsafe { libc::close(fd) };
+        return Err(format!("scapy.srp1 send failed: {}", std::io::Error::last_os_error()));
+    }
+    let tv = libc::timeval { tv_sec: (timeout_ms / 1000) as libc::time_t, tv_usec: ((timeout_ms % 1000) * 1000) as libc::suseconds_t };
+    unsafe {
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVTIMEO, &tv as *const _ as *const libc::c_void, std::mem::size_of::<libc::timeval>() as libc::socklen_t);
+    }
+    let mut buf = [0u8; 65535];
+    let deadline = std::time::SystemTime::now() + std::time::Duration::from_millis(timeout_ms);
+    let pdst_bytes = ip_str_to_u32(&pdst)?;
+    let mut reply = Value::Null;
+    while std::time::SystemTime::now() < deadline {
+        let nn = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+        if nn < 0 {
+            break;
+        }
+        let frame = &buf[..nn as usize];
+        // ARP reply ethertype 0x0806, op 2, sender protocol addr matches pdst
+        if frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 && frame[21] == 0x02 {
+            let spa = u32::from_be_bytes([frame[28], frame[29], frame[30], frame[31]]);
+            if spa == pdst_bytes {
+                let mac = bytes_to_mac(&frame[22..28]);
+                let r = indexmap::IndexMap::from([
+                    ("mac".into(), Value::String(mac)),
+                    ("ip".into(), Value::String(pdst)),
+                ]);
+                reply = Value::Dict(Arc::new(r));
+                break;
+            }
+        }
+    }
+    unsafe { libc::close(fd) };
+    Ok(reply)
+}
+
+fn scapy_syn_scan(host: &str, ports: Vec<u16>, timeout_ms: u64, sport_offset: u16, iface: Option<String>) -> Result<Value, String> {
+    let is_root = unsafe { libc::geteuid() == 0 };
+    if !is_root {
+        return Err("scapy.syn_scan requires root. Run with: sudo zen".into());
+    }
+    let ifname = iface.unwrap_or_else(default_route_iface);
+    let src_ip = local_ip(Some(&ifname));
+    // Send SYNs for all ports
+    let send_fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW) };
+    if send_fd < 0 {
+        return Err("scapy.syn_scan: could not open send raw socket".into());
+    }
+    let on: libc::c_int = 1;
+    unsafe {
+        libc::setsockopt(send_fd, libc::IPPROTO_IP, libc::IP_HDRINCL, &on as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+    }
+    use std::net::ToSocketAddrs;
+    let target_ip = match format!("{host}:0").to_socket_addrs().ok().and_then(|mut a| a.next()) {
+        Some(sa) => sa.ip().to_string(),
+        None => return Err(format!("scapy.syn_scan: could not resolve host '{host}'")),
+    };
+    let sa = std::net::SocketAddr::new(target_ip.parse::<std::net::IpAddr>().unwrap(), 0);
+    let mut seq = 100000u32;
+    let mut sport = 40000u16 + sport_offset % 20000;
+    for port in &ports {
+        let pkt = build_syn(&target_ip, *port, sport, seq, &src_ip);
+        seq = seq.wrapping_add(1);
+        sport = sport.wrapping_add(1);
+        if sport < 40000 || sport > 60000 { sport = 40000; }
+        unsafe {
+            libc::sendto(send_fd, pkt.as_ptr() as *const libc::c_void, pkt.len(), 0,
+                &sa as *const _ as *const libc::sockaddr, std::mem::size_of::<std::net::SocketAddr>() as libc::socklen_t);
+        }
+    }
+    unsafe { libc::close(send_fd) };
+    // Sniff responses, classifying open (SYN-ACK) vs closed (RST)
+    let l2 = open_l2_raw()?;
+    let tv = libc::timeval { tv_sec: (timeout_ms / 1000) as libc::time_t, tv_usec: ((timeout_ms % 1000) * 1000) as libc::suseconds_t };
+    unsafe {
+        libc::setsockopt(l2, libc::SOL_SOCKET, libc::SO_RCVTIMEO, &tv as *const _ as *const libc::c_void, std::mem::size_of::<libc::timeval>() as libc::socklen_t);
+    }
+    let target_bytes = ip_str_to_u32(&target_ip)?;
+    let mut open_ports: Vec<u16> = Vec::new();
+    let mut closed_ports: Vec<u16> = Vec::new();
+    let mut buf = [0u8; 65535];
+    let deadline = std::time::SystemTime::now() + std::time::Duration::from_millis(timeout_ms);
+    while std::time::SystemTime::now() < deadline {
+        let nn = unsafe { libc::recv(l2, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+        if nn < 0 {
+            break;
+        }
+        let frame = &buf[..nn as usize];
+        if frame.len() < 54 || frame[12] != 0x08 || frame[13] != 0x00 {
+            continue;
+        }
+        let ip = &frame[14..];
+        if ip.len() < 40 || ip[9] != 6 {
+            continue;
+        }
+        let src = u32::from_be_bytes([ip[12], ip[13], ip[14], ip[15]]);
+        if src != target_bytes {
+            continue;
+        }
+        let ihl = ((ip[0] & 0x0f) as usize) * 4;
+        let tcp = &ip[ihl..];
+        if tcp.len() < 20 {
+            continue;
+        }
+        let dport = u16::from_be_bytes([tcp[2], tcp[3]]);
+        let flags = tcp[13];
+        // SYN-ACK (0x12) -> open ; RST (0x04) -> closed
+        if flags & 0x02 != 0 && flags & 0x10 != 0 {
+            if !open_ports.contains(&dport) {
+                open_ports.push(dport);
+            }
+        } else if flags & 0x04 != 0 {
+            if !closed_ports.contains(&dport) {
+                closed_ports.push(dport);
+            }
+        }
+    }
+    unsafe { libc::close(l2) };
+    open_ports.sort_unstable();
+    closed_ports.sort_unstable();
+    let open: Vec<Value> = open_ports.iter().map(|p| Value::Number(*p as f64)).collect();
+    let closed: Vec<Value> = closed_ports.iter().map(|p| Value::Number(*p as f64)).collect();
+    // unclassified = requested ports not seen
+    let seen: Vec<u16> = open_ports.iter().chain(closed_ports.iter()).copied().collect();
+    let mut filtered: Vec<u16> = ports.iter().copied().filter(|p| !seen.contains(p)).collect();
+    filtered.sort_unstable();
+    let filtered: Vec<Value> = filtered.iter().map(|p| Value::Number(*p as f64)).collect();
+    let mut res = indexmap::IndexMap::new();
+    res.insert("open".into(), Value::List(Arc::new(open)));
+    res.insert("closed".into(), Value::List(Arc::new(closed)));
+    res.insert("filtered".into(), Value::List(Arc::new(filtered)));
+    Ok(Value::Dict(Arc::new(res)))
+}
+
+fn scapy_handshake(host: &str, port: u16, sport: u16, timeout_ms: u64, iface: Option<String>) -> Result<Value, String> {
+    // Perform a full TCP 3-way handshake over raw sockets. Returns dict with ok + remote seq/ack.
+    let is_root = unsafe { libc::geteuid() == 0 };
+    if !is_root {
+        return Err("scapy.handshake requires root. Run with: sudo zen".into());
+    }
+    let ifname = iface.unwrap_or_else(default_route_iface);
+    let src_ip = local_ip(Some(&ifname));
+    use std::net::ToSocketAddrs;
+    let target_ip = match format!("{host}:0").to_socket_addrs().ok().and_then(|mut a| a.next()) {
+        Some(sa) => sa.ip().to_string(),
+        None => return Err(format!("scapy.handshake: could not resolve host '{host}'")),
+    };
+    let local_seq: u32 = rand::random();
+    let send_fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW) };
+    if send_fd < 0 {
+        return Err("scapy.handshake: could not open send raw socket".into());
+    }
+    let on: libc::c_int = 1;
+    unsafe {
+        libc::setsockopt(send_fd, libc::IPPROTO_IP, libc::IP_HDRINCL, &on as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+    }
+    let sa = std::net::SocketAddr::new(target_ip.parse::<std::net::IpAddr>().unwrap(), 0);
+    let syn = build_syn(&target_ip, port, sport, local_seq, &src_ip);
+    unsafe {
+        libc::sendto(send_fd, syn.as_ptr() as *const libc::c_void, syn.len(), 0,
+            &sa as *const _ as *const libc::sockaddr, std::mem::size_of::<std::net::SocketAddr>() as libc::socklen_t);
+    }
+    // sniff for SYN-ACK from the target sport==port, dport==sport
+    let l2 = open_l2_raw()?;
+    let tv = libc::timeval { tv_sec: (timeout_ms / 1000) as libc::time_t, tv_usec: ((timeout_ms % 1000) * 1000) as libc::suseconds_t };
+    unsafe {
+        libc::setsockopt(l2, libc::SOL_SOCKET, libc::SO_RCVTIMEO, &tv as *const _ as *const libc::c_void, std::mem::size_of::<libc::timeval>() as libc::socklen_t);
+    }
+    let target_bytes = ip_str_to_u32(&target_ip)?;
+    let mut buf = [0u8; 65535];
+    let deadline = std::time::SystemTime::now() + std::time::Duration::from_millis(timeout_ms);
+    let mut remote_seq: Option<u32> = None;
+    let mut synack: Option<Vec<u8>> = None;
+    while std::time::SystemTime::now() < deadline {
+        let nn = unsafe { libc::recv(l2, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+        if nn < 0 {
+            break;
+        }
+        let frame = &buf[..nn as usize];
+        if frame.len() < 54 || frame[12] != 0x08 || frame[13] != 0x00 {
+            continue;
+        }
+        let ip = &frame[14..];
+        if ip.len() < 40 || ip[9] != 6 {
+            continue;
+        }
+        let src = u32::from_be_bytes([ip[12], ip[13], ip[14], ip[15]]);
+        if src != target_bytes {
+            continue;
+        }
+        let ihl = ((ip[0] & 0x0f) as usize) * 4;
+        let tcp = &ip[ihl..];
+        if tcp.len() < 20 {
+            continue;
+        }
+        let tcp_sport = u16::from_be_bytes([tcp[0], tcp[1]]);
+        let tcp_dport = u16::from_be_bytes([tcp[2], tcp[3]]);
+        let flags = tcp[13];
+        if tcp_sport == port && tcp_dport == sport && flags & 0x12 == 0x12 {
+            remote_seq = Some(u32::from_be_bytes([tcp[4], tcp[5], tcp[6], tcp[7]]));
+            synack = Some(tcp.to_vec());
+            break;
+        }
+    }
+    unsafe { libc::close(l2) };
+    match remote_seq {
+        Some(rseq) => {
+            // Send ACK to complete handshake
+            let ack_seq = rseq.wrapping_add(1);
+            let mut tcp = Vec::with_capacity(20);
+            tcp.extend_from_slice(&sport.to_be_bytes());
+            tcp.extend_from_slice(&port.to_be_bytes());
+            tcp.extend_from_slice(&(local_seq.wrapping_add(1)).to_be_bytes());
+            tcp.extend_from_slice(&ack_seq.to_be_bytes());
+            tcp.push(0x50);
+            tcp.push(0x10); // ACK
+            tcp.extend_from_slice(&0xffffu16.to_be_bytes());
+            tcp.extend_from_slice(&[0, 0]);
+            tcp.extend_from_slice(&[0, 0]);
+            let mut pseudo = Vec::new();
+            pseudo.extend_from_slice(&ip_str_to_u32(&src_ip).unwrap().to_be_bytes());
+            pseudo.extend_from_slice(&ip_str_to_u32(&target_ip).unwrap().to_be_bytes());
+            pseudo.push(0);
+            pseudo.push(6);
+            pseudo.extend_from_slice(&20u16.to_be_bytes());
+            pseudo.extend_from_slice(&tcp);
+            let csum = internet_checksum(&pseudo);
+            tcp[16] = (csum >> 8) as u8;
+            tcp[17] = (csum & 0xff) as u8;
+            let mut ip = Vec::with_capacity(20);
+            ip.push(0x45);
+            ip.push(0);
+            ip.extend_from_slice(&40u16.to_be_bytes());
+            ip.extend_from_slice(&rand::random::<u16>().to_be_bytes());
+            ip.extend_from_slice(&[0x40, 0]);
+            ip.push(64);
+            ip.push(6);
+            ip.extend_from_slice(&[0, 0]);
+            ip.extend_from_slice(&ip_str_to_u32(&src_ip).unwrap().to_be_bytes());
+            ip.extend_from_slice(&ip_str_to_u32(&target_ip).unwrap().to_be_bytes());
+            let ic = internet_checksum(&ip);
+            ip[10] = (ic >> 8) as u8;
+            ip[11] = (ic & 0xff) as u8;
+            ip.extend_from_slice(&tcp);
+            unsafe {
+                libc::sendto(send_fd, ip.as_ptr() as *const libc::c_void, ip.len(), 0,
+                    &sa as *const _ as *const libc::sockaddr, std::mem::size_of::<std::net::SocketAddr>() as libc::socklen_t);
+            }
+            unsafe { libc::close(send_fd) };
+            let mut res = indexmap::IndexMap::new();
+            res.insert("ok".into(), Value::Bool(true));
+            res.insert("seq".into(), Value::Number(ack_seq as f64));
+            Ok(Value::Dict(Arc::new(res)))
+        }
+        None => {
+            unsafe { libc::close(send_fd) };
+            let mut res = indexmap::IndexMap::new();
+            res.insert("ok".into(), Value::Bool(false));
+            res.insert("seq".into(), Value::Number(local_seq as f64));
+            Ok(Value::Dict(Arc::new(res)))
+        }
+    }
+}
+
+fn scapy_arp_scan(cidr: &str, timeout_ms: u64, iface: Option<String>) -> Result<Value, String> {
+    let is_root = unsafe { libc::geteuid() == 0 };
+    if !is_root {
+        return Err("scapy.arp_scan requires root (ARP sends need layer-2 raw sockets). Run with: sudo zen".into());
+    }
+    let ifname = iface.unwrap_or_else(default_route_iface);
+    let src_ip = local_ip(Some(&ifname));
+    let src_mac = local_mac(Some(&ifname));
+    let hosts = scapy_cidr_hosts(cidr)?;
+    let fd = open_l2_raw()?;
+    bind_l2(fd, &ifname)?;
+    // Send ARP requests for all hosts
+    for h in &hosts {
+        if let Ok(frame) = build_arp_frame(&src_ip, h, 1, &src_mac, "00:00:00:00:00:00", true) {
+            unsafe {
+                libc::send(fd, frame.as_ptr() as *const libc::c_void, frame.len(), 0);
+            }
+        }
+    }
+    let tv = libc::timeval { tv_sec: (timeout_ms / 1000) as libc::time_t, tv_usec: ((timeout_ms % 1000) * 1000) as libc::suseconds_t };
+    unsafe {
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVTIMEO, &tv as *const _ as *const libc::c_void, std::mem::size_of::<libc::timeval>() as libc::socklen_t);
+    }
+    let mut found: Vec<Value> = Vec::new();
+    let mut buf = [0u8; 65535];
+    let deadline = std::time::SystemTime::now() + std::time::Duration::from_millis(timeout_ms);
+    while std::time::SystemTime::now() < deadline {
+        let nn = unsafe { libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
+        if nn < 0 {
+            break;
+        }
+        let frame = &buf[..nn as usize];
+        if frame.len() < 42 || frame[12] != 0x08 || frame[13] != 0x06 || frame[21] != 0x02 {
+            continue;
+        }
+        let spa = u32::from_be_bytes([frame[28], frame[29], frame[30], frame[31]]);
+        let ip = u32_to_ip(spa);
+        let mac = bytes_to_mac(&frame[22..28]);
+        if !found.iter().any(|v| matches!(&v, Value::Dict(d) if d.get("ip") == Some(&Value::String(ip)))) {
+            let mut r = indexmap::IndexMap::new();
+            r.insert("ip".into(), Value::String(ip));
+            r.insert("mac".into(), Value::String(mac));
+            found.push(Value::Dict(Arc::new(r)));
+        }
+    }
+    unsafe { libc::close(fd) };
+    Ok(Value::List(Arc::new(found)))
+}
+
+fn scapy_cidr_hosts(cidr: &str) -> Result<Vec<String>, String> {
+    let (ip_part, prefix_part) = match cidr.split_once('/') {
+        Some(p) => p,
+        None => return Err(format!("scapy.arp_scan expects a CIDR like 192.168.1.0/24, got: {cidr}")),
+    };
+    let prefix: u32 = prefix_part.trim().parse().map_err(|_| format!("bad prefix length: {prefix_part}"))?;
+    if prefix > 32 {
+        return Err(format!("prefix length must be 0-32, got: {prefix}"));
+    }
+    let base = ip_str_to_u32(ip_part)?;
+    let mask: u32 = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
+    let network = base & mask;
+    let count: u64 = 1 << (32 - prefix);
+    let mut out = Vec::with_capacity(count.min(1_048_576) as usize);
+    for i in 0..count {
+        let ip = u32_to_ip(network.wrapping_add(i as u32));
+        if !out.is_empty() && out.contains(&ip) {
+            continue;
+        }
+        out.push(ip);
+        if out.len() >= 1_048_576 {
+            break;
+        }
+    }
+    Ok(out)
 }
 
 fn pack_value(values: &[Value], vi: &mut usize) -> Result<f64, String> {
@@ -11678,7 +12357,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .map_err(|e| format!("failed to recv_from: {e}"))?;
             let data = buf[..n].to_vec();
             let bytes: Vec<Value> = data.iter().map(|b| Value::Number(*b as f64)).collect();
-            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
+            Ok(Value::Dict(Arc::new(indexmap::IndexMap::from([
                 ("data".into(), Value::List(Arc::new(bytes))),
                 ("addr".into(), Value::String(addr.to_string())),
                 ("text".into(), Value::String(String::from_utf8_lossy(&data).into_owned())),
@@ -12436,7 +13115,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .map_err(|e| format!("os.execute failed: {e}"))?;
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let mut result = ahash::AHashMap::new();
+            let mut result = indexmap::IndexMap::new();
             result.insert("ok".into(), Value::Bool(output.status.success()));
             result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
             result.insert("stdout".into(), Value::String(stdout));
@@ -12474,7 +13153,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .stdin(process::Stdio::null())
                 .output()
                 .map_err(|e| format!("os.popen failed: {e}"))?;
-            let mut result = ahash::AHashMap::new();
+            let mut result = indexmap::IndexMap::new();
             result.insert("ok".into(), Value::Bool(output.status.success()));
             result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
             result.insert("stdout".into(), Value::String(String::from_utf8_lossy(&output.stdout).to_string()));
@@ -13086,13 +13765,13 @@ fn native_for(name: &str) -> NativeFunc {
                 Some(Value::String(s)) => s.clone(),
                 _ => return Err("decimal.Decimal expects a number".into()),
             };
-            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
+            Ok(Value::Dict(Arc::new(indexmap::IndexMap::from([
                 ("value".into(), Value::String(v.clone())),
                 ("__repr__".into(), Value::String(format!("Decimal({v})"))),
             ]))))
         },
         "decimal_getcontext" => |_| {
-            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
+            Ok(Value::Dict(Arc::new(indexmap::IndexMap::from([
                 ("prec".into(), Value::Number(28.0)),
                 ("rounding".into(), Value::String("ROUND_HALF_EVEN".into())),
             ]))))
@@ -13123,7 +13802,7 @@ fn native_for(name: &str) -> NativeFunc {
             if let Ok(mut joins) = thread_joins().lock() {
                 joins.insert(id.clone(), handle);
             }
-            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
+            Ok(Value::Dict(Arc::new(indexmap::IndexMap::from([
                 ("name".into(), Value::String(format!("Thread-{name}"))),
                 ("id".into(), Value::String(id)),
                 ("daemon".into(), Value::Bool(true)),
@@ -13198,7 +13877,7 @@ fn native_for(name: &str) -> NativeFunc {
                     match listener.lock().unwrap().accept() {
                         Ok((stream, addr)) => {
                             stream.set_nonblocking(false).ok();
-                            let mut result = ahash::AHashMap::new();
+                            let mut result = indexmap::IndexMap::new();
                             result.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
                             result.insert("addr".into(), Value::String(addr.to_string()));
                             return Ok(Value::Dict(Arc::new(result)));
@@ -13215,7 +13894,7 @@ fn native_for(name: &str) -> NativeFunc {
             }
             let (stream, addr) = listener.lock().unwrap().accept()
                 .map_err(|e| format!("accept error: {e}"))?;
-            let mut result = ahash::AHashMap::new();
+            let mut result = indexmap::IndexMap::new();
             result.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             result.insert("addr".into(), Value::String(addr.to_string()));
             Ok(Value::Dict(Arc::new(result)))
@@ -13244,7 +13923,7 @@ fn native_for(name: &str) -> NativeFunc {
             if code != 220 {
                 return Err(format!("ftp: server refused connection ({code}): {reply}"));
             }
-            let mut session = ahash::AHashMap::new();
+            let mut session = indexmap::IndexMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             Ok(Value::Dict(Arc::new(session)))
@@ -13460,7 +14139,7 @@ fn native_for(name: &str) -> NativeFunc {
             if code != 250 {
                 return Err(format!("smtp ehlo failed ({code}): {reply}"));
             }
-            let mut session = ahash::AHashMap::new();
+            let mut session = indexmap::IndexMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             Ok(Value::Dict(Arc::new(session)))
@@ -13572,7 +14251,7 @@ fn native_for(name: &str) -> NativeFunc {
             if !greeting.starts_with("+OK") {
                 return Err(format!("pop3 login failed: {greeting}"));
             }
-            let mut session = ahash::AHashMap::new();
+            let mut session = indexmap::IndexMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             Ok(Value::Dict(Arc::new(session)))
@@ -13588,7 +14267,7 @@ fn native_for(name: &str) -> NativeFunc {
             let parts: Vec<&str> = reply.split_whitespace().collect();
             let count = parts.get(1).and_then(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
             let size = parts.get(2).and_then(|p| p.parse::<f64>().ok()).unwrap_or(0.0);
-            let mut out = ahash::AHashMap::new();
+            let mut out = indexmap::IndexMap::new();
             out.insert("count".into(), Value::Number(count));
             out.insert("size".into(), Value::Number(size));
             Ok(Value::Dict(Arc::new(out)))
@@ -13677,7 +14356,7 @@ fn native_for(name: &str) -> NativeFunc {
             let resp = imap_command(&mut stream, &format!("a{tag}"), &format!("LOGIN {user} {pass}"))?;
             let _ = resp;
             tag += 1;
-            let mut session = ahash::AHashMap::new();
+            let mut session = indexmap::IndexMap::new();
             let session_id = next_response_id();
             session.insert("__id".into(), Value::Number(session_id as f64));
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
@@ -13750,7 +14429,7 @@ fn native_for(name: &str) -> NativeFunc {
                     body = literal_section.trim_end().to_string();
                 }
             }
-            let mut out = ahash::AHashMap::new();
+            let mut out = indexmap::IndexMap::new();
             out.insert("flags".into(), Value::List(Arc::new(flags)));
             out.insert("body".into(), Value::String(body));
             Ok(Value::Dict(Arc::new(out)))
@@ -13797,7 +14476,7 @@ fn native_for(name: &str) -> NativeFunc {
             };
             let stream = TcpStream::connect((host.as_str(), port))
                 .map_err(|e| format!("telnet connect {host}:{port}: {e}"))?;
-            let mut session = ahash::AHashMap::new();
+            let mut session = indexmap::IndexMap::new();
             session.insert("socket".into(), Value::Socket(Arc::new(Mutex::new(stream))));
             session.insert("host".into(), Value::String(host));
             Ok(Value::Dict(Arc::new(session)))
@@ -13973,7 +14652,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Number(internet_checksum(data.as_bytes()) as f64))
         },
         "scapy_ip" => |args| {
-            let mut layer = ahash::AHashMap::new();
+            let mut layer = indexmap::IndexMap::new();
             layer.insert("type".into(), Value::String("IP".into()));
             if let Some(Value::String(s)) = args.first() {
                 layer.insert("src".into(), Value::String(s.clone()));
@@ -13990,7 +14669,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_tcp" => |args| {
-            let mut layer = ahash::AHashMap::new();
+            let mut layer = indexmap::IndexMap::new();
             layer.insert("type".into(), Value::String("TCP".into()));
             if let Some(Value::Number(s)) = args.get(0) {
                 layer.insert("sport".into(), Value::Number(*s));
@@ -14004,7 +14683,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_udp" => |args| {
-            let mut layer = ahash::AHashMap::new();
+            let mut layer = indexmap::IndexMap::new();
             layer.insert("type".into(), Value::String("UDP".into()));
             if let Some(Value::Number(s)) = args.get(0) {
                 layer.insert("sport".into(), Value::Number(*s));
@@ -14018,7 +14697,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Dict(Arc::new(layer)))
         },
         "scapy_icmp" => |args| {
-            let mut layer = ahash::AHashMap::new();
+            let mut layer = indexmap::IndexMap::new();
             layer.insert("type".into(), Value::String("ICMP".into()));
             if let Some(Value::Number(t)) = args.get(0) {
                 layer.insert("icmp_type".into(), Value::Number(*t));
@@ -14033,7 +14712,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "scapy_raw" => |args| {
             let data = arg_string(&args, 0)?;
-            let mut layer = ahash::AHashMap::new();
+            let mut layer = indexmap::IndexMap::new();
             layer.insert("type".into(), Value::String("Raw".into()));
             layer.insert("data".into(), Value::String(data));
             Ok(Value::Dict(Arc::new(layer)))
@@ -14164,6 +14843,92 @@ fn native_for(name: &str) -> NativeFunc {
             }
             Ok(Value::List(Arc::new(out)))
         },
+        "scapy_ether" => |args| {
+            let dst = args.get(0).and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None }).unwrap_or_else(|| "ff:ff:ff:ff:ff:ff".into());
+            let src = args.get(1).and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None }).unwrap_or_else(|| "00:00:00:00:00:00".into());
+            let etype: u16 = match args.get(2) {
+                Some(Value::String(s)) if s == "IP" || s == "ipv4" => 0x0800,
+                Some(Value::String(s)) if s == "ARP" => 0x0806,
+                Some(Value::Number(n)) => *n as u16,
+                _ => 0x0800,
+            };
+            let mut layer = indexmap::IndexMap::new();
+            layer.insert("type".into(), Value::String("Ether".into()));
+            layer.insert("dst".into(), Value::String(dst));
+            layer.insert("src".into(), Value::String(src));
+            layer.insert("ether_type".into(), Value::Number(etype as f64));
+            Ok(Value::Dict(Arc::new(layer)))
+        },
+        "scapy_arp" => |args| {
+            let psrc = arg_string(&args, 0).unwrap_or_else(|_| "0.0.0.0".into());
+            let pdst = arg_string(&args, 1).unwrap_or_else(|_| "0.0.0.0".into());
+            let op: u16 = match args.get(2) {
+                Some(Value::Number(n)) => *n as u16,
+                Some(Value::String(s)) if s.eq_ignore_ascii_case("who-has") => 1,
+                _ => 1,
+            };
+            let hwsrc = args.get(3).and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None }).unwrap_or_else(|| "00:00:00:00:00:00".into());
+            let hwdst = args.get(4).and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None }).unwrap_or_else(|| "00:00:00:00:00:00".into());
+            let mut layer = indexmap::IndexMap::new();
+            layer.insert("type".into(), Value::String("ARP".into()));
+            layer.insert("op".into(), Value::Number(op as f64));
+            layer.insert("psrc".into(), Value::String(psrc));
+            layer.insert("pdst".into(), Value::String(pdst));
+            layer.insert("hwsrc".into(), Value::String(hwsrc));
+            layer.insert("hwdst".into(), Value::String(hwdst));
+            Ok(Value::Dict(Arc::new(layer)))
+        },
+        "scapy_sendp" => |args| {
+            scapy_sendp(&args)
+        },
+        "scapy_sr1" => |args| {
+            let timeout_ms = match args.get(1) { Some(Value::Number(n)) => *n as u64, _ => 2000 };
+            let iface = match args.get(2) { Some(Value::String(s)) => Some(s.clone()), _ => None };
+            scapy_sr1(&args, timeout_ms, iface)
+        },
+        "scapy_srp1" => |args| {
+            let timeout_ms = match args.get(1) { Some(Value::Number(n)) => *n as u64, _ => 2000 };
+            let iface = match args.get(2) { Some(Value::String(s)) => Some(s.clone()), _ => None };
+            scapy_srp1(&args, timeout_ms, iface)
+        },
+        "scapy_syn_scan" => |args| {
+            let host = arg_string(&args, 0)?;
+            let ports = scapy_ports_from_args(&args, 1)?;
+            let timeout_ms = match args.get(2) { Some(Value::Number(n)) => *n as u64, _ => 300 };
+            let sport = match args.get(3) { Some(Value::Number(n)) => *n as u16, _ => 55550 };
+            let iface = match args.get(4) { Some(Value::String(s)) => Some(s.clone()), _ => None };
+            scapy_syn_scan(&host, ports, timeout_ms, sport, iface)
+        },
+        "scapy_handshake" => |args| {
+            let host = arg_string(&args, 0)?;
+            let port = arg_number(&args, 1)? as u16;
+            let sport = match args.get(2) { Some(Value::Number(n)) => *n as u16, _ => 55550 };
+            let timeout_ms = match args.get(3) { Some(Value::Number(n)) => *n as u64, _ => 2000 };
+            let iface = match args.get(4) { Some(Value::String(s)) => Some(s.clone()), _ => None };
+            scapy_handshake(&host, port, sport, timeout_ms, iface)
+        },
+        "scapy_arp_scan" => |args| {
+            let cidr = arg_string(&args, 0)?;
+            let timeout_ms = match args.get(1) { Some(Value::Number(n)) => *n as u64, _ => 1000 };
+            let iface = match args.get(2) { Some(Value::String(s)) => Some(s.clone()), _ => None };
+            scapy_arp_scan(&cidr, timeout_ms, iface)
+        },
+        "scapy_src_mac" => |args| {
+            let iface = args.first().and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None });
+            Ok(Value::String(local_mac(iface.as_deref())))
+        },
+        "scapy_src_ip" => |args| {
+            let iface = args.first().and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None });
+            Ok(Value::String(local_ip(iface.as_deref())))
+        },
+        "scapy_hostname" => |args| {
+            let host = arg_string(&args, 0)?;
+            use std::net::ToSocketAddrs;
+            match format!("{host}:0").to_socket_addrs().ok().and_then(|mut a| a.next()) {
+                Some(sa) => Ok(Value::String(sa.ip().to_string())),
+                None => Err(format!("scapy.hostname: could not resolve '{host}'")),
+            }
+        },
 
         // ── bluetooth module ──────────────────────────────────────────
         "bt_status" => |_| {
@@ -14182,7 +14947,7 @@ fn native_for(name: &str) -> NativeFunc {
                 .and_then(|s| s.split('\'').next())
                 .unwrap_or("")
                 .to_string();
-            let mut result = ahash::AHashMap::new();
+            let mut result = indexmap::IndexMap::new();
             result.insert("adapter".into(), Value::String("hci0".into()));
             result.insert("up".into(), Value::Bool(up));
             result.insert("address".into(), Value::String(addr));
@@ -14218,7 +14983,7 @@ fn native_for(name: &str) -> NativeFunc {
                 if let Some(rest) = line.strip_prefix("Device ") {
                     let parts: Vec<&str> = rest.splitn(2, ' ').collect();
                     if parts.len() >= 2 {
-                        let mut d = ahash::AHashMap::new();
+                        let mut d = indexmap::IndexMap::new();
                         d.insert("address".into(), Value::String(parts[0].to_string()));
                         d.insert("name".into(), Value::String(parts[1].trim().to_string()));
                         devices.push(Value::Dict(Arc::new(d)));
@@ -14252,7 +15017,7 @@ fn native_for(name: &str) -> NativeFunc {
                     let addr = parts[0].trim();
                     let name = parts[1].trim();
                     if !addr.contains(':') { continue; }
-                    let mut d = ahash::AHashMap::new();
+                    let mut d = indexmap::IndexMap::new();
                     d.insert("address".into(), Value::String(addr.to_string()));
                     d.insert("name".into(), Value::String(name.to_string()));
                     devices.push(Value::Dict(Arc::new(d)));
@@ -14330,7 +15095,7 @@ fn native_for(name: &str) -> NativeFunc {
                 let rate = if raw.len() > 8 { raw[8].replace("\\:", ":") } else { String::new() };
                 let signal = if raw.len() > 9 { raw[9].replace("\\:", ":") } else { String::new() };
                 let security = raw[raw.len()-1..].join("").replace("\\:", ":");
-                let mut net = ahash::AHashMap::new();
+                let mut net = indexmap::IndexMap::new();
                 net.insert("ssid".into(), Value::String(ssid));
                 net.insert("bssid".into(), Value::String(bssid));
                 net.insert("mode".into(), Value::String(mode));
@@ -14350,7 +15115,7 @@ fn native_for(name: &str) -> NativeFunc {
             let conn = Command::new("nmcli").args(["-t", "-f", "NAME,DEVICE,TYPE", "connection", "show", "--active"]).output()
                 .map_err(|e| format!("nmcli connection show: {e}"))?;
             let conn_out = String::from_utf8_lossy(&conn.stdout);
-            let mut result = ahash::AHashMap::new();
+            let mut result = indexmap::IndexMap::new();
             result.insert("wifi_enabled".into(), Value::Bool(enabled));
             result.insert("connected".into(), Value::Bool(false));
             for line in conn_out.lines() {
@@ -14406,7 +15171,7 @@ fn native_for(name: &str) -> NativeFunc {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() < 4 { continue; }
                 if !parts[1].contains("wireless") && parts[1] != "wifi" { continue; }
-                let mut d = ahash::AHashMap::new();
+                let mut d = indexmap::IndexMap::new();
                 d.insert("device".into(), Value::String(parts[0].to_string()));
                 d.insert("type".into(), Value::String(parts[1].to_string()));
                 d.insert("state".into(), Value::String(parts[2].to_string()));
@@ -14424,7 +15189,7 @@ fn native_for(name: &str) -> NativeFunc {
                 let parts: Vec<&str> = line.split(':').collect();
                 if parts.len() < 4 { continue; }
                 if !parts[2].contains("wireless") && parts[2] != "802-11-wireless" { continue; }
-                let mut d = ahash::AHashMap::new();
+                let mut d = indexmap::IndexMap::new();
                 d.insert("name".into(), Value::String(parts[0].to_string()));
                 d.insert("uuid".into(), Value::String(parts[1].to_string()));
                 d.insert("device".into(), Value::String(parts[3].to_string()));
@@ -14750,7 +15515,7 @@ fn native_for(name: &str) -> NativeFunc {
             let output = command
                 .output()
                 .map_err(|e| format!("subprocess.run {cmd}: {e}"))?;
-            let mut result = ahash::AHashMap::new();
+            let mut result = indexmap::IndexMap::new();
             result.insert("ok".into(), Value::Bool(output.status.success()));
             result.insert("code".into(), Value::Number(output.status.code().unwrap_or(-1) as f64));
             result.insert(
@@ -14858,7 +15623,7 @@ fn native_for(name: &str) -> NativeFunc {
                 "blake2s" => crypto_digest(&data, "blake2s"),
                 _ => return Err(format!("hashlib.new: unknown algorithm {algo}")),
             };
-            Ok(Value::Dict(Arc::new(ahash::AHashMap::from([
+            Ok(Value::Dict(Arc::new(indexmap::IndexMap::from([
                 ("hexdigest".into(), Value::String(digest)),
                 ("name".into(), Value::String(algo)),
             ]))))
@@ -14935,7 +15700,7 @@ fn native_for(name: &str) -> NativeFunc {
                 let total = stat.f_blocks as f64 * bsize;
                 let free = stat.f_bfree as f64 * bsize;
                 let used = total - stat.f_bfree as f64 * bsize;
-                let mut out = ahash::AHashMap::new();
+                let mut out = indexmap::IndexMap::new();
                 out.insert("total".into(), Value::Number(total));
                 out.insert("used".into(), Value::Number(used));
                 out.insert("free".into(), Value::Number(free));
@@ -15143,7 +15908,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "urllib_parse" => |args| {
             let url = arg_string(&args, 0)?;
-            let mut out = ahash::AHashMap::new();
+            let mut out = indexmap::IndexMap::new();
             let rest = match url.find("://") {
                 Some(i) => {
                     out.insert("scheme".into(), Value::String(url[..i].to_string()));
@@ -15178,7 +15943,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "urllib_parse_qs" => |args| {
             let query = arg_string(&args, 0)?;
-            let mut out = ahash::AHashMap::new();
+            let mut out = indexmap::IndexMap::new();
             for pair in query.split('&') {
                 if pair.is_empty() {
                     continue;
@@ -15201,13 +15966,13 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "collections_counter" => |args| {
             let items = arg_list(&args, 0)?;
-            let mut counts = ahash::AHashMap::new();
+            let mut counts = indexmap::IndexMap::new();
             for item in items {
                 let key = item.to_string();
                 let entry = counts.entry(key).or_insert(0.0);
                 *entry += 1.0;
             }
-            let mut out = ahash::AHashMap::new();
+            let mut out = indexmap::IndexMap::new();
             for (k, v) in counts {
                 out.insert(k, Value::Number(v));
             }
@@ -18121,7 +18886,7 @@ impl<'a> JsonParser<'a> {
     fn object(&mut self) -> Result<Value, String> {
         self.eat('{')?;
         self.skip_ws();
-        let mut map = ahash::AHashMap::new();
+        let mut map = indexmap::IndexMap::new();
         if self.peek() == Some('}') {
             self.pos += 1;
             return Ok(Value::Dict(Arc::new(map)));

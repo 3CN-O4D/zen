@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_crunch_module(vm: &mut Vm) {
-let crunch = Value::Dict(Arc::new(ahash::AHashMap::from([
+let crunch = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("charset".into(), Value::NativeFunction("crunch_charset".into())),
     ("generate".into(), Value::NativeFunction("crunch_generate".into())),
     ("pattern".into(), Value::NativeFunction("crunch_pattern".into())),

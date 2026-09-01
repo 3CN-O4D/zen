@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_crypto_module(vm: &mut Vm) {
-let crypto = Value::Dict(Arc::new(ahash::AHashMap::from([
+let crypto = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("sha256".into(), Value::NativeFunction("crypto_sha256".into())),
     ("sha1".into(), Value::NativeFunction("crypto_sha1".into())),
     ("md5".into(), Value::NativeFunction("crypto_md5".into())),

@@ -3,6 +3,7 @@
 dist/
 build/
 *.pyz
+.zencache
 
 # Editor / IDE
 *.swp
@@ -32,3 +33,5 @@ monalisa_images/
 
 # stray nested build dir
 /zen/
+# accidental nmap output dump
+J

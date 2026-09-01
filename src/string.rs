@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_string_module(vm: &mut Vm) {
-let string = Value::Dict(Arc::new(ahash::AHashMap::from([
+let string = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("upper".into(), Value::NativeFunction("str_upper".into())),
     ("lower".into(), Value::NativeFunction("str_lower".into())),
     ("title".into(), Value::NativeFunction("str_title".into())),

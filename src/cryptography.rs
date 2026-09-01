@@ -4,10 +4,10 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_cryptography_module(vm: &mut Vm) {
-    let cryptography = Value::Dict(Arc::new(ahash::AHashMap::from([
+    let cryptography = Value::Dict(Arc::new(indexmap::IndexMap::from([
         (
             "fernet".into(),
-            Value::Dict(Arc::new(ahash::AHashMap::from([
+            Value::Dict(Arc::new(indexmap::IndexMap::from([
                 ("generate_key".into(), Value::NativeFunction("fernet_generate_key".into())),
                 ("encrypt".into(), Value::NativeFunction("fernet_encrypt".into())),
                 ("decrypt".into(), Value::NativeFunction("fernet_decrypt".into())),

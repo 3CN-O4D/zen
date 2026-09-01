@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_re_module(vm: &mut Vm) {
-let re = Value::Dict(Arc::new(ahash::AHashMap::from([
+let re = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("match".into(), Value::NativeFunction("regex_match".into())),
     ("matches".into(), Value::NativeFunction("regex_match".into())),
     ("search".into(), Value::NativeFunction("regex_search".into())),

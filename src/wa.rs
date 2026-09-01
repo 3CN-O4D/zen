@@ -236,7 +236,7 @@ pub fn wa_connect(args: &Vec<Value>) -> Result<Value, String> {
                         }
                     }
                     Value::String(t) if t == "message" => {
-                        let mut m = ahash::AHashMap::new();
+                        let mut m = indexmap::IndexMap::new();
                         for k in [
                             "id", "from", "from_alt", "sender", "sender_alt",
                             "push_name", "text",
@@ -269,7 +269,7 @@ pub fn wa_connect(args: &Vec<Value>) -> Result<Value, String> {
                                 Value::String(e) => e,
                                 _ => String::new(),
                             };
-                            let mut r = ahash::AHashMap::new();
+                            let mut r = indexmap::IndexMap::new();
                             r.insert("ok".into(), Value::Bool(ok));
                             r.insert("error".into(), Value::String(err));
                             let _ = tx.send(Value::Dict(Arc::new(r)));
@@ -406,7 +406,7 @@ pub fn wa_disconnect(_args: &Vec<Value>) -> Result<Value, String> {
 // ── module registration ─────────────────────────────────────────────────
 
 pub fn init_wa_module(vm: &mut Vm) {
-    let wa = Value::Dict(Arc::new(ahash::AHashMap::from([
+    let wa = Value::Dict(Arc::new(indexmap::IndexMap::from([
         ("connect".into(), Value::NativeFunction("wa_connect".into())),
         ("state".into(), Value::NativeFunction("wa_state".into())),
         ("qr".into(), Value::NativeFunction("wa_qr".into())),

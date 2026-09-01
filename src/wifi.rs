@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_wifi_module(vm: &mut Vm) {
-let wifi = Value::Dict(Arc::new(ahash::AHashMap::from([
+let wifi = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("scan".into(), Value::NativeFunction("wifi_scan".into())),
     ("status".into(), Value::NativeFunction("wifi_status".into())),
     ("connect".into(), Value::NativeFunction("wifi_connect".into())),

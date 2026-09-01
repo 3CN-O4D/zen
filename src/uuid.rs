@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_uuid_module(vm: &mut Vm) {
-let uuid = Value::Dict(Arc::new(ahash::AHashMap::from([
+let uuid = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("uuid4".into(), Value::NativeFunction("uuid_uuid4".into())),
     ("uuid1".into(), Value::NativeFunction("uuid_uuid1".into())),
     ("uuid3".into(), Value::NativeFunction("uuid_uuid3".into())),

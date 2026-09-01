@@ -4,7 +4,7 @@ use crate::runtime::{Vm, Value};
 use std::sync::Arc;
 
 pub fn init_socket_module(vm: &mut Vm) {
-let socket = Value::Dict(Arc::new(ahash::AHashMap::from([
+let socket = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("open".into(), Value::NativeFunction("socket_open".into())),
     ("open_udp".into(), Value::NativeFunction("socket_open_udp".into())),
     ("send".into(), Value::NativeFunction("socket_send".into())),

@@ -368,7 +368,7 @@ fn read_value(r: &mut Reader, depth: usize) -> Option<Value> {
         }
         TAG_DICT => {
             let n = r.u32()? as usize;
-            let mut map = ahash::AHashMap::new();
+            let mut map = indexmap::IndexMap::new();
             for _ in 0..n {
                 let k = r.str()?;
                 let v = read_value(r, depth + 1)?;
