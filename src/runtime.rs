@@ -11904,7 +11904,7 @@ fn scapy_arp_scan(cidr: &str, timeout_ms: u64, iface: Option<String>) -> Result<
         let spa = u32::from_be_bytes([frame[28], frame[29], frame[30], frame[31]]);
         let ip = u32_to_ip(spa);
         let mac = bytes_to_mac(&frame[22..28]);
-        if !found.iter().any(|v| matches!(&v, Value::Dict(d) if d.get("ip") == Some(&Value::String(ip)))) {
+        if !found.iter().any(|v| matches!(&v, Value::Dict(d) if d.get("ip") == Some(&Value::String(ip.clone())))) {
             let mut r = indexmap::IndexMap::new();
             r.insert("ip".into(), Value::String(ip));
             r.insert("mac".into(), Value::String(mac));
