@@ -8,7 +8,6 @@ use std::{
     net::{IpAddr, SocketAddr, TcpStream, UdpSocket},
     path::{Path, PathBuf},
     process::{self, Command},
-    rc::Rc,
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -50,6 +49,7 @@ fn op_symbol(op: &Kind) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn annotate_line(src_line: &str, col: usize, line_num: usize) -> String {
     let mut out = String::new();
     let width = format!("{}", line_num).len();
@@ -92,7 +92,7 @@ fn render_context(
             out.push_str(&format!(" {} {}\n", gutter(i), src_line));
             let trimmed_len = src_line.chars().count();
             let arrow_col = col.saturating_sub(1).min(trimmed_len);
-            let underline = "\x1b[1;31m".to_string() + &"~".repeat(1.max(trimmed_len - arrow_col)) + "\x1b[0m";
+            let _underline = "\x1b[1;31m".to_string() + &"~".repeat(1.max(trimmed_len - arrow_col)) + "\x1b[0m";
             out.push_str(&format!(
                 " {} {}\x1b[1;31m{}\x1b[0m\n",
                 " ".repeat(width),
@@ -217,8 +217,14 @@ pub(crate) fn deref_cells(v: &Value) -> Value {
 /// Single-level cell read with the same cost as a plain clone for non-cells.
 #[inline]
 pub(crate) fn deref_cell(v: &Value) -> Value {
+    // Fast path: if not a Cell, just clone (no mutex overhead).
+    if !matches!(v, Value::Cell(_)) {
+        return v.clone();
+    }
+    // Slow path: Cell requires mutex lock for mutation tracking.
     if let Value::Cell(c) = v {
-        c.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        let g = c.lock().unwrap_or_else(|p| p.into_inner());
+        g.clone()
     } else {
         v.clone()
     }
@@ -334,6 +340,7 @@ impl fmt::Display for Value {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)]
 pub(crate) enum Kind {
     Ident(String),
     Number(f64),
@@ -447,7 +454,7 @@ struct Token {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum InterpPart {
+pub(crate) enum InterpPart {
     Text(String),
     Expr(String),
 }
@@ -734,7 +741,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             continue;
         }
         if c == '0' && matches!(bytes.get(i + 1), Some(b'x' | b'X' | b'b' | b'B' | b'o' | b'O')) {
-            let begin = i;
+            let _begin = i;
             let radix_digits = match bytes[i + 1] {
                 b'b' | b'B' => (2u32, b"01".as_slice()),
                 b'o' | b'O' => (8u32, b"01234567".as_slice()),
@@ -1198,7 +1205,7 @@ pub(crate) enum StmtKind {
  }
 
 #[derive(Clone, Debug)]
-struct CatchClause {
+pub(crate) struct CatchClause {
     kind: Option<String>,
     var: Option<String>,
     body: Vec<Stmt>,
@@ -2360,7 +2367,7 @@ impl Parser {
         Ok(left)
     }
     fn comparison(&mut self) -> Result<Expr, String> {
-        let mut left = self.bit_or()?;
+        let left = self.bit_or()?;
         // `not in`: `x not in xs` → `not (x in xs)`.
         if self.current().kind == Kind::Not
             && self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(&Kind::In)
@@ -2892,12 +2899,14 @@ struct Function {
 }
 
 impl Function {
+    #[allow(dead_code)]
     fn param_names(&self) -> Vec<String> {
         self.params.iter().map(|(n, _)| n.clone()).collect()
     }
     fn required_count(&self) -> usize {
         self.params.iter().filter(|(_, d)| d.is_none()).count()
     }
+    #[allow(dead_code)]
     fn has_defaults(&self) -> bool {
         self.params.iter().any(|(_, d)| d.is_some())
     }
@@ -2928,7 +2937,7 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
         Expr::Dict(entries) => {
             for entry in entries {
                 match entry {
-                    DictEntry::Pair(k, v) => { collect_free_vars_expr(v, params, free); }
+                    DictEntry::Pair(_k, v) => { collect_free_vars_expr(v, params, free); }
                     DictEntry::Spread(e) => { collect_free_vars_expr(e, params, free); }
                     DictEntry::Computed(k, v) => { collect_free_vars_expr(k, params, free); collect_free_vars_expr(v, params, free); }
                 }
@@ -2942,7 +2951,7 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
         Expr::Call(callee, args) => { collect_free_vars_expr(callee, params, free); for a in args { collect_free_vars_expr(a, params, free); } }
         Expr::Binary(l, _, r) => { collect_free_vars_expr(l, params, free); collect_free_vars_expr(r, params, free); }
         Expr::Unary(_, e) => { collect_free_vars_expr(e, params, free); }
-        Expr::Named(n, e) => { collect_free_vars_expr(e, params, free); }
+        Expr::Named(_n, e) => { collect_free_vars_expr(e, params, free); }
         Expr::Spread(e) => { collect_free_vars_expr(e, params, free); }
         Expr::Super(args) => { for a in args { collect_free_vars_expr(a, params, free); } }
         Expr::SuperMethod(_, args) => { for a in args { collect_free_vars_expr(a, params, free); } }
@@ -2989,7 +2998,7 @@ fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<St
         StmtKind::Let(target, e, _) => {
             collect_free_vars_expr(e, params, free);
             match target {
-                LetTarget::Var(n) => { /* n is now in scope, but we don't remove from free since outer scope still applies */ }
+                LetTarget::Var(_n) => { /* n is now in scope, but we don't remove from free since outer scope still applies */ }
                 LetTarget::List(ps) => { for p in ps { let _ = p; } }
                 LetTarget::Dict(ps) => { for p in ps { let _ = p; } }
             }
@@ -3084,10 +3093,6 @@ pub struct Vm {
     /// Fast local variable stack: (name, value) pairs for current function params + captured.
     /// O(1) push/pop, no hashing needed. Most-recent-first for innermost scope.
     locals: Vec<(String, Value)>,
-    /// Cached function lookup: avoids HashMap lookup on repeated calls to the same function.
-    /// Useful for recursive functions like fib where the same function is called millions of times.
-    last_func_name: Option<String>,
-    last_func_idx: Option<usize>,
     /// Compiled functions table for the currently running module (main at index 0).
     compiled_functions: Vec<Arc<crate::bytecode::CompiledFunction>>,
     /// Bumped whenever a function is defined/redefined; guards the call cache.
@@ -3107,6 +3112,9 @@ pub struct Vm {
     /// statement-level `exec` reconstitute the original value as `Flow::Throw`
     /// so typed `catch` clauses keep working across calls.
     thrown_values: Vec<Value>,
+    /// Cache of the last-resolved global variable for repeated lookups (hot path).
+    /// Guards against repeated HashMap lookups for the same global name.
+    global_cache: Option<(String, Value)>,
 }
 
 /// Fast-path cache for repeated calls to the same compiled function.
@@ -3168,14 +3176,13 @@ impl Vm {
             current_class: None,
             current_method: None,
             locals: Vec::new(),
-            last_func_name: None,
-            last_func_idx: None,
             compiled_functions: Vec::new(),
             fn_generation: 0,
             call_cache: None,
             capture_frames: Vec::new(),
             frame_starts: Vec::new(),
             thrown_values: Vec::new(),
+            global_cache: None,
         };
         vm.register_builtins();
         vm.register_error_classes();
@@ -4430,7 +4437,7 @@ impl Vm {
                 if let Some(v) = self.vars.get(n) {
                     return Ok(deref_cells(v));
                 }
-                if let Some(f) = self.functions.get(n) {
+                if let Some(_f) = self.functions.get(n) {
                     return Ok(Value::Function(n.clone()));
                 }
                 if let Some(vars) = self.imported_modules.get(n) {
@@ -4760,7 +4767,7 @@ Expr::Index(obj, idx) => {
                         let obj_val = self.eval(obj)?;
                         let idx_val = self.eval(idx)?;
                         let (mut values, index) = match (obj_val, idx_val) {
-                            (Value::List(mut values), Value::Number(index)) if index.fract() == 0.0 => {
+                            (Value::List(values), Value::Number(index)) if index.fract() == 0.0 => {
                                 let index = if index < 0.0 {
                                     values.len() as i64 + index as i64
                                 } else {
@@ -5063,7 +5070,7 @@ Expr::Index(obj, idx) => {
                 .ok_or_else(|| {
                     // Hide compiler-internal namespaced keys (`mod::func`)
                     // from user-facing suggestions; they are not callable syntax.
-                    let mut keys: Vec<&str> = values.keys().map(|s| s.as_str())
+                    let keys: Vec<&str> = values.keys().map(|s| s.as_str())
                         .filter(|k| !k.contains("::"))
                         .collect();
                     let hint = suggest_name(name, &keys, 4)
@@ -5149,7 +5156,7 @@ Expr::Index(obj, idx) => {
                     value.split(&sep).map(|s| Value::String(s.into())).collect::<Vec<Value>>(),
                 )))
             }
-            "contains" => {
+            "contains" | "includes" => {
                 let needle = one()?;
                 Ok(Value::Bool(value.contains(&needle)))
             }
@@ -5217,18 +5224,6 @@ Expr::Index(obj, idx) => {
                     None => Ok(Value::Number(-1.0)),
                 }
             }
-            "includes" | "contains" => {
-                let needle = one()?;
-                Ok(Value::Bool(value.contains(&needle)))
-            }
-            "startsWith" | "startswith" => {
-                let prefix = one()?;
-                Ok(Value::Bool(value.starts_with(&prefix)))
-            }
-            "endsWith" | "endswith" => {
-                let suffix = one()?;
-                Ok(Value::Bool(value.ends_with(&suffix)))
-            }
             "charAt" | "char" => {
                 let idx = match args.first() {
                     Some(Value::Number(n)) => *n as usize,
@@ -5261,12 +5256,6 @@ Expr::Index(obj, idx) => {
                     out.push_str(&arg.to_string());
                 }
                 Ok(Value::String(out))
-            }
-            "split" => {
-                let sep = one()?;
-                Ok(Value::List(Arc::new(
-                    value.split(&sep).map(|s| Value::String(s.into())).collect::<Vec<Value>>(),
-                )))
             }
             "indexOf" => {
                 let needle = one()?;
@@ -5508,17 +5497,6 @@ Expr::Index(obj, idx) => {
                     }
                 }
                 Ok(Value::Number(total))
-            }
-            "unique" => {
-                let mut seen = Vec::new();
-                let mut out = Vec::new();
-                for item in list {
-                    if !seen.contains(&item) {
-                        seen.push(item.clone());
-                        out.push(item);
-                    }
-                }
-                Ok(Value::List(Arc::new(out)))
             }
             "shift" => {
                 let mut list = list;
@@ -5808,7 +5786,7 @@ Expr::Index(obj, idx) => {
                     _ => return Err("{method} expects a string key".into()),
                 };
                 let mut dict = dict;
-                dict.remove(&key);
+                dict.shift_remove(&key);
                 Ok(Value::Dict(Arc::new(dict)))
             }
             "update" | "merge" => {
@@ -6716,7 +6694,7 @@ Expr::Index(obj, idx) => {
                 self.vars.insert(var.clone(), v);
             }
             (None, None) => {
-                self.vars.remove(var.as_str());
+                self.vars.shift_remove(var.as_str());
             }
             (Some(_), None) => {}
         }
@@ -6824,12 +6802,12 @@ Expr::Index(obj, idx) => {
         // Check registered functions directly (hot path for user-defined functions)
         if let Some(function) = self.functions.get(name) {
             // Support named arguments: `f(a = 1, b = 2)` binds by parameter name.
-            let mut values = if let Some(named) = function.is_named_call(&values) {
+            let values = if let Some(named) = function.is_named_call(&values) {
                 let positional = &values[..values.len() - 1];
                 let mut rebuilt = Vec::with_capacity(function.params.len());
                 for (i, (pname, _)) in function.params.iter().enumerate() {
                     if i < positional.len() {
-                        if let Some(v) = named.get(pname) {
+                        if let Some(_v) = named.get(pname) {
                             return Err(format!(
                                 "{name}: parameter `{pname}` was provided both positionally and by name"
                             ));
@@ -7080,19 +7058,48 @@ Expr::Index(obj, idx) => {
                     let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in LoadGlobal".into());
                     };
-                    if let Some(v) = self.vars.get(name.as_str()) {
-                        stack.push(deref_cells(v));
-                    } else if let Some(_f) = self.functions.get(name.as_str()) {
-                        stack.push(Value::Function(name.clone()));
-                    } else if let Some(vars) = self.imported_modules.get(name.as_str()) {
-                        let val = if let Some(Value::Dict(module_dict)) = vars.get(name.as_str()) {
-                            Value::Dict(module_dict.clone())
+                    // Fast path: check global cache (invalidated on StoreGlobal).
+                    if let Some((cached_name, cached_val)) = &self.global_cache {
+                        if cached_name == name {
+                            // Cache hit: use cached value directly.
+                            stack.push(cached_val.clone());
                         } else {
-                            Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<indexmap::IndexMap<String, Value>>()))
-                        };
-                        stack.push(val);
+                            // Cache miss for this name: reload and recache.
+                            if let Some(v) = self.vars.get(name.as_str()) {
+                                let val = deref_cells(v);
+                                self.global_cache = Some((name.clone(), val.clone()));
+                                stack.push(val);
+                            } else if let Some(_f) = self.functions.get(name.as_str()) {
+                                stack.push(Value::Function(name.clone()));
+                            } else if let Some(vars) = self.imported_modules.get(name.as_str()) {
+                                let val = if let Some(Value::Dict(module_dict)) = vars.get(name.as_str()) {
+                                    Value::Dict(module_dict.clone())
+                                } else {
+                                    Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<indexmap::IndexMap<String, Value>>()))
+                                };
+                                stack.push(val);
+                            } else {
+                                return Err(format!("undefined variable: `{name}`"));
+                            }
+                        }
                     } else {
-                        return Err(format!("undefined variable: `{name}`"));
+                        // No cache entry, load normally and cache.
+                        if let Some(v) = self.vars.get(name.as_str()) {
+                            let val = deref_cells(v);
+                            self.global_cache = Some((name.clone(), val.clone()));
+                            stack.push(val);
+                        } else if let Some(_f) = self.functions.get(name.as_str()) {
+                            stack.push(Value::Function(name.clone()));
+                        } else if let Some(vars) = self.imported_modules.get(name.as_str()) {
+                            let val = if let Some(Value::Dict(module_dict)) = vars.get(name.as_str()) {
+                                Value::Dict(module_dict.clone())
+                            } else {
+                                Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<indexmap::IndexMap<String, Value>>()))
+                            };
+                            stack.push(val);
+                        } else {
+                            return Err(format!("undefined variable: `{name}`"));
+                        }
                     }
                 }
                 Opcode::StoreGlobal => {
@@ -7100,6 +7107,8 @@ Expr::Index(obj, idx) => {
                         return Err("bad constant in StoreGlobal".into());
                     };
                     let v = stack.pop().unwrap_or(Value::Null);
+                    // Invalidate global cache on any StoreGlobal.
+                    self.global_cache = None;
                     match self.vars.get(name.as_str()) {
                         Some(g @ Value::Cell(_)) => {
                             cell_set(g, v);
@@ -8257,7 +8266,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
     /// Assign `value` to the instance field `name` on the current method's
     /// `self` if it is a declared field. Returns true when handled.
     fn self_field_set(&mut self, name: &str, value: Value) -> bool {
-        let Some(inst) = (self.locals.iter().rev().find_map(|(k, v)| {
+        let Some(inst) = self.locals.iter().rev().find_map(|(k, v)| {
             if k == "self" {
                 if let Value::Instance(i) = v {
                     Some(Arc::clone(i))
@@ -8267,7 +8276,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             } else {
                 None
             }
-        })) else {
+        })  else {
             return false;
         };
         let class_name = inst.lock().unwrap().class_name.clone();
@@ -8360,7 +8369,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         if !class.methods.is_empty() {
                             println!("  methods:");
                             let mut method_names: Vec<_> = class.methods.iter().collect();
-                            method_names.sort_by_key(|(n, _)| n.clone());
+                            method_names.sort_by_key(|(n, _)| n.to_string());
                             for (name, func) in method_names {
                                 let ps: Vec<String> = func.params.iter().map(|(p, _)| p.clone()).collect();
                                 println!("    {name}({})", ps.join(", "));
@@ -8380,7 +8389,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                             if !class.methods.is_empty() {
                                 println!("  methods:");
                                 let mut method_names: Vec<_> = class.methods.iter().collect();
-                                method_names.sort_by_key(|(n, _)| n.clone());
+                                method_names.sort_by_key(|(n, _)| n.to_string());
                                 for (name, func) in method_names {
                                     let ps: Vec<String> = func.params.iter().map(|(p, _)| p.clone()).collect();
                                     println!("    {name}({})", ps.join(", "));
@@ -8403,7 +8412,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                                 if let Some(Value::Dict(funcs)) = doc.get("functions") {
                                     println!("\nfunctions:");
                                     let mut fnames: Vec<_> = funcs.iter().collect();
-                                    fnames.sort_by_key(|(n, _)| n.clone());
+                                    fnames.sort_by_key(|(n, _)| n.to_string());
                                     for (name, info) in fnames {
                                         match info {
                                             Value::Dict(fi) => {
@@ -8434,7 +8443,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                                 if let Some(Value::Dict(classes)) = doc.get("classes") {
                                     println!("\nclasses:");
                                     let mut cnames: Vec<_> = classes.iter().collect();
-                                    cnames.sort_by_key(|(n, _)| n.clone());
+                                    cnames.sort_by_key(|(n, _)| n.to_string());
                                     for (name, info) in cnames {
                                         match info {
                                             Value::Dict(ci) => {
@@ -8478,7 +8487,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                             if !class.methods.is_empty() {
                                 println!("  methods:");
                                 let mut method_names: Vec<_> = class.methods.iter().collect();
-                                method_names.sort_by_key(|(n, _)| n.clone());
+                                method_names.sort_by_key(|(n, _)| n.to_string());
                                 for (mname, func) in method_names {
                                     let ps: Vec<String> = func.params.iter().map(|(p, _)| p.clone()).collect();
                                     println!("    {mname}({})", ps.join(", "));
@@ -8599,7 +8608,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                     _ => {}
                 }
                 if matches!(method, "push" | "pop") {
-                    if let (Some(expr), Some((inst, field))) =
+                    if let (Some(_expr), Some((inst, field))) =
                         (object_expr, object_expr.and_then(|e2| self.list_target_field(e2)))
                     {
                         let result = self.list_method(list.as_ref().clone(), method, values.clone())?;
@@ -9247,7 +9256,7 @@ let function = self
                         match &statement.kind {
                             StmtKind::Function(method, params, body) => {
                                 let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
-                                let has_defaults = params.iter().any(|(_, d)| d.is_some());
+                                let _has_defaults = params.iter().any(|(_, d)| d.is_some());
                                 let default_values = self.eval_default_values(params)?;
                                 // Methods run via tree-walk so implicit-self
                                 // field access (`var _x` -> `self._x`) resolves
@@ -9386,6 +9395,7 @@ let function = self
                 StmtKind::Field(..) => unreachable!("field declarations are handled by the class handler"),
             }
         }
+    #[allow(dead_code)]
     fn locate(&self, line: usize, col: usize, message: String) -> String {
         if line == 0 {
             return message;
@@ -9473,7 +9483,7 @@ let function = self
     }
     fn to_error(&self, value: Value, line: usize, col: usize) -> Value {
         match value {
-            Value::Dict(mut map) => {
+            Value::Dict(map) => {
                 let mut map = (*map).clone();
                 map.entry("type".into())
                     .or_insert_with(|| Value::String("Error".into()));
@@ -11444,6 +11454,7 @@ fn default_ifindex() -> libc::c_int {
 }
 
 // Generate a random 16-bit source port
+#[allow(dead_code)]
 fn random_sport() -> u16 {
     use rand::Rng;
     rand::rng().random_range(32768..=60999) as u16
@@ -11513,7 +11524,7 @@ fn scapy_sendp(args: &[Value]) -> Result<Value, String> {
     Ok(Value::Bool(true))
 }
 
-fn scapy_sr1(args: &[Value], timeout_ms: u64, iface: Option<String>) -> Result<Value, String> {
+fn scapy_sr1(args: &[Value], timeout_ms: u64, _iface: Option<String>) -> Result<Value, String> {
     // Send an IPv4 packet (dict or byte list) via IPPROTO_RAW, sniff one reply, parse it.
     let is_root = unsafe { libc::geteuid() == 0 };
     if !is_root {
@@ -11774,7 +11785,6 @@ fn scapy_handshake(host: &str, port: u16, sport: u16, timeout_ms: u64, iface: Op
     let mut buf = [0u8; 65535];
     let deadline = std::time::SystemTime::now() + std::time::Duration::from_millis(timeout_ms);
     let mut remote_seq: Option<u32> = None;
-    let mut synack: Option<Vec<u8>> = None;
     while std::time::SystemTime::now() < deadline {
         let nn = unsafe { libc::recv(l2, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
         if nn < 0 {
@@ -11802,7 +11812,6 @@ fn scapy_handshake(host: &str, port: u16, sport: u16, timeout_ms: u64, iface: Op
         let flags = tcp[13];
         if tcp_sport == port && tcp_dport == sport && flags & 0x12 == 0x12 {
             remote_seq = Some(u32::from_be_bytes([tcp[4], tcp[5], tcp[6], tcp[7]]));
-            synack = Some(tcp.to_vec());
             break;
         }
     }
@@ -12336,7 +12345,7 @@ fn native_for(name: &str) -> NativeFunc {
                         .map_err(|e| format!("failed to send_to: {e}"))?;
                     Ok(Value::Bool(true))
                 }
-                [Value::Dict(d), Value::String(data), Value::String(addr)] => {
+                [Value::Dict(_d), Value::String(data), Value::String(addr)] => {
                     let socket = std::net::UdpSocket::bind("0.0.0.0:0")
                         .map_err(|e| format!("failed to bind UDP: {e}"))?;
                     socket.send_to(data.as_bytes(), addr.as_str())
@@ -12397,7 +12406,7 @@ fn native_for(name: &str) -> NativeFunc {
                 _ => return Err("socket_set_timeout expects (Socket, seconds)".into()),
             };
             let dur = std::time::Duration::from_secs_f64(secs);
-            let mut s = socket.lock().unwrap();
+            let s = socket.lock().unwrap();
             s.set_read_timeout(Some(dur)).map_err(|e| format!("set timeout error: {e}"))?;
             s.set_write_timeout(Some(dur)).map_err(|e| format!("set timeout error: {e}"))?;
             Ok(Value::Bool(true))
@@ -13849,7 +13858,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "socket_listen" => |args| {
             let addr = arg_string(&args, 0)?;
-            let backlog = match args.get(1) {
+            let _backlog = match args.get(1) {
                 Some(Value::Number(n)) => *n as u32,
                 _ => 128,
             };
@@ -14352,10 +14361,8 @@ fn native_for(name: &str) -> NativeFunc {
             if !line.contains("OK") {
                 return Err(format!("imap greeting failed: {line}"));
             }
-            let mut tag = 1u32;
-            let resp = imap_command(&mut stream, &format!("a{tag}"), &format!("LOGIN {user} {pass}"))?;
+            let resp = imap_command(&mut stream, "a1", &format!("LOGIN {user} {pass}"))?;
             let _ = resp;
-            tag += 1;
             let mut session = indexmap::IndexMap::new();
             let session_id = next_response_id();
             session.insert("__id".into(), Value::Number(session_id as f64));
@@ -17317,6 +17324,7 @@ pub fn help_module(name: &str) -> String {
 }
 
 /// Return help for a specific built-in function or constant.
+#[allow(unreachable_patterns)]
 pub fn help_builtin(name: &str) -> Option<String> {
     match name {
         // I/O

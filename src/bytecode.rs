@@ -222,6 +222,7 @@ pub fn compile_function(
 
 /// Compile a class method body. `self` occupies local slot 0 and the
 /// parameters follow at slots 1..=params.len().
+#[allow(dead_code)]
 pub fn compile_method(
     name: &str,
     params: &[String],
@@ -430,10 +431,10 @@ impl FunctionCompiler {
                             // Fusion: i = i + <num> / i = i - <num>
                             if let Expr::Binary(l, k2, r) = e {
                                 let imm = match (k2, l.as_ref(), r.as_ref()) {
-                                    (Kind::Plus, Expr::Var(ln), Expr::Value(Value::Number(m))) if ln == n => Some((*m)),
+                                    (Kind::Plus, Expr::Var(ln), Expr::Value(Value::Number(m))) if ln == n => Some(*m ),
                                     // Store the positive magnitude; the
                                     // SubLocalImm handler negates it once.
-                                    (Kind::Minus, Expr::Var(ln), Expr::Value(Value::Number(m))) if ln == n => Some((*m)),
+                                    (Kind::Minus, Expr::Var(ln), Expr::Value(Value::Number(m))) if ln == n => Some(*m ),
                                     _ => None,
                                 };
                                 if let Some(m) = imm {
@@ -532,8 +533,6 @@ impl FunctionCompiler {
                         Ok(())
                     }
                     Kind::StarAssign
-                    | Kind::SlashAssign
-                    | Kind::StarAssign
                     | Kind::SlashAssign
                     | Kind::PercentAssign => {
                         self.compile_expr(e)?;

@@ -11,6 +11,8 @@
 //!   - JS: WhiskeySockets/Baileys                (src/Socket/noise.js, Utils)
 //!   - Protocol notes: https://wiki.whatsapp.com / WADump research
 
+#![allow(dead_code)]
+
 use native_tls::TlsStream;
 use std::net::TcpStream;
 
@@ -227,7 +229,7 @@ impl Wa2Session {
         for (k, v) in WA_HEADERS {
             headers.set_raw(k.to_string(), vec![v.as_bytes().to_vec()]);
         }
-        let mut builder =
+        let builder =
             websocket::ClientBuilder::new(WA_WS_URL).map_err(|e| Error::Ws(e.to_string()))?;
         let client = builder
             .custom_headers(&headers)

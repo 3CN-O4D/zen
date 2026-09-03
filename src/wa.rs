@@ -5,7 +5,7 @@
 //! One bridge process per interpreter (thread-local session, like browser/CDP).
 
 use crate::runtime::{Vm, Value};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
