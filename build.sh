@@ -97,10 +97,14 @@ install_reqs() {
     case "$os" in
         termux)
             # Termux: ensure the native build toolchain + libs are present.
-            local termux_pkgs=(rust clang binutils make pkg-config)
+            # Probe for a representative binary each package actually provides
+            # (e.g. binutils ships `ld`, not a `binutils` command) so we don't
+            # re-run pkg install on every invocation when the tools are present.
+            local termux_pkgs='rust:rustc clang:clang binutils:ld make:make pkg-config:pkg-config'
             local missing=()
-            for p in "${termux_pkgs[@]}"; do
-                command -v "$p" >/dev/null 2>&1 || missing+=("$p")
+            for entry in $termux_pkgs; do
+                local pkg_name="${entry%%:*}" probe="${entry##*:}"
+                command -v "$probe" >/dev/null 2>&1 || missing+=("$pkg_name")
             done
             if [ "${#missing[@]}" -gt 0 ]; then
                 log "Installing missing Termux packages: ${missing[*]}"
@@ -274,8 +278,10 @@ main() {
     fi
     info "Install prefix: $prefix"
 
+    # do_build prints status lines via log/info (stdout) then the binary path
+    # last; take only the final line so $bin is just the path.
     local bin
-    bin="$(do_build "$os" "$arch")"
+    bin="$(do_build "$os" "$arch" | tail -1)"
 
     if [ ! -f "$bin" ]; then
         err "Build failed: binary not found at $bin"
@@ -286,7 +292,7 @@ main() {
     case "$action" in
         build)    log "Build complete: $bin" ;;
         package)  do_package "$bin" "$os" "$arch" ;;
-        install)  do_install "$bin" "$prefix/bin" ;;
+        install)  do_install "$bin" "$prefix" ;;
     esac
 }
 
