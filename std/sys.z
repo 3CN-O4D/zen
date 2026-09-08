@@ -2,22 +2,28 @@
 # Wraps Rust-native functions
 
 let argv = cli_args()
-let version = "Zen 0.1.0 (Rust)"
-let version_info = [0, 1, 0, "final"]
+let version = "Zen " + zen_version() + " (Rust)"
 let platform = os_platform()
 let byteorder = "little"
 let maxsize = 9223372036854775807
-let hexversion = 16777216
+let hexversion = 0
 
-let _path = ["."]
-
-func path() {
-    return _path
-}
-
+# Python-compatible exit. sys_exit is the canonical implementation and
+# routes through the os dict (visible to modules), not the bare `exit`
+# native, which is not reliably in scope inside module functions.
 func sys_exit(code) {
-    exit(code)
+    os.exit(code)
 }
+
+# Alias so sys.exit(code) works like Python.
+func exit(code) {
+    sys_exit(code)
+}
+
+# Python-compatible module search path (a list). Note: module functions
+# cannot see module-level `let` variables in Zen, so this must be a
+# module-level value, not a function returning one.
+let path = ["."]
 
 func getsizeof(obj) {
     let t = typeof(obj)

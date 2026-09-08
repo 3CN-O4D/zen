@@ -22,6 +22,7 @@ let fs = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("mtime".into(), Value::NativeFunction("fs_mtime".into())),
     ("mkdir".into(), Value::NativeFunction("fs_mkdir".into())),
     ("mkdirs".into(), Value::NativeFunction("fs_mkdir".into())),
+    ("makedirs".into(), Value::NativeFunction("fs_mkdir".into())),
     ("remove".into(), Value::NativeFunction("fs_remove".into())),
     ("rmdir".into(), Value::NativeFunction("fs_rmdir".into())),
     ("rmtree".into(), Value::NativeFunction("fs_rmtree".into())),

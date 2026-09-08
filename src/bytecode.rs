@@ -147,6 +147,13 @@ pub enum Opcode {
     // General call: stack holds [callee, arg1..argN]; arg1 = N. The callee
     // value must be a Function or NativeFunction name reference.
     CallValue,
+    // Statement-position list mutation through a variable-rooted member/index
+    // chain (`d.l.push(x)`, `d["l"].push(x)`, `d.a.b.push(x)`). arg1 = const
+    // index of the chain descriptor ("method\u{1f}root\u{1f}step..." with
+    // "k:key" for member steps and "i" for index steps); arg2 = count of
+    // mutator argument values already on the stack (top-of-stack). Any index
+    // step values were pushed below the mutator args, in step order.
+    NestedMutate,
 }
 
 /// A single bytecode instruction.
@@ -698,49 +705,62 @@ impl FunctionCompiler {
                 Ok(())
             }
             StmtKind::Expr(e) => {
-                // Statement-position push/pop on a named variable must mutate
-                // the variable itself; route through dedicated slot opcodes.
+                // Statement-position list mutation on a variable-rooted chain
+                // must write back through the chain. Prefer the general
+                // member/index chain path (d.l.push(x), d["l"].push(x),
+                // d.a.b.push(x)), then fall back to the plain-variable fast
+                // path (l.push(x)) which uses dedicated slot opcodes.
                 if let Expr::Call(callee, args) = e {
                     if let Expr::Member(obj, method) = callee.as_ref() {
-                        if matches!(method.as_str(), "push" | "append" | "pop") {
-                            if let Expr::Var(name) = obj.as_ref() {
-                                if let Some(&slot) = self.slots.get(name) {
-                                    match method.as_str() {
-                                        "push" | "append" => {
-                                            if args.len() != 1 {
-                                                return Err("push expects exactly one argument".into());
+                        let m = method.as_str();
+                        if matches!(m, "push" | "append" | "pop" | "splice" | "insert" | "shift" | "unshift") {
+                            match obj.as_ref() {
+                                Expr::Var(name) => {
+                                    if matches!(m, "push" | "append" | "pop") {
+                                        if let Some(&slot) = self.slots.get(name) {
+                                            match m {
+                                                "push" | "append" => {
+                                                    if args.len() != 1 {
+                                                        return Err("push expects exactly one argument".into());
+                                                    }
+                                                    self.compile_expr(&args[0])?;
+                                                    self.emit(Opcode::PushSlot, slot, 0, 0);
+                                                }
+                                                _ => {
+                                                    if !args.is_empty() {
+                                                        return Err("pop expects no arguments".into());
+                                                    }
+                                                    self.emit(Opcode::PopSlot, slot, 0, 0);
+                                                    self.emit(Opcode::Pop, 0, 0, 0);
+                                                }
                                             }
-                                            self.compile_expr(&args[0])?;
-                                            self.emit(Opcode::PushSlot, slot, 0, 0);
-                                        }
-                                        _ => {
-                                            if !args.is_empty() {
-                                                return Err("pop expects no arguments".into());
+                                            return Ok(());
+                                        } else {
+                                            let ci = self.const_str(name);
+                                            match m {
+                                                "push" | "append" => {
+                                                    if args.len() != 1 {
+                                                        return Err("push expects exactly one argument".into());
+                                                    }
+                                                    self.compile_expr(&args[0])?;
+                                                    self.emit(Opcode::PushGlobal, ci, 0, 0);
+                                                }
+                                                _ => {
+                                                    if !args.is_empty() {
+                                                        return Err("pop expects no arguments".into());
+                                                    }
+                                                    self.emit(Opcode::PopGlobal, ci, 0, 0);
+                                                    self.emit(Opcode::Pop, 0, 0, 0);
+                                                }
                                             }
-                                            self.emit(Opcode::PopSlot, slot, 0, 0);
-                                            self.emit(Opcode::Pop, 0, 0, 0);
+                                            return Ok(());
                                         }
                                     }
-                                    return Ok(());
-                                } else {
-                                    let ci = self.const_str(name);
-                                    match method.as_str() {
-                                        "push" | "append" => {
-                                            if args.len() != 1 {
-                                                return Err("push expects exactly one argument".into());
-                                            }
-                                            self.compile_expr(&args[0])?;
-                                            self.emit(Opcode::PushGlobal, ci, 0, 0);
-                                        }
-                                        _ => {
-                                            if !args.is_empty() {
-                                                return Err("pop expects no arguments".into());
-                                            }
-                                            self.emit(Opcode::PopGlobal, ci, 0, 0);
-                                            self.emit(Opcode::Pop, 0, 0, 0);
-                                        }
+                                }
+                                _ => {
+                                    if self.try_emit_nested_mutate(obj, m, args)? {
+                                        return Ok(());
                                     }
-                                    return Ok(());
                                 }
                             }
                         }
@@ -827,6 +847,78 @@ fn local_opcode(&self, op: &Kind) -> Result<Opcode, String> {
             Kind::PercentAssign => Opcode::ModGlobal,
             _ => return Err("unsupported assignment operator in bytecode".into()),
         })
+    }
+
+    /// Statement-position list mutation through a variable-rooted member/index
+    /// chain (`d.l.push(x)`, `d["l"].push(x)`, `d.a.b.push(x)`). Emits the
+    /// NestedMutate opcode with a packed chain descriptor and the mutator
+    /// arguments on the stack, so the runtime can write the mutated list back
+    /// through the chain. Returns Ok(false) when `obj` isn't a supported path.
+    fn try_emit_nested_mutate(&mut self, obj: &Expr, method: &str, args: &[Expr]) -> Result<bool, String> {
+        enum Step {
+            Key(String),
+            Index,
+        }
+        // Walk the chain terminal-to-root, then reverse so the steps and index
+        // expressions are in root-to-terminal (evaluation) order.
+        let mut steps: Vec<Step> = Vec::new();
+        let mut index_exprs: Vec<&Expr> = Vec::new();
+        let mut cur = obj;
+        let root = loop {
+            match cur {
+                Expr::Member(inner, field) => {
+                    steps.push(Step::Key(field.clone()));
+                    cur = inner;
+                }
+                Expr::Index(inner, idx) => {
+                    steps.push(Step::Index);
+                    index_exprs.push(idx);
+                    cur = inner;
+                }
+                Expr::Var(name) => break name,
+                _ => return Ok(false),
+            }
+        };
+        steps.reverse();
+        index_exprs.reverse();
+        if steps.is_empty() {
+            return Ok(false);
+        }
+        // Descriptor: "g:name\u{1f}method\u{1f}step..." for globals, or
+        // "s:slot_idx\u{1f}method\u{1f}step..." for function-locals.
+        let root_info = if let Some(&slot) = self.slots.get(root) {
+            format!("s:{slot}")
+        } else {
+            format!("g:{root}")
+        };
+        let mut desc = String::new();
+        desc.push_str(&root_info);
+        desc.push('\u{1f}');
+        desc.push_str(method);
+        let mut index_count: u16 = 0;
+        for s in &steps {
+            desc.push('\u{1f}');
+            match s {
+                Step::Key(k) => {
+                    desc.push_str("k:");
+                    desc.push_str(k);
+                }
+                Step::Index => {
+                    desc.push('i');
+                    index_count += 1;
+                }
+            }
+        }
+        let ci = self.const_str(&desc);
+        // Compute index step values (in step order) below the mutator args.
+        for idx in &index_exprs {
+            self.compile_expr(idx)?;
+        }
+        for a in args {
+            self.compile_expr(a)?;
+        }
+        self.emit(Opcode::NestedMutate, ci, args.len() as u16, index_count);
+        Ok(true)
     }
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<(), String> {

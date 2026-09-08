@@ -37,6 +37,7 @@ mod http;
 mod json;
 mod math;
 mod os;
+mod requests;
 mod re;
 mod statistics;
 mod string;

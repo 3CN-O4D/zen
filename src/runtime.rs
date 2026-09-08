@@ -3064,6 +3064,14 @@ struct ZenClass {
 }
 type NativeFunc = fn(Vec<Value>) -> Result<Value, String>;
 
+/// A single step in a member/index chain used to reach a nested list
+/// through a variable root (`d.l.push(x)`, `d["l"].push(x)`, `d.a.b.push(x)`).
+#[derive(Clone)]
+pub(crate) enum NestedStep {
+    Key(String),
+    Index(Value),
+}
+
 pub struct Vm {
     pub vars: indexmap::IndexMap<String, Value>,
     functions: HashMap<String, Function>,
@@ -3676,6 +3684,34 @@ impl Vm {
                 }
             },
         );
+        // dir — Python-like introspection: list the callable methods/keys of a value.
+        self.native_functions.insert(
+            "dir".into(),
+            |args| {
+                let v = args.first().cloned().unwrap_or(Value::Null);
+                let mut names: Vec<String> = Vec::new();
+                fn push(names: &mut Vec<String>, keys: &str) {
+                    for k in keys.split(' ').filter(|s| !s.is_empty()) {
+                        names.push(k.to_string());
+                    }
+                }
+                match &v {
+                    Value::Dict(d) => {
+                        for k in d.keys() {
+                            names.push(k.clone());
+                        }
+                    }
+                    Value::List(_) => push(&mut names, "push pop shift unshift splice insert append add join contains includes indexOf index_of first last reverse sort sorted map filter each reduce flat flatten compact uniq unique shuffle sample slice take skip drop chunk zip sum length len copy concat clear to_string toString iterations pairs"),
+                    Value::String(_) => push(&mut names, "toNum to_num toNumber to_number split contains includes startsWith startswith starts_with endsWith endswith ends_with find indexOf index_of charAt char char_at ord trim strip trimEnd trimRight trim_right trimStart trimLeft trim_left lower toLower toLowerCase to_lower upper toUpper toUpperCase to_upper title capitalize capfirst center zfill reverse repeat length len concat substring substr slice toList to_list lstrip ltrim rstrip rtrim replace replace_all format"),
+                    Value::Number(_) => push(&mut names, "to_string toString toInt to_float floor ceil round abs sqrt"),
+                    Value::Bool(_) => push(&mut names, "toString to_string"),
+                    Value::Instance(_) => push(&mut names, "toString to_string"),
+                    _ => {}
+                }
+                names.sort();
+                Ok(Value::List(Arc::new(names.into_iter().map(Value::String).collect::<Vec<Value>>())))
+            },
+        );
         // has — check if collection contains key/element
         self.native_functions.insert(
             "has".into(),
@@ -3885,6 +3921,9 @@ impl Vm {
         // http module
         crate::http::init_http_module(self);
 
+        // requests module
+        crate::requests::init_requests_module(self);
+
         // decimal module
         crate::decimal::init_decimal_module(self);
 
@@ -3973,7 +4012,7 @@ impl Vm {
         crate::binascii::init_binascii_module(self);
 
         // Register all core native functions eagerly
-            const NATIVES: [&str; 422] = [
+            const NATIVES: [&str; 457] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -3998,6 +4037,41 @@ impl Vm {
             "time_from_unix",
             "time_add_days",
             "cli_args",
+            "zen_version",
+            "requests_request",
+            "requests_get",
+            "requests_options",
+            "requests_head",
+            "requests_post",
+            "requests_put",
+            "requests_patch",
+            "requests_delete",
+            "requests_session",
+            "__requests_sess_request",
+            "__requests_sess_get",
+            "__requests_sess_post",
+            "__requests_sess_put",
+            "__requests_sess_patch",
+            "__requests_sess_delete",
+            "__requests_sess_head",
+            "__requests_sess_options",
+            "__requests_sess_close",
+            "__requests_sess_headers",
+            "__requests_sess_cookies",
+            "__requests_resp_json",
+            "__requests_resp_text",
+            "__requests_resp_content",
+            "__requests_resp_iter_content",
+            "__requests_resp_iter_lines",
+            "__requests_resp_raise_for_status",
+            "__requests_resp_close",
+            "requests_codes",
+            "requests_exc",
+            "requests_exc_http",
+            "requests_utils_quote",
+            "requests_utils_unquote",
+            "requests_utils_ua",
+            "requests_utils_encode",
             "http_get",
             "http_post",
             "http_put",
@@ -5160,11 +5234,11 @@ Expr::Index(obj, idx) => {
                 let needle = one()?;
                 Ok(Value::Bool(value.contains(&needle)))
             }
-            "startsWith" | "startswith" => {
+            "startsWith" | "startswith" | "starts_with" => {
                 let prefix = one()?;
                 Ok(Value::Bool(value.starts_with(&prefix)))
             }
-            "endsWith" | "endswith" => {
+            "endsWith" | "endswith" | "ends_with" => {
                 let suffix = one()?;
                 Ok(Value::Bool(value.ends_with(&suffix)))
             }
@@ -5217,14 +5291,14 @@ Expr::Index(obj, idx) => {
                 }
                 Ok(Value::String(result))
             }
-            "find" => {
+            "find" | "indexOf" | "index_of" => {
                 let needle = one()?;
                 match value.find(&needle) {
                     Some(i) => Ok(Value::Number(i as f64)),
                     None => Ok(Value::Number(-1.0)),
                 }
             }
-            "charAt" | "char" => {
+            "charAt" | "char" | "char_at" => {
                 let idx = match args.first() {
                     Some(Value::Number(n)) => *n as usize,
                     _ => return Err("charAt expects a number index".into()),
@@ -5239,8 +5313,8 @@ Expr::Index(obj, idx) => {
             "trim" | "strip" => Ok(Value::String(value.trim().into())),
             "trimEnd" | "trimRight" | "trim_right" => Ok(Value::String(value.trim_end().into())),
             "trimStart" | "trimLeft" | "trim_left" => Ok(Value::String(value.trim_start().into())),
-            "lower" | "toLower" | "toLowerCase" => Ok(Value::String(value.to_lowercase())),
-            "upper" | "toUpper" | "toUpperCase" => Ok(Value::String(value.to_uppercase())),
+            "lower" | "toLower" | "toLowerCase" | "to_lower" => Ok(Value::String(value.to_lowercase())),
+            "upper" | "toUpper" | "toUpperCase" | "to_upper" => Ok(Value::String(value.to_uppercase())),
             "reverse" => Ok(Value::String(value.chars().rev().collect())),
             "length" => Ok(Value::Number(value.chars().count() as f64)),
             "repeat" => {
@@ -5257,13 +5331,6 @@ Expr::Index(obj, idx) => {
                 }
                 Ok(Value::String(out))
             }
-            "indexOf" => {
-                let needle = one()?;
-                match value.find(&needle) {
-                    Some(i) => Ok(Value::Number(i as f64)),
-                    None => Ok(Value::Number(-1.0)),
-                }
-            }
             "substring" | "substr" | "slice" => {
                 let (start, end) = match args.as_slice() {
                     [Value::Number(s), Value::Number(e)] => (*s as usize, Some(*e as usize)),
@@ -5275,7 +5342,7 @@ Expr::Index(obj, idx) => {
                 let end = end.unwrap_or(chars.len()).min(chars.len());
                 Ok(Value::String(chars[start..end].iter().collect()))
             }
-            "toList" => Ok(Value::List(Arc::new(
+            "toList" | "to_list" => Ok(Value::List(Arc::new(
                 value.chars().map(|c| Value::String(c.to_string())).collect::<Vec<Value>>(),
             ))),
             "lstrip" | "ltrim" => Ok(Value::String(value.trim_start().into())),
@@ -5368,7 +5435,7 @@ Expr::Index(obj, idx) => {
                     value.split_terminator('\n').map(|s| Value::String(s.trim_end_matches('\r').into())).collect::<Vec<Value>>(),
                 )))
             }
-            "replace" => {
+            "replace" | "replace_all" => {
                 let (from, to, n) = match args.as_slice() {
                     [Value::String(f), Value::String(t)] => (f.clone(), t.clone(), None),
                     [Value::String(f), Value::String(t), Value::Number(c)] => (f.clone(), t.clone(), Some(*c as usize)),
@@ -7770,6 +7837,65 @@ Expr::Index(obj, idx) => {
                         }
                     }
                 }
+                Opcode::NestedMutate => {
+                    let Value::String(desc) = &cur.constants[inst.arg1 as usize] else {
+                        return Err("bad constant in NestedMutate".into());
+                    };
+                    let argc = inst.arg2 as usize;
+                    let idx_count = inst.arg3 as usize;
+                    if stack.len() < argc + idx_count {
+                        return Err("stack underflow in NestedMutate".into());
+                    }
+                    // Top of stack: mutator args. Below them: index step
+                    // values, in step order.
+                    let args: Vec<Value> = stack.split_off(stack.len() - argc);
+                    let idx_vals: Vec<Value> = stack.split_off(stack.len() - idx_count);
+                    // Descriptor: "g:name" or "s:slot" \u{1f} "method" \u{1f} step...
+                    let parts: Vec<&str> = desc.split('\u{1f}').collect();
+                    if parts.len() < 2 {
+                        return Err("bad chain descriptor in NestedMutate".into());
+                    }
+                    let (is_local, slot_idx, root_name) = if let Some(s) = parts[0].strip_prefix("s:") {
+                        let slot: usize = s.parse().map_err(|_| "bad local slot in NestedMutate")?;
+                        (true, slot, String::new())
+                    } else if let Some(name) = parts[0].strip_prefix("g:") {
+                        (false, 0, name.to_string())
+                    } else {
+                        return Err("bad root encoding in NestedMutate".into());
+                    };
+                    let method = parts[1].to_string();
+                    let mut steps: Vec<NestedStep> = Vec::new();
+                    let mut idx_idx = 0;
+                    for p in &parts[2..] {
+                        if let Some(key) = p.strip_prefix("k:") {
+                            steps.push(NestedStep::Key(key.to_string()));
+                        } else if *p == "i" {
+                            let v = idx_vals.get(idx_idx).cloned().unwrap_or(Value::Null);
+                            idx_idx += 1;
+                            steps.push(NestedStep::Index(v));
+                        } else {
+                            return Err("bad chain descriptor in NestedMutate".into());
+                        }
+                    }
+                    // Resolve the root value.
+                    let mut root_val = if is_local {
+                        locals.get(base + slot_idx).cloned().unwrap_or(Value::Null)
+                    } else {
+                        self.vars.get(&root_name).cloned().unwrap_or(Value::Null)
+                    };
+                    match self.nested_mutate_inplace(&mut root_val, steps, &method, args, None)? {
+                        Some(v) => stack.push(v),
+                        None => stack.push(Value::Null),
+                    }
+                    // Write root container back.
+                    if is_local {
+                        if base + slot_idx < locals.len() {
+                            locals[base + slot_idx] = root_val;
+                        }
+                    } else {
+                        self.vars.insert(root_name, root_val);
+                    }
+                }
                 Opcode::Return => {
                     let v = stack.pop().unwrap_or(Value::Null);
                     if cur.name == "f" {
@@ -8525,6 +8651,227 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             },
             _ => Err("expected a function".into()),
         }
+}
+
+    /// For a mutating list method (push/append/pop/splice etc.) applied to a
+    /// nested list reachable through a variable root — `d.l.push(x)`,
+    /// `d["l"].push(x)`, `d.a.b.push(x)` — resolve the chain and write the
+    /// mutated list back through the global/local binding so the mutation
+    /// persists (Zen dict/list values are copy-on-write across Arc).
+    fn try_nested_list_mutate(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        values: &[Value],
+        current_list: &Arc<Vec<Value>>,
+    ) -> Result<Option<Value>, String> {
+        // Flatten a member/index chain into: root var name + a list of steps.
+        let mut steps: Vec<NestedStep> = Vec::new();
+        let mut cur = object;
+        let root: String = loop {
+            match cur {
+                Expr::Member(inner, field) => {
+                    steps.push(NestedStep::Key(field.clone()));
+                    cur = inner;
+                }
+                Expr::Index(inner, idx) => {
+                    steps.push(NestedStep::Index(self.eval(idx)?));
+                    cur = inner;
+                }
+                Expr::Var(name) => break name.clone(),
+                _ => return Ok(None),
+            }
+        };
+        steps.reverse();
+        // Resolve root binding.
+        let local_idx = self.locals.iter().rposition(|(n, _)| n == &root);
+        let mut root_val = match local_idx {
+            Some(i) => self.locals[i].1.clone(),
+            None => match self.vars.get(&root) {
+                Some(v) => v.clone(),
+                None => return Ok(None),
+            },
+        };
+        let result = self.nested_mutate_inplace(&mut root_val, steps, method, values.to_vec(), Some(current_list))?;
+        // Write the (possibly nested) root container back into the binding.
+        match local_idx {
+            Some(i) => {
+                if matches!(self.locals[i].1, Value::Cell(_)) {
+                    cell_set(&self.locals[i].1, root_val);
+                } else {
+                    self.locals[i].1 = root_val;
+                }
+            }
+            None => {
+                self.vars.insert(root, root_val);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Shared in-place mutation for a variable-rooted member/index chain.
+    /// Operates on a root value reference so both the tree-walk and bytecode
+    /// VM can drive the mutation without needing name-based lookups. The
+    /// caller is responsible for resolving and writing back the root.
+    fn nested_mutate_inplace(
+        &self,
+        root_val: &mut Value,
+        steps: Vec<NestedStep>,
+        method: &str,
+        values: Vec<Value>,
+        current_list_hint: Option<&Arc<Vec<Value>>>,
+    ) -> Result<Option<Value>, String> {
+        if !matches!(method, "push" | "append" | "pop" | "splice" | "insert" | "shift" | "unshift") {
+            return Ok(None);
+        }
+        if steps.is_empty() {
+            return Ok(None);
+        }
+        let mut cur_val = root_val.clone();
+        // Helper: resolve the child value addressed by a step of `container`.
+        let get_child = |container: &Value, step: &NestedStep| -> Option<Value> {
+            match step {
+                NestedStep::Key(k) => match container {
+                    Value::Dict(arc) => arc.get(k).cloned(),
+                    _ => None,
+                },
+                NestedStep::Index(v) => match (container, v) {
+                    (Value::List(arc), Value::Number(n)) => {
+                        let items = arc.as_ref();
+                        let idx = *n as i64;
+                        let len = items.len() as i64;
+                        let norm = if idx < 0 { len + idx } else { idx };
+                        if norm < 0 || norm >= len {
+                            None
+                        } else {
+                            items.get(norm as usize).cloned()
+                        }
+                    }
+                    (Value::Dict(arc), Value::String(key)) => arc.get(key).cloned(),
+                    _ => None,
+                },
+            }
+        };
+        // Helper: resolve the terminal list addressed by a step.
+        let get_list = |container: &Value, step: &NestedStep| -> Option<Arc<Vec<Value>>> {
+            match get_child(container, step) {
+                Some(Value::List(l)) => Some(l),
+                _ => None,
+            }
+        };
+        // Helper: replace the child addressed by a step with `child`.
+        let set_child = |container: &mut Value, step: &NestedStep, child: Value| -> Result<(), ()> {
+            match step {
+                NestedStep::Key(k) => match container {
+                    Value::Dict(arc) => {
+                        Arc::make_mut(arc).insert(k.clone(), child);
+                        Ok(())
+                    }
+                    _ => Err(()),
+                },
+                NestedStep::Index(v) => match (container, v) {
+                    (Value::List(arc), Value::Number(n)) => {
+                        let items = Arc::make_mut(arc);
+                        let idx = *n as i64;
+                        let len = items.len() as i64;
+                        let norm = if idx < 0 { len + idx } else { idx };
+                        if norm < 0 || norm >= len {
+                            Err(())
+                        } else {
+                            items[norm as usize] = child;
+                            Ok(())
+                        }
+                    }
+                    (Value::Dict(arc), Value::String(key)) => {
+                        Arc::make_mut(arc).insert(key.clone(), child);
+                        Ok(())
+                    }
+                    _ => Err(()),
+                },
+            }
+        };
+        // Descend to the penultimate container, remembering each ancestor.
+        let mut steps = steps;
+        let last = steps.pop().unwrap();
+        let mut ancestors: Vec<(Value, NestedStep)> = Vec::new();
+        for step in &steps {
+            let Some(next) = get_child(&cur_val, step) else {
+                return Ok(None);
+            };
+            ancestors.push((cur_val.clone(), step.clone()));
+            cur_val = next;
+        }
+        // Resolve the terminal list, preferring the caller-supplied value.
+        let current_list: Arc<Vec<Value>> = match current_list_hint {
+            Some(l) => l.clone(),
+            None => match get_list(&cur_val, &last) {
+                Some(l) => l,
+                None => return Ok(None),
+            },
+        };
+        // Compute the mutated list and the expression result.
+        let mut nl = current_list.as_ref().clone();
+        let result: Value = match method {
+            "push" | "append" => {
+                if let Some(item) = values.first() {
+                    nl.push(item.clone());
+                }
+                Value::List(Arc::new(nl.clone()))
+            }
+            "pop" => nl.pop().unwrap_or(Value::Null),
+            "shift" => {
+                if nl.is_empty() { Value::Null } else { nl.remove(0) }
+            }
+            "insert" => {
+                if let [Value::Number(i), v] = values.as_slice() {
+                    let idx = (*i as usize).min(nl.len());
+                    nl.insert(idx, v.clone());
+                    Value::List(Arc::new(nl.clone()))
+                } else {
+                    return Ok(None);
+                }
+            }
+            "unshift" => {
+                if let Some(item) = values.first() {
+                    nl.insert(0, item.clone());
+                    Value::List(Arc::new(nl.clone()))
+                } else {
+                    return Ok(None);
+                }
+            }
+            "splice" => {
+                let (start, delete_count) = match values.as_slice() {
+                    [Value::Number(s), Value::Number(d)] => (*s as usize, *d as usize),
+                    [Value::Number(s)] => (*s as usize, 0),
+                    _ => return Ok(None),
+                };
+                let start = start.min(nl.len());
+                let delete_count = delete_count.min(nl.len() - start);
+                let removed: Vec<Value> = nl.drain(start..start + delete_count).collect();
+                let insert_items: Vec<Value> = values.into_iter().skip(2).collect();
+                for (i, item) in insert_items.into_iter().enumerate() {
+                    nl.insert(start + i, item);
+                }
+                Value::List(Arc::new(removed))
+            }
+            _ => return Ok(None),
+        };
+        // Insert the mutated list back at the terminal container.
+        let new_val = Value::List(Arc::new(nl));
+        if set_child(&mut cur_val, &last, new_val).is_err() {
+            return Ok(None);
+        }
+        // Propagate the changed container value up the chain to the root.
+        while let Some((mut parent, step)) = ancestors.pop() {
+            let child = cur_val;
+            if set_child(&mut parent, &step, child).is_err() {
+                return Ok(None);
+            }
+            cur_val = parent;
+        }
+        // Write the (possibly nested) root container back into the caller's value.
+        *root_val = cur_val;
+        Ok(Some(result))
     }
 
     /// Dispatch `obj.method(args)` for any value type. Shared by the tree-walk
@@ -8574,7 +8921,11 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                     "get" => {
                         let key = values.first().cloned().unwrap_or(Value::Null);
                         if let Value::String(k) = key {
-                            return Ok(dict.get(&k).cloned().unwrap_or(Value::Null));
+                            return Ok(dict
+                                .get(&k)
+                                .cloned()
+                                .or_else(|| values.get(1).cloned())
+                                .unwrap_or(Value::Null));
                         }
                         return Ok(Value::Null);
                     }
@@ -8607,14 +8958,24 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                     }
                     _ => {}
                 }
-                if matches!(method, "push" | "pop") {
-                    if let (Some(_expr), Some((inst, field))) =
-                        (object_expr, object_expr.and_then(|e2| self.list_target_field(e2)))
+                if matches!(method, "push" | "append" | "pop" | "splice" | "insert" | "shift" | "unshift") {
+                    // Variable-rooted chains such as dict fields/indexes
+                    // (d.l.push(x)) — general copy-on-write write-back.
+                    if let Some(e) = object_expr {
+                        if let Some(result) =
+                            self.try_nested_list_mutate(e, method, &values, &list)?
+                        {
+                            return Ok(result);
+                        }
+                    }
+                    // Instance field paths (self.items.push(x)).
+                    if let Some((inst, field)) =
+                        object_expr.and_then(|e2| self.list_target_field(e2))
                     {
                         let result = self.list_method(list.as_ref().clone(), method, values.clone())?;
                         let mut new_list = Arc::unwrap_or_clone(list);
                         match method {
-                            "push" => {
+                            "push" | "append" => {
                                 if let Some(item) = values.first() {
                                     new_list.push(item.clone());
                                 }
@@ -12448,6 +12809,9 @@ fn native_for(name: &str) -> NativeFunc {
             let start = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64();
             Ok(Value::Number(start))
         },
+        "zen_version" => |_| {
+            Ok(Value::String(env!("CARGO_PKG_VERSION").to_string()))
+        },
         "cli_args" => |_| {
             let args: Vec<Value> = env::args().map(|s| Value::String(s)).collect();
             Ok(Value::List(Arc::new(args)))
@@ -12548,12 +12912,20 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::Bool(true))
         },
         "json_encode" => |args| {
+            // Python-style signatures:
+            //   json.stringify(x)            -> compact
+            //   json.stringify(x, null, 2)   -> pretty with 2-space indent
+            //   json.stringify(x, 2)         -> pretty with 2-space indent
+            //   json.stringify(x, {pretty:true}) -> pretty
             let (value, pretty) = match args.as_slice() {
                 [v] => (v, false),
                 [v, Value::Dict(opts)] => {
                     let pretty = matches!(opts.get("pretty"), Some(Value::Bool(true)));
                     (v, pretty)
                 }
+                [v, Value::Null, Value::Number(n)] => (v, *n > 0.0),
+                [v, Value::Null] => (v, false),
+                [v, Value::Number(n)] => (v, *n > 0.0),
                 _ => return Err("json_encode expects a value".into()),
             };
             Ok(Value::String(json_encode(value, pretty)))
@@ -12602,6 +12974,40 @@ fn native_for(name: &str) -> NativeFunc {
             let body = response_body_from_args(&args)?;
             Ok(Value::String(body))
         },
+        "requests_request" => |args| crate::requests::requests_request(&args),
+        "requests_get" => |args| crate::requests::requests_get(&args),
+        "requests_options" => |args| crate::requests::requests_options(&args),
+        "requests_head" => |args| crate::requests::requests_head(&args),
+        "requests_post" => |args| crate::requests::requests_post(&args),
+        "requests_put" => |args| crate::requests::requests_put(&args),
+        "requests_patch" => |args| crate::requests::requests_patch(&args),
+        "requests_delete" => |args| crate::requests::requests_delete(&args),
+        "requests_session" => |args| crate::requests::requests_session(&args),
+        "__requests_sess_request" => |args| crate::requests::requests_sess_request(&args),
+        "__requests_sess_get" => |args| crate::requests::requests_sess_get(&args),
+        "__requests_sess_post" => |args| crate::requests::requests_sess_post(&args),
+        "__requests_sess_put" => |args| crate::requests::requests_sess_put(&args),
+        "__requests_sess_patch" => |args| crate::requests::requests_sess_patch(&args),
+        "__requests_sess_delete" => |args| crate::requests::requests_sess_delete(&args),
+        "__requests_sess_head" => |args| crate::requests::requests_sess_head(&args),
+        "__requests_sess_options" => |args| crate::requests::requests_sess_options(&args),
+        "__requests_sess_close" => |args| crate::requests::requests_sess_close(&args),
+        "__requests_sess_headers" => |args| crate::requests::requests_sess_headers(&args),
+        "__requests_sess_cookies" => |args| crate::requests::requests_sess_cookies(&args),
+        "__requests_resp_json" => |args| crate::requests::requests_resp_json(&args),
+        "__requests_resp_text" => |args| crate::requests::requests_resp_text(&args),
+        "__requests_resp_content" => |args| crate::requests::requests_resp_content(&args),
+        "__requests_resp_iter_content" => |args| crate::requests::requests_resp_iter_content(&args),
+        "__requests_resp_iter_lines" => |args| crate::requests::requests_resp_iter_lines(&args),
+        "__requests_resp_raise_for_status" => |args| crate::requests::requests_resp_raise_for_status(&args),
+        "__requests_resp_close" => |args| crate::requests::requests_resp_close(&args),
+        "requests_codes" => |args| crate::requests::requests_codes(&args),
+        "requests_exc" => |args| crate::requests::requests_exc(&args),
+        "requests_exc_http" => |args| crate::requests::requests_exc_http(&args),
+        "requests_utils_quote" => |args| crate::requests::requests_utils_quote(&args),
+        "requests_utils_unquote" => |args| crate::requests::requests_utils_unquote(&args),
+        "requests_utils_ua" => |args| crate::requests::requests_utils_ua(&args),
+        "requests_utils_encode" => |args| crate::requests::requests_utils_encode(&args),
         "sha256_hex" => |args| {
             let data = match args.first() {
                 Some(Value::String(s)) => s.as_bytes().to_vec(),
@@ -18632,7 +19038,7 @@ fn parse_file(path: &str) -> Result<Vec<Stmt>, String> {
     Parser::new(tokens).program()
 }
 
-fn json_encode(v: &Value, pretty: bool) -> String {
+pub(crate) fn json_encode(v: &Value, pretty: bool) -> String {
     if pretty {
         return json_encode_pretty(v, 0);
     }

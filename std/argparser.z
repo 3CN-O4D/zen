@@ -1,190 +1,904 @@
-# argparser.z — command-line argument parsing for Zen
+# argparser.z — Python argparse-compatible command-line argument parsing for Zen
 #
 # Usage:
 #   import argparser
-#   let p = argparser.ArgumentParser("my tool")
-#   p.add_argument("input")                              # positional
-#   p.add_argument("--verbose", {action: "store_true"})  # boolean flag
-#   p.add_argument("--outfile", {short: "-o", value: "output.txt"})
-#   p.add_argument("--count", {type: "int", value: 0})
+#   let p = argparser.ArgumentParser("prog", {description: "my tool"})
+#   p.add_argument("input", {})                                # positional
+#   p.add_argument(["-v", "--verbose"], {action: "store_true"})
+#   p.add_argument("-o", {"default": "out.txt"})
+#   p.add_argument("--count", {type: "int", "default": 0})
+#   p.add_argument(["--mode"], {choices: ["a", "b"], "default": "a"})
 #   let args = p.parse_args()
-#   # args.input, args.verbose, args.outfile, args.count
+#   print args.input
 #
-# Config keys for optional args:
-#   action: "store_true" / "store_false" (boolean flags, no value needed)
-#   type:   "int" / "float" (auto-convert the next token)
-#   value:  default value if flag not provided
-#   short:  short flag name, e.g. "-o"
-#   help:   description string for help text
+# The 2nd arg of add_argument is an options dict. `name` (1st arg) may be a
+# single option/positional string OR a list of option strings (e.g.
+# ["-v", "--verbose"]). Because `default` is a reserved word in Zen, use the
+# quoted key "default" in the options dict.
 #
-# help() works on the module or ArgumentParser class:
-#   help(argparser)
+# Supported: positional & optional args, dest, action (store, store_true,
+# store_false, store_const, append, append_const, count, help, version),
+# nargs (int, "?", "*", "+", "..."), type (str/int/float/custom func),
+# choices, "default", "required", help, metavar, subparsers, argument groups,
+# mutually exclusive groups, parse_args / parse_known_args / parse_intermixed,
+# format_help / print_help / print_usage, set_defaults.
+
+SUPPRESS = "\x00SUPPRESS\x00"
+OPTIONAL = "?"
+ZERO_OR_MORE = "*"
+ONE_OR_MORE = "+"
+PARSER = "A..."
+REMAINDER = "..."
+ABSENT = "\x00ABSENT\x00"
+
+# Module-level constants are not visible inside class methods when this file
+# is loaded via `import`, so expose sentinels through functions.
+func _ABSENT() {
+    return "\x00ABSENT\x00"
+}
+
+func _SUPPRESS() {
+    return "\x00SUPPRESS\x00"
+}
+
+func _basename(path) {
+    let parts = str(path).split("/")
+    return parts[len(parts) - 1]
+}
+
+func _convert_val(val, typ) {
+    if typ == null {
+        return val
+    }
+    if typeof(typ) == "function" {
+        return typ(val)
+    }
+    let t = str(typ)
+    if t == "int" {
+        return int(val)
+    }
+    if t == "float" {
+        return float(val)
+    }
+    return val
+}
+
+func _is_negative_number(t) {
+    if len(t) < 2 or t[0, 1] != "-" {
+        return false
+    }
+    var i = 1
+    while i < len(t) {
+        let c = t[i, i + 1]
+        if "0123456789".indexOf(c) < 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+func _is_flag(t) {
+    if len(t) < 2 {
+        return false
+    }
+    if t[0, 1] != "-" {
+        return false
+    }
+    if t == "-" {
+        return false
+    }
+    return not _is_negative_number(t)
+}
+
+# Build the options dict used internally for each argument.
+func _new_arg() {
+    return {
+        dest: "",
+        option_strings: [],
+        action: "store",
+        nargs: null,
+"const": ABSENT,
+        "default": null,
+        type: "str",
+        choices: null,
+        "required": false,
+        help: null,
+        metavar: null,
+        "version": null,
+        seen: false,
+    }
+}
 
 class ArgumentParser {
+    var _prog
     var _description
-    var _positional = []
-    var _optional = []
+    var _epilog
+    var _usage
+    var _add_help
+    var _allow_abbrev
+    var _positional
+    var _optional
+    var _groups
+    var _mutex_groups
+    var _subparsers
+    var _defaults
+    var _result
 
-    func init(description) {
-        _description = description
+    func init(prog0 = null, kwargs = null) {
+        let prog = if prog0 == null {
+            let raw = cli_args()
+            if len(raw) > 0 {
+                _basename(raw[0])
+            } else {
+                "prog"
+            }
+        } else {
+            prog0
+        }
+        _prog = prog
+        _description = _kw(kwargs, "description")
+        _epilog = _kw(kwargs, "epilog")
+        _usage = _kw(kwargs, "usage")
+        _add_help = if kwargs != null and kwargs.has("add_help") {
+            kwargs.get("add_help")
+        } else {
+            true
+        }
+        _allow_abbrev = if kwargs != null and kwargs.has("allow_abbrev") {
+            kwargs.get("allow_abbrev")
+        } else {
+            true
+        }
+        _positional = []
+        _optional = []
+        _groups = []
+        _mutex_groups = []
+        _subparsers = null
+        _defaults = {}
+        if _add_help {
+            let h = _new_arg()
+            h.dest = "help"
+            h.option_strings = ["-h", "--help"]
+            h.action = "help"
+            h.help = "show this help message and exit"
+            _optional.push(h)
+        }
         return self
     }
 
-    func _strip(name) {
-        while name.length > 0 && (name[0, 1] == "-") {
-            name = name[1, name.length]
+    func _kw(kwargs, key) {
+        if kwargs != null and kwargs.has(key) {
+            return kwargs.get(key)
         }
-        return name
+        return null
     }
 
-    func add_argument(name, config = null) {
-        let stripped = _strip(name)
-        let arg = {
-            name: stripped,
-            long: "--" + stripped,
-            short: null,
-            action: null,
-            type: null,
-            value: null,
-            help: null,
+    func _strip(name) {
+        var n = name
+        while len(n) > 0 and n[0, 1] == "-" {
+            n = n[1, len(n)]
         }
+        return n
+    }
+
+    # name may be a string or a list of strings; config is an options dict.
+    func add_argument(name, config = null) {
+        var names = []
+        if typeof(name) == "list" {
+            for n in name {
+                names.push(str(n))
+            }
+        } else {
+            names.push(str(name))
+        }
+        if len(names) == 0 {
+            return null
+        }
+        return _register(names, config)
+    }
+
+    func _register(names, config) {
+        let is_optional = false
+        let option_strings = []
+        for n in names {
+            if n.startsWith("-") {
+                is_optional = true
+            }
+            option_strings.push(n)
+        }
+        let arg = _new_arg()
+        arg.option_strings = option_strings
+        # dest: prefer the first long (--) option string, else the first
+        var dest_opt = ""
+        for os in option_strings {
+            if os.startsWith("--") {
+                dest_opt = os
+                break
+            }
+        }
+        if len(dest_opt) == 0 {
+            dest_opt = option_strings[0]
+        }
+        arg.dest = _strip(dest_opt)
         if config != null {
+            if config.has("dest") {
+                arg.dest = str(config.get("dest"))
+            }
             if config.has("action") {
-                arg.action = config.get("action")
+                arg.action = str(config.get("action"))
+            }
+            if config.has("nargs") {
+                arg.nargs = config.get("nargs")
+            }
+            if config.has("const") {
+                arg["const"] = config.get("const")
+            }
+            if config.has("default") {
+                arg["default"] = config.get("default")
             }
             if config.has("type") {
                 arg.type = config.get("type")
             }
-            if config.has("value") {
-                arg.value = config.get("value")
+            if config.has("choices") {
+                arg.choices = config.get("choices")
+            }
+            if config.has("required") {
+                arg.required = config.get("required")
             }
             if config.has("help") {
                 arg.help = config.get("help")
             }
-            if config.has("short") {
-                arg.short = config.get("short")
+            if config.has("metavar") {
+                arg.metavar = config.get("metavar")
+            }
+            if config.has("version") {
+                arg["version"] = config.get("version")
             }
         }
-        if name.startsWith("-") {
+        if arg.action == "store_true" and arg["default"] == null {
+            arg["default"] = false
+        }
+        if arg.action == "store_false" and arg["default"] == null {
+            arg["default"] = true
+        }
+        if arg.action == "count" and arg["default"] == null {
+            arg["default"] = 0
+        }
+        if arg.action == "append" and arg["default"] == null {
+            arg["default"] = []
+        }
+        if is_optional {
             _optional.push(arg)
         } else {
             _positional.push(arg)
         }
-        return self
+        return arg
     }
 
-    func parse_args() {
-        let result = {}
-        let raw = cli_args()
-        var i = 2
+    func _find_optional(token) {
+        for a in _optional {
+            for o in a.option_strings {
+                if o == token {
+                    return a
+                }
+            }
+        }
+        if _allow_abbrev and token.startsWith("--") and len(token) > 2 {
+            for a in _optional {
+                for o in a.option_strings {
+                    if o.startsWith("--") and o.startsWith(token) and len(o) > len(token) {
+                        return a
+                    }
+                }
+            }
+        }
+        return null
+    }
 
-        # first pass: consume optional flags, collect positional candidates
-        let positional_vals = []
-        while i < len(raw) {
-            let token = raw[i]
-            if token.startsWith("--") {
-                let matched = _match_long(token, raw, i)
-                if matched != null {
-                    result[matched.name] = matched.value
-                    if matched.consumed > 1 {
-                        i = i + matched.consumed
-                    } else {
-                        i = i + 1
-                    }
-                } else {
-                    i = i + 1
-                }
-            } elif token.startsWith("-") && token.length == 2 {
-                let matched = _match_short(token, raw, i)
-                if matched != null {
-                    result[matched.name] = matched.value
-                    if matched.consumed > 1 {
-                        i = i + matched.consumed
-                    } else {
-                        i = i + 1
-                    }
-                } else {
-                    i = i + 1
-                }
+    func _check_choices(arg, v) {
+        if arg.choices == null {
+            return v
+        }
+        let found = false
+        for c in arg.choices {
+            if str(c) == str(v) {
+                found = true
+                break
+            }
+        }
+        if not found {
+            _error("argument " + arg.option_strings[0] + ": invalid choice: '" + str(v) + "' (choose from " + str(arg.choices) + ")")
+        }
+        return v
+    }
+
+    func _apply_action(arg, values) {
+        let action = arg.action
+        if action == "store_true" or action == "store_false" {
+            _result[arg.dest] = (action == "store_true")
+        } elif action == "count" {
+            _result[arg.dest] = int(_result.get(arg.dest, 0)) + 1
+        } elif action == "store_const" {
+            _result[arg.dest] = arg["const"]
+        } elif action == "append_const" {
+            _append_val(arg, arg["const"])
+        } elif action == "append" or action == "extend" {
+            for v in values {
+                _append_val(arg, v)
+            }
+        } elif action == "help" {
+            print format_help()
+            exit(0)
+        } elif action == "version" {
+            print(arg["version"])
+            exit(0)
+        } else {
+            if len(values) > 1 {
+                _result[arg.dest] = values
             } else {
-                positional_vals.push(token)
+                let v = if len(values) > 0 {
+                    values[0]
+                } else {
+                    null
+                }
+                _result[arg.dest] = v
+            }
+        }
+        arg.seen = true
+    }
+
+    func _append_val(arg, v) {
+        # Build base list from existing result or the arg's list default.
+        var base = []
+        if arg["default"] != null and typeof(arg["default"]) == "list" {
+            for e in arg["default"] {
+                base.push(e)
+            }
+        }
+        if _result.has(arg.dest) and typeof(_result.get(arg.dest)) == "list" {
+            base = []
+            for e in _result.get(arg.dest) {
+                base.push(e)
+            }
+        }
+        base.push(v)
+        _result[arg.dest] = base
+    }
+
+    # Consume values for an option at tokens[i]. Returns [values_list, next_idx].
+    func _consume(arg, tokens, i) {
+        let action = arg.action
+        if action == "store_true" or action == "store_false" or action == "count" {
+            return [[], i + 1]
+        }
+        if action == "store_const" or action == "append_const" or action == "help" or action == "version" {
+            return [[], i + 1]
+        }
+        let nargs = arg.nargs
+        if nargs == null {
+            if i + 1 < len(tokens) {
+                let v = _convert_val(tokens[i + 1], arg.type)
+                return [[v], i + 2]
+            }
+            _error("argument " + arg.option_strings[0] + ": expected one argument")
+        }
+        if typeof(nargs) == "int" {
+            let cnt = int(nargs)
+            if i + 1 + cnt <= len(tokens) {
+                let vals = []
+                var k = 0
+                while k < cnt {
+                    vals.push(tokens[i + 1 + k])
+                    k = k + 1
+                }
+                let converted = []
+                for v in vals {
+                    converted.push(_convert_val(v, arg.type))
+                }
+                return [converted, i + 1 + cnt]
+            }
+            _error("argument " + arg.option_strings[0] + ": expected " + str(cnt) + " argument(s)")
+        }
+        if nargs == "?" {
+            if i + 1 < len(tokens) and not _is_flag(tokens[i + 1]) {
+                return [[_convert_val(tokens[i + 1], arg.type)], i + 2]
+            }
+            let val = if arg["const"] != _ABSENT() {
+                arg["const"]
+            } else {
+                arg["default"]
+            }
+            return [[val], i + 1]
+        }
+        if nargs == "*" or nargs == "+" or nargs == "..." {
+            var vals = []
+            var j = i + 1
+            while j < len(tokens) {
+                let t = tokens[j]
+                if _is_flag(t) {
+                    break
+                }
+                vals.push(t)
+                j = j + 1
+            }
+            if nargs == "+" and len(vals) == 0 {
+                _error("expected at least one argument for " + arg.option_strings[0])
+            }
+            let converted = []
+            for v in vals {
+                converted.push(_convert_val(v, arg.type))
+            }
+            return [converted, j]
+        }
+        return [[], i + 1]
+    }
+
+    func _cli_user_args() {
+        let raw = cli_args()
+        if len(raw) > 1 and raw[1] == "-e" {
+            return raw[3, len(raw)]
+        }
+        if len(raw) > 2 {
+            return raw[2, len(raw)]
+        }
+        return []
+    }
+
+    func _to_strings(arg_list) {
+        let out = []
+        for t in arg_list {
+            out.push(str(t))
+        }
+        return out
+    }
+
+    func parse_known_args(arg_list = null) {
+        let tokens = if arg_list == null {
+            _cli_user_args()
+        } else {
+            _to_strings(arg_list)
+        }
+        return _do_parse(tokens)
+    }
+
+    func parse_args(arg_list = null) {
+        let res = parse_known_args(arg_list)
+        let unknown = res[1]
+        if len(unknown) > 0 {
+            _error("unrecognized arguments: " + str(unknown))
+        }
+        return res[0]
+    }
+
+    func parse_intermixed_args(arg_list = null) {
+        return parse_args(arg_list)
+    }
+
+    func _do_parse(raw_tokens) {
+        let tokens = []
+        for t in raw_tokens {
+            tokens.push(t)
+        }
+        _result = {}
+
+        # If subparsers are registered, find the subcommand token and split:
+        # parent parses everything before it, subparser parses everything after.
+        var cmd_name = null
+        var cmd_idx = -1
+        if _subparsers != null {
+            var j = 0
+            while j < len(tokens) {
+                let matched = false
+                for p in _subparsers.parsers {
+                    if str(p.name) == str(tokens[j]) and (j > 0 or true) {
+                        cmd_name = str(p.name)
+                        cmd_idx = j
+                        matched = true
+                        break
+                    }
+                }
+                if matched {
+                    break
+                }
+                j = j + 1
+            }
+        }
+        let n_tok = len(tokens)
+        # Determine subcommand split indices with plain statement logic.
+        var pre_end = n_tok
+        var post_start = -1
+        if cmd_idx >= 0 {
+            pre_end = cmd_idx
+            post_start = cmd_idx + 1
+        }
+        var pre_tokens = []
+        var k = 0
+        while k < pre_end {
+            pre_tokens.push(tokens[k])
+            k = k + 1
+        }
+        var post_tokens = []
+        if cmd_idx >= 0 {
+            var m = post_start
+            while m < n_tok {
+                post_tokens.push(tokens[m])
+                m = m + 1
+            }
+        }
+        # Note: if command is the first token, parent gets nothing before it.
+        if cmd_idx >= 0 {
+            _result[_subparsers.dest] = cmd_name
+        }
+
+        var i = 0
+        let unknown = []
+        # collect positional tokens in order (intermixed)
+        let positional_pool = []
+
+        while i < len(pre_tokens) {
+            let t = pre_tokens[i]
+            if _is_flag(t) {
+                # handle --opt=value
+                if t.startsWith("--") {
+                    let eq = t.indexOf("=")
+                    if eq > 0 {
+                        let inline = t[eq + 1, len(t)]
+                        let key = t[0, eq]
+                        let arg = _find_optional(key)
+                        if arg != null and arg.nargs == null and arg.action == "store" {
+                            let v = _convert_val(inline, arg.type)
+                            _apply_action(arg, [v])
+                            i = i + 1
+                            continue
+                        }
+                    }
+                }
+                let arg = _find_optional(t)
+                if arg == null {
+                    unknown.push(t)
+                    i = i + 1
+                    continue
+                }
+                let cons = _consume(arg, pre_tokens, i)
+                _apply_action(arg, cons[0])
+                if arg.action == "help" or arg.action == "version" {
+                    return [_result, unknown]
+                }
+                i = cons[1]
+            } else {
+                positional_pool.push(t)
                 i = i + 1
             }
         }
 
-        # second pass: assign positional args in order
+        # The subcommand itself is a positional (registered by add_subparsers);
+        # remove it from the pool so it isn't double-counted.
+        _assign_positionals(positional_pool)
+
+        # defaults + required checks for optionals
+        for a in _optional {
+            if _result.has(a.dest) {
+                continue
+            }
+            let act = a.action
+            if act == "help" or act == "version" {
+                continue
+            }
+            if a.required {
+                _error("the following arguments are required: " + a.dest)
+            }
+            if act == "append" or act == "append_const" or act == "extend" {
+                _result[a.dest] = a["default"]
+            } else {
+                _result[a.dest] = a["default"]
+            }
+        }
+
+        # set_defaults
+        for k in _defaults.keys() {
+            if not _result.has(k) {
+                _result[k] = _defaults.get(k)
+            }
+        }
+
+        # subparsers: forward post-subcommand tokens to the chosen subparser
+        if _subparsers != null and cmd_idx >= 0 {
+            let cmd = _result.get(_subparsers.dest)
+            let found = null
+            for p in _subparsers.parsers {
+                if str(p.name) == str(cmd) {
+                    found = p.parser
+                    break
+                }
+            }
+            if found != null {
+                let sub_res = found.parse_known_args(post_tokens)
+                for k in sub_res[0].keys() {
+                    _result[k] = sub_res[0].get(k)
+                }
+                unknown = sub_res[1]
+            }
+        }
+
+        return [_result, unknown]
+    }
+
+    func _assign_positionals(list) {
         var pi = 0
         for arg in _positional {
-            if pi < len(positional_vals) {
-                result[arg.name] = positional_vals[pi]
+            if pi >= len(list) {
+                # If no tokens remain: optional positional gets const/default;
+                # variadic positional gets its default (usually []).
+                if arg.nargs == "?" {
+                    _result[arg.dest] = if arg["const"] != _ABSENT() {
+                        arg["const"]
+                    } else {
+                        arg["default"]
+                    }
+                } elif arg.nargs == "*" or arg.nargs == "+" or arg.nargs == "..." {
+                    _result[arg.dest] = if arg["default"] != null {
+                        arg["default"]
+                    } else {
+                        []
+                    }
+                } elif typeof(arg.nargs) == "int" {
+                    let cnt = int(arg.nargs)
+                    let z = []
+                    var k2 = 0
+                    while k2 < cnt {
+                        z.push(null)
+                        k2 = k2 + 1
+                    }
+                    _result[arg.dest] = z
+                } elif arg.required and arg["default"] == null {
+                    _error("the following arguments are required: " + arg.dest)
+                }
+                continue
+            }
+            let nargs = arg.nargs
+            if nargs == null {
+                let v = _convert_val(list[pi], arg.type)
+                _result[arg.dest] = _check_choices(arg, v)
                 pi = pi + 1
-            } elif arg.value != null {
-                result[arg.name] = arg.value
-            }
-        }
-
-        # fill defaults for missing optional args
-        for arg in _optional {
-            if !result.has(arg.name) {
-                if arg.action == "store_true" {
-                    result[arg.name] = false
-                } elif arg.action == "store_false" {
-                    result[arg.name] = true
-                } elif arg.value != null {
-                    result[arg.name] = arg.value
+            } elif typeof(nargs) == "int" {
+                let cnt = int(nargs)
+                let vals = []
+                var k = 0
+                while k < cnt and pi < len(list) {
+                    vals.push(list[pi])
+                    pi = pi + 1
+                    k = k + 1
                 }
-            }
-        }
-
-        return result
-    }
-
-    func _match_long(token, raw, pos) {
-        for arg in _optional {
-            if arg.long == token {
-                if arg.action == "store_true" {
-                    return {name: arg.name, value: true, consumed: 1}
-                } elif arg.action == "store_false" {
-                    return {name: arg.name, value: false, consumed: 1}
-                } elif pos + 1 < len(raw) {
-                    let v = raw[pos + 1]
-                    if arg.type == "int" {
-                        return {name: arg.name, value: int(v), consumed: 2}
-                    } elif arg.type == "float" {
-                        return {name: arg.name, value: float(v), consumed: 2}
+                let converted = []
+                for v in vals {
+                    converted.push(_convert_val(v, arg.type))
+                }
+                _result[arg.dest] = converted
+            } elif nargs == "?" {
+                if pi < len(list) {
+                    _result[arg.dest] = _convert_val(list[pi], arg.type)
+                    pi = pi + 1
+                } else {
+                    _result[arg.dest] = if arg["const"] != _ABSENT() {
+                        arg["const"]
                     } else {
-                        return {name: arg.name, value: v, consumed: 2}
+                        arg["default"]
                     }
                 }
+            } elif nargs == "*" or nargs == "+" {
+                let vals = list[pi, len(list)]
+                pi = len(list)
+                let converted = []
+                for v in vals {
+                    converted.push(_convert_val(v, arg.type))
+                }
+                _result[arg.dest] = _check_choices(arg, converted)
+            } elif nargs == "..." {
+                _result[arg.dest] = list[pi, len(list)]
+                pi = len(list)
             }
         }
-        return null
     }
 
-    func _match_short(token, raw, pos) {
-        for arg in _optional {
-            if arg.short == token {
-                if arg.action == "store_true" {
-                    return {name: arg.name, value: true, consumed: 1}
-                } elif arg.action == "store_false" {
-                    return {name: arg.name, value: false, consumed: 1}
-                } elif pos + 1 < len(raw) {
-                    let v = raw[pos + 1]
-                    if arg.type == "int" {
-                        return {name: arg.name, value: int(v), consumed: 2}
-                    } elif arg.type == "float" {
-                        return {name: arg.name, value: float(v), consumed: 2}
-                    } else {
-                        return {name: arg.name, value: v, consumed: 2}
-                    }
-                }
+    func set_defaults_impl(kwargs) {
+        for k in kwargs.keys() {
+            _defaults[k] = kwargs.get(k)
+        }
+        return self
+    }
+
+    func add_subparsers(dest = "command", kwargs = null) {
+        _subparsers = {
+            dest: dest,
+            parsers: [],
+        }
+        # Register a positional so the subcommand name is captured.
+        let dispatch = _new_arg()
+        dispatch.option_strings = ["<" + dest + ">"]
+        dispatch.dest = dest
+        _positional.push(dispatch)
+        return new SubparsersView(self, dest)
+    }
+
+    func add_argument_group(title = null, kwargs = null) {
+        let g = {title: title, arguments: []}
+        _groups.push(g)
+        return new ArgumentGroup(self)
+    }
+
+    func add_mutually_exclusive_group(required = false) {
+        let g = {title: null, arguments: [], "required": required}
+        _mutex_groups.push(g)
+        return new MutuallyExclusiveGroup(self)
+    }
+
+    func add_subparser(name, kwargs = null) {
+        let help = if kwargs != null and kwargs.has("help") {
+            kwargs.get("help")
+        } else {
+            null
+        }
+        let sp = new ArgumentParser()
+        let obj = {name: name, parser: sp, help: help}
+        # Nested instance-field mutation needs explicit write-back (by value).
+        let s = _subparsers
+        let plist = s.parsers
+        plist.push(obj)
+        s.parsers = plist
+        _subparsers = s
+        return sp
+    }
+
+    func format_usage() {
+        if _usage != null {
+            return str(_usage)
+        }
+        var u = str(_prog)
+        if len(_optional) > 0 {
+            u = u + " [options]"
+        }
+        for a in _positional {
+            let meta = if a.metavar != null {
+                a.metavar
+            } else {
+                a.dest
+            }
+            u = u + " " + str(meta)
+        }
+        return u
+    }
+
+    func format_help() {
+        var out = "usage: " + format_usage() + "\n"
+        if _description != null {
+            out = out + "\n" + str(_description) + "\n"
+        }
+        if len(_positional) > 0 {
+            out = out + "\npositional arguments:\n"
+            for a in _positional {
+                out = out + _format_arg(a)
             }
         }
-        return null
+        if len(_optional) > 0 {
+            out = out + "\noptions:\n"
+            var show_help = false
+            for a in _optional {
+                if a.action == "help" {
+                    show_help = true
+                    continue
+                }
+                if a.action == "version" {
+                    continue
+                }
+                out = out + _format_arg(a)
+            }
+            if show_help {
+                out = out + _format_arg(_optional[0])
+            }
+        }
+        if _epilog != null {
+            out = out + "\n" + str(_epilog) + "\n"
+        }
+        return out
+    }
+
+    func _format_arg(a) {
+        let name = if len(a.option_strings) > 0 {
+            a.option_strings[0]
+        } else {
+            a.dest
+        }
+        var line = "  " + name
+        if a.action != "store_true" and a.action != "store_false" and a.action != "count" {
+            let meta = if a.metavar != null {
+                a.metavar
+            } else {
+                "ARG"
+            }
+            line = line + " " + str(meta)
+        }
+        while len(line) < 26 {
+            line = line + " "
+        }
+        if a.help != null {
+            line = line + str(a.help)
+        }
+        return line + "\n"
+    }
+
+    func print_usage() {
+        print "usage: " + format_usage()
+    }
+
+    func print_help() {
+        print format_help()
+    }
+
+    func error(msg) {
+        print "usage: " + format_usage()
+        print str(_prog) + ": error: " + str(msg)
+        exit(2)
+    }
+
+    func _error(msg) {
+        print "usage: " + format_usage()
+        print str(_prog) + ": error: " + str(msg)
+        exit(2)
     }
 }
 
-func ArgumentParser(description) {
-    return new ArgumentParser(description)
+class SubparsersView {
+    var _parent
+    var _dest
+    func init(parent, dest) {
+        _parent = parent
+        _dest = dest
+        return self
+    }
+    func add_parser(name, kwargs = null) {
+        return _parent.add_subparser(name, kwargs)
+    }
+    func add_argument(name, config = null) {
+        return _parent.add_argument(name, config)
+    }
 }
 
+class ArgumentGroup {
+    var _parser
+    func init(parser) {
+        _parser = parser
+        return self
+    }
+    func add_argument(name, config = null) {
+        return _parser.add_argument(name, config)
+    }
+    func add_mutually_exclusive_group(required = false) {
+        return _parser.add_mutually_exclusive_group(required)
+    }
+}
+
+class MutuallyExclusiveGroup {
+    var _parser
+    func init(parser) {
+        _parser = parser
+        return self
+    }
+    func add_argument(name, config = null) {
+        return _parser.add_argument(name, config)
+    }
+}
+
+# Module-level convenience (mirrors argparse module surface)
+func ArgumentParser(prog0 = null, kwargs = null) {
+    return new ArgumentParser(prog0, kwargs)
+}
+
+func add_argument(name, config = null) {
+    return null
+}
+
+func help() {
+    print "argparser: Python argparse-compatible module for Zen"
+    print "Use argparser.ArgumentParser(...) then add_argument + parse_args."
+}

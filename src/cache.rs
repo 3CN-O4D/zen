@@ -101,6 +101,7 @@ fn op_to_id(op: Opcode) -> u16 {
         Opcode::AddGlobalImm => 74,
         Opcode::SubGlobalImm => 75,
         Opcode::CallValue => 76,
+        Opcode::NestedMutate => 77,
     }
 }
 
@@ -183,6 +184,7 @@ fn op_from_id(id: u16) -> Option<Opcode> {
         74 => Opcode::AddGlobalImm,
         75 => Opcode::SubGlobalImm,
         76 => Opcode::CallValue,
+        77 => Opcode::NestedMutate,
         _ => return None,
     })
 }
