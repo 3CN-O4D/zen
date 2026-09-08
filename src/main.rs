@@ -83,10 +83,37 @@ fn main() {
                 ("install", [spec]) => pm::install(spec, false).map(|_| ()),
                 ("install", ["--force", spec]) | ("install", [spec, "--force"]) => pm::install(spec, true).map(|_| ()),
                 ("install", ["-r", file]) | ("install", ["--requirements", file]) => pm::install_requirements(file),
-                ("init", []) => pm::init(None, None).map(|_| ()),
-                ("init", ["--name", name]) => pm::init(Some(name), None).map(|_| ()),
-                ("init", ["--name", name, "--desc", desc]) => pm::init(Some(name), Some(desc)).map(|_| ()),
-                ("init", [name]) => pm::init(Some(name), None).map(|_| ()),
+                ("init", rest) => {
+                    let mut name: Option<&str> = None;
+                    let mut desc: Option<&str> = None;
+                    let mut i = 0;
+                    while i < rest.len() {
+                        match rest[i] {
+                            "--name" => {
+                                name = rest.get(i + 1).copied();
+                                i += 2;
+                            }
+                            "--desc" | "--description" => {
+                                desc = rest.get(i + 1).copied();
+                                i += 2;
+                            }
+                            other if other.starts_with('-') => {
+                                eprintln!("{}", usage());
+                                process::exit(2);
+                            }
+                            other => {
+                                if name.is_none() {
+                                    name = Some(other);
+                                    i += 1;
+                                } else {
+                                    eprintln!("{}", usage());
+                                    process::exit(2);
+                                }
+                            }
+                        }
+                    }
+                    pm::init(name, desc).map(|_| ())
+                }
                 ("list", []) => pm::list(),
                 ("freeze", []) => pm::freeze(),
                 ("remove", [name]) | ("uninstall", [name]) => pm::remove(name),

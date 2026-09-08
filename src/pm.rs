@@ -22,7 +22,33 @@ pub fn modules_dir() -> PathBuf {
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    finish_hex(hasher.finalize())
+}
+
+fn finish_hex(digest: sha2::digest::Output<Sha256>) -> String {
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Deterministic fingerprint of a directory: sorted relative paths + file
+/// contents. Used to verify local-directory installs against their source.
+fn dir_sha256(dir: &Path) -> Result<String, String> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_files(dir, dir, &mut files)?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    for file in &files {
+        let rel = file
+            .strip_prefix(dir)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .into_owned();
+        hasher.update(rel.as_bytes());
+        hasher.update([0u8]);
+        let bytes = fs::read(file).map_err(|e| format!("failed to read {}: {e}", file.display()))?;
+        hasher.update(&bytes);
+        hasher.update([0u8]);
+    }
+    Ok(finish_hex(hasher.finalize()))
 }
 
 pub fn http_get(url: &str) -> Result<Vec<u8>, String> {
@@ -38,11 +64,20 @@ pub fn http_get(url: &str) -> Result<Vec<u8>, String> {
 /// Accepts: `owner/repo[@tag]`, `http(s)://...`, `file:///path`, or a plain path.
 fn resolve_source(spec: &str) -> (String, String) {
     if spec.starts_with("file://") {
-        (spec[7..].to_string(), spec.to_string())
+        let rest = spec[7..].to_string();
+        let abs = std::fs::canonicalize(&rest)
+            .unwrap_or_else(|_| Path::new(&rest).to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+        (abs.clone(), abs)
     } else if spec.starts_with("http://") || spec.starts_with("https://") {
         (spec.to_string(), spec.to_string())
     } else if Path::new(spec).exists() {
-        (spec.to_string(), spec.to_string())
+        let abs = std::fs::canonicalize(spec)
+            .unwrap_or_else(|_| Path::new(spec).to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+        (abs.clone(), abs)
     } else if spec.contains('/') {
         let (repo, tag) = match spec.split_once('@') {
             Some((r, t)) => (r.to_string(), t.to_string()),
@@ -182,6 +217,10 @@ fn install_single_file(path: &str, force: bool) -> Result<String, String> {
 
     let content = fs::read(path).map_err(|e| format!("failed to read {path}: {e}"))?;
     let sha = sha256_hex(&content);
+    let source = std::fs::canonicalize(path)
+        .unwrap_or_else(|_| Path::new(path).to_path_buf())
+        .to_string_lossy()
+        .into_owned();
 
     // Write the .z file as main.z so `import name` finds it
     fs::write(target.join(format!("{name}.z")), &content)
@@ -200,7 +239,7 @@ fn install_single_file(path: &str, force: bool) -> Result<String, String> {
     // Write lockfile
     let mut locked = serde_json::Map::new();
     locked.insert("name".into(), serde_json::json!(name));
-    locked.insert("source".into(), serde_json::json!(path));
+    locked.insert("source".into(), serde_json::json!(source));
     locked.insert("sha256".into(), serde_json::json!(sha));
     fs::write(target.join(".zen-lock.json"), serde_json::Value::Object(locked).to_string())
         .map_err(|e| format!("failed to write lockfile: {e}"))?;
@@ -260,6 +299,19 @@ fn install_local_dir(path: &str, force: bool) -> Result<String, String> {
         fs::write(target.join(MANIFEST), serde_json::to_string_pretty(&manifest).unwrap())
             .map_err(|e| format!("failed to write manifest: {e}"))?;
     }
+
+    // Record a source fingerprint so `verify` and `install -r` work.
+    let sha = dir_sha256(dir_path)?;
+    let source = std::fs::canonicalize(dir_path)
+        .unwrap_or_else(|_| dir_path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let mut locked = serde_json::Map::new();
+    locked.insert("name".into(), serde_json::json!(name));
+    locked.insert("source".into(), serde_json::json!(source));
+    locked.insert("sha256".into(), serde_json::json!(sha));
+    fs::write(target.join(".zen-lock.json"), serde_json::Value::Object(locked).to_string())
+        .map_err(|e| format!("failed to write lockfile: {e}"))?;
 
     eprintln!("Installed {name} v{version} (from {path}) -> {}", target.display());
     Ok(name)
@@ -402,9 +454,9 @@ pub fn install_requirements(path: &str) -> Result<(), String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let (name, _version) = match line.split_once("==") {
-            Some(parts) => parts,
-            None => (line, ""),
+        let (name, version) = match line.split_once("==") {
+            Some((n, ver)) => (n, ver.to_string()),
+            None => (line, String::new()),
         };
         let spec = if let Some(src) = sources.get(name) {
             src.clone()
@@ -412,7 +464,19 @@ pub fn install_requirements(path: &str) -> Result<(), String> {
             line.to_string()
         };
         match install(&spec, true) {
-            Ok(n) => installed.push(n),
+            Ok(n) => {
+                if !version.is_empty() {
+                    let installed = module_meta(&modules_dir().join(&n))
+                        .map(|m| m.version)
+                        .unwrap_or_default();
+                    if installed != version {
+                        return Err(format!(
+                            "{n}: expected {name}=={version} but installed {installed}"
+                        ));
+                    }
+                }
+                installed.push(n);
+            }
             Err(e) => return Err(format!("failed to install {spec}: {e}")),
         }
     }
@@ -452,8 +516,12 @@ pub fn verify(name: &str) -> Result<(), String> {
     let source = v.get("source").and_then(|s| s.as_str()).unwrap_or("");
     let (src, _label) = resolve_source(source);
     eprintln!("Verifying {name} from {source} ...");
-    let bytes = fetch_archive(&src)?;
-    let actual = sha256_hex(&bytes);
+    let actual = if Path::new(&src).is_dir() {
+        dir_sha256(Path::new(&src))?
+    } else {
+        let bytes = fetch_archive(&src)?;
+        sha256_hex(&bytes)
+    };
     if actual == expected {
         println!("{name}: OK (sha256 matches)");
         Ok(())
@@ -531,6 +599,9 @@ pub fn pack(dir: &str) -> Result<String, String> {
         let mut header = tar::Header::new_gnu();
         header.set_size(content.len() as u64);
         header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_uid(0);
+        header.set_gid(0);
         header.set_cksum();
         builder
             .append_data(&mut header, rel, &content[..])
@@ -548,6 +619,12 @@ pub fn pack(dir: &str) -> Result<String, String> {
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     for entry in fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if matches!(name.as_str(), ".git" | "node_modules" | "zen_modules" | "target")
+            || name.ends_with(".tar.gz")
+        {
+            continue;
+        }
         let path = entry.path();
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             collect_files(root, &path, out)?;
@@ -581,6 +658,16 @@ pub fn publish(dir: &str, remote: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     if !status.success() {
         return Err("git add failed".into());
+    }
+    let status = std::process::Command::new("git")
+        .current_dir(&tmp)
+        .args(["status", "--porcelain"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+        println!("Nothing to publish — {artifact} is already up to date");
+        fs::remove_dir_all(&tmp).ok();
+        return Ok(());
     }
     let status = std::process::Command::new("git")
         .current_dir(&tmp)
