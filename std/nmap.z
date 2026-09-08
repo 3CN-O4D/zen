@@ -258,7 +258,7 @@ func syn_scan(host, spec, iface) {
     var chunks = _chunks(ports, 20000)
     for ch in chunks {
         var ps = _port_list_to_str(ch)
-        s = scapy.syn_scan(host, ps, 3000, sport, iv)
+        var s = scapy.syn_scan(host, ps, 3000, sport, iv)
         for p in s.open { all_open.push(p) }
         for p in s.closed { all_closed.push(p) }
         for p in s.filtered { all_filtered.push(p) }
@@ -267,7 +267,7 @@ func syn_scan(host, spec, iface) {
     var state = "filtered"
     if len(all_open) > 0 { state = "open" }
     elif len(all_closed) > 0 { state = "closed" }
-    d = {host: host, open: all_open, closed: all_closed, filtered: all_filtered, state: state}
+    var d = {host: host, open: all_open, closed: all_closed, filtered: all_filtered, state: state}
     return d
 }
 
@@ -287,7 +287,7 @@ func connect_scan(host, spec, iface) {
     }
     var state = "closed"
     if len(open) > 0 { state = "open" }
-    d = {host: host, open: open, closed: closed, filtered: [], state: state}
+    var d = {host: host, open: open, closed: closed, filtered: [], state: state}
     return d
 }
 
@@ -497,7 +497,7 @@ func service(host, port, iface) {
     if not h.ok { return r }
     r.state = "open"
     var hint = _proto_hint(port)
-    var v = nil
+    var v = null
     if hint == "dns" {
         v = _probe_dns(host, port, iv)
     } else {
@@ -643,4 +643,6 @@ func _os_guess(probes, hints) {
     }
     if win_cnt > 0 and win_cnt >= linux_cnt { osfamily = "windows" }
     elif linux_cnt > 0 and (osfamily == "unknown" or "linux/unix" in osfamily) { osfamily = "linux" }
-    d = {osfamily: osfamily, ttl: best_ttl, accuracy: -1, hints: hints, evidence: dist}
+    var d = {osfamily: osfamily, ttl: best_ttl, accuracy: -1, hints: hints, evidence: dist}
+    return d
+}

@@ -18864,118 +18864,753 @@ pub fn check(source: &str) -> Result<(), String> {
 
 /// Lint a program, returning a list of human-readable warnings.
 pub fn lint(source: &str) -> Vec<String> {
-    let mut warnings = Vec::new();
-    let Ok(tokens) = lex(source) else {
-        return vec!["syntax error: unable to tokenize".into()];
-    };
-    let Ok(program) = Parser::new(tokens.clone()).program() else {
-        return vec!["syntax error: unable to parse".into()];
-    };
-    // Track declared globals, consts, and builtin names so we can detect
-    // undefined-variable references and const reassignment.
-    let mut globals: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut consts: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let builtins = [
-        "str", "len", "range", "int", "float", "bool", "list", "abs", "min", "max",
-        "round", "trunc", "print", "input", "typeof", "exit", "json", "fs", "re",
-        "help",
-        "math", "time", "random", "base64", "os", "crypto", "statistics", "net",
-        "go", "click", "fill", "wait", "text", "attr", "wait_for", "shot", "title",
-        "url", "browser", "page",
-    ];
-    for name in builtins {
-        globals.insert(name.into());
+    let report = LintReport::new(source);
+    if report.warnings.is_empty() {
+        return vec!["no issues found".into()];
     }
-    lint_block(&program, 0, &mut globals, &mut consts, &mut warnings);
-    if warnings.is_empty() {
-        warnings.push("no issues found".into());
-    }
-    warnings
+    report.warnings
 }
 
-fn lint_block(
-    body: &[Stmt],
-    depth: usize,
-    globals: &mut std::collections::HashSet<String>,
-    consts: &mut std::collections::HashSet<String>,
-    warnings: &mut Vec<String>,
-) {
-    let mut unreachable = false;
-    for stmt in body {
-        if unreachable {
-            match &stmt.kind {
-                StmtKind::Function(..) | StmtKind::Class(..) => {}
-                _ => warnings.push(format!(
-                    "{depth}: unreachable statement after return/break/continue"
-                )),
+#[derive(Clone, Copy, PartialEq)]
+enum DeclKind {
+    Const,
+    Let,
+    Param,
+    LoopVar,
+    Func,
+    Imported,
+    Class,
+}
+
+struct DeclEntry {
+    kind: DeclKind,
+    line: usize,
+    read: bool,
+}
+
+#[derive(Default)]
+struct Scope {
+    names: indexmap::IndexMap<String, DeclEntry>,
+}
+
+#[derive(Clone, Copy)]
+struct FuncSig {
+    required: usize,
+    total: usize,
+}
+
+/// Authoritative set of names available to any script before it declares
+/// anything: a snapshot of the starting global environment.
+fn builtin_names() -> std::collections::HashSet<String> {
+    let vm = Vm::new();
+    let mut names = std::collections::HashSet::new();
+    names.extend(vm.vars.keys().cloned());
+    names.extend(vm.native_functions.keys().cloned());
+    names
+}
+
+/// Scope-aware, order-aware lint pass. It shares the interpreter's binding
+/// rules so findings are genuine runtime hazards, not guesses:
+///  - `let` is function-scoped (one frame per function; no block scopes)
+///  - module-level `func`/`class`/`let` bindings are hoisted by a pre-pass so
+///    a function body can still see definitions that appear later in the file
+///  - a module-level read or call of a name whose definition line is later is
+///    reported ("used before its definition"), matching the runtime order.
+struct LintReport {
+    warnings: Vec<String>,
+    seen: std::collections::HashSet<String>,
+    builtins: std::collections::HashSet<String>,
+    module_names: std::collections::HashSet<String>,
+    module_consts: std::collections::HashSet<String>,
+    module_defs: std::collections::HashMap<String, usize>,
+    module_func_sigs: std::collections::HashMap<String, FuncSig>,
+    implicit_globals: std::collections::HashSet<String>,
+    scopes: Vec<Scope>,
+    opaque: bool,
+    in_loop: usize,
+    in_function: usize,
+    in_class: usize,
+    in_block_last: bool,
+    cur_line: usize,
+}
+
+fn is_compound_assign(op: &Kind) -> bool {
+    matches!(
+        op,
+        Kind::PlusAssign
+            | Kind::MinusAssign
+            | Kind::StarAssign
+            | Kind::SlashAssign
+            | Kind::PercentAssign
+            | Kind::AmpAssign
+            | Kind::PipeAssign
+            | Kind::CaretAssign
+            | Kind::LShiftAssign
+            | Kind::RShiftAssign
+            | Kind::NullishAssign
+    )
+}
+
+impl LintReport {
+    fn new(source: &str) -> Self {
+        let mut report = LintReport {
+            warnings: Vec::new(),
+            seen: std::collections::HashSet::new(),
+            builtins: builtin_names(),
+            module_names: std::collections::HashSet::new(),
+            module_consts: std::collections::HashSet::new(),
+            module_defs: std::collections::HashMap::new(),
+            module_func_sigs: std::collections::HashMap::new(),
+            implicit_globals: std::collections::HashSet::new(),
+            scopes: vec![Scope::default()],
+            opaque: false,
+            in_loop: 0,
+            in_function: 0,
+            in_class: 0,
+            in_block_last: false,
+            cur_line: 0,
+        };
+        match lex(source) {
+            Err(e) => report.warnings.push(format!("line 1: syntax error: {e}")),
+            Ok(tokens) => match Parser::new(tokens).program() {
+                Err(e) => report.warnings.push(format!("line 1: syntax error: {e}")),
+                Ok(program) => {
+                    report.precollect(&program, 0);
+                    report.walk_stmts(&program);
+                }
+            },
+        }
+        report
+    }
+
+    fn warn_at(&mut self, line: usize, msg: String) {
+        let full = format!("line {line}: {msg}");
+        if self.seen.insert(full.clone()) {
+            self.warnings.push(full);
+        }
+    }
+
+    fn warn(&mut self, msg: String) {
+        let line = self.cur_line;
+        self.warn_at(line, msg);
+    }
+
+    fn declare(&mut self, name: &str, kind: DeclKind, line: usize) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.names.insert(
+                name.to_string(),
+                DeclEntry { kind, line, read: false },
+            );
+        }
+    }
+
+    fn resolve_kind(&self, name: &str) -> Option<DeclKind> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(entry) = scope.names.get(name) {
+                return Some(entry.kind);
             }
         }
-        match &stmt.kind {
-            StmtKind::Let(target, _, is_const) => {
-                let names = match target {
-                    LetTarget::Var(n) => vec![n.clone()],
-                    LetTarget::List(patterns) => patterns
-                        .iter()
-                        .map(|p| match p {
-                            PatternItem::Name(n) | PatternItem::Rest(n) => n.clone(),
-                        })
-                        .collect(),
-                    LetTarget::Dict(names) => names.clone(),
-                };
-                for name in names {
-                    if *is_const {
-                        consts.insert(name.clone());
+        None
+    }
+
+    fn is_defined(&self, name: &str) -> bool {
+        if self.resolve_kind(name).is_some()
+            || self.module_names.contains(name)
+            || self.implicit_globals.contains(name)
+        {
+            return true;
+        }
+        if name == "_" || name == "super" {
+            return true;
+        }
+        if name == "this" {
+            return self.scopes.iter().any(|scope| scope.names.contains_key("self"));
+        }
+        self.builtins.contains(name)
+    }
+
+    fn mark_read(&mut self, name: &str) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(entry) = scope.names.get_mut(name) {
+                entry.read = true;
+                return;
+            }
+        }
+    }
+
+    fn check_used_before_def(&mut self, name: &str) {
+        if let Some(&def_line) = self.module_defs.get(name) {
+            if def_line > self.cur_line {
+                self.warn(format!(
+                    "'{name}' is used before its definition on line {def_line}"
+                ));
+            }
+        }
+    }
+
+    fn read_var(&mut self, name: &str) {
+        if self.is_defined(name) {
+            self.mark_read(name);
+            if self.in_function == 0 {
+                self.check_used_before_def(name);
+            }
+        } else if !self.opaque && self.in_class == 0 {
+            self.warn(format!("undefined variable '{name}'"));
+        }
+    }
+
+    fn push_function_scope(&mut self, params: &[(String, Option<Expr>)]) {
+        self.in_function += 1;
+        let mut scope = Scope::default();
+        if self.in_class > 0 {
+            scope.names.insert(
+                "self".to_string(),
+                DeclEntry { kind: DeclKind::Param, line: self.cur_line, read: true },
+            );
+        }
+        for (name, _) in params {
+            scope.names.insert(
+                name.clone(),
+                DeclEntry { kind: DeclKind::Param, line: self.cur_line, read: false },
+            );
+        }
+        self.scopes.push(scope);
+    }
+
+    fn pop_function_scope(&mut self) {
+        self.in_function -= 1;
+        let scope = self.scopes.pop().unwrap();
+        for (name, entry) in &scope.names {
+            if entry.read || name == "_" || name.starts_with('_') {
+                continue;
+            }
+            let what = match entry.kind {
+                DeclKind::Param => "parameter",
+                DeclKind::Let => "variable",
+                DeclKind::LoopVar => "loop variable",
+                _ => continue,
+            };
+            self.warn_at(entry.line, format!("unused {what} '{name}'"));
+        }
+    }
+
+    fn declare_bound_name(&mut self, name: &str, is_const: bool, line: usize) {
+        if is_const
+            && (self.resolve_kind(name) == Some(DeclKind::Const)
+                || self.module_consts.contains(name))
+        {
+            self.warn_at(line, format!("redefinition of constant '{name}'"));
+        }
+        self.declare(name, if is_const { DeclKind::Const } else { DeclKind::Let }, line);
+    }
+
+    fn declare_target(&mut self, target: &LetTarget, is_const: bool, line: usize) {
+        let names: Vec<&String> = match target {
+            LetTarget::Var(name) => vec![name],
+            LetTarget::List(patterns) => patterns
+                .iter()
+                .map(|p| match p {
+                    PatternItem::Name(n) | PatternItem::Rest(n) => n,
+                })
+                .collect(),
+            LetTarget::Dict(names) => names.iter().collect(),
+        };
+        for name in names {
+            self.declare_bound_name(name, is_const, line);
+        }
+    }
+
+    /// First pass: collect every name a module scope will hold (hoisted
+    /// functions, classes, imports, and all `let`s declared anywhere at
+    /// module level), plus the definition line for direct top-level names so
+    /// the pass can detect use-before-definition. Does not descend into
+    /// function/lambda/class bodies: those names are not module-scope.
+    fn precollect(&mut self, stmts: &[Stmt], direct: usize) {
+        for stmt in stmts {
+            let line = stmt.line;
+            match &stmt.kind {
+                StmtKind::Let(target, init, is_const) => {
+                    let bound: Vec<String> = match target {
+                        LetTarget::Var(n) => vec![n.clone()],
+                        LetTarget::List(patterns) => patterns
+                            .iter()
+                            .map(|p| match p {
+                                PatternItem::Name(n) | PatternItem::Rest(n) => n.clone(),
+                            })
+                            .collect(),
+                        LetTarget::Dict(names) => names.clone(),
+                    };
+                    for name in &bound {
+                        self.module_names.insert(name.clone());
+                        if *is_const {
+                            self.module_consts.insert(name.clone());
+                        }
+                        if direct == 0 {
+                            self.module_defs.entry(name.clone()).or_insert(line);
+                        }
                     }
-                    globals.insert(name);
+                    if let (LetTarget::Var(name), Expr::Lambda(params, _)) = (target, init) {
+                        let required = params.iter().filter(|(_, d)| d.is_none()).count();
+                        self.module_func_sigs.insert(
+                            name.clone(),
+                            FuncSig { required, total: params.len() },
+                        );
+                    }
+                }
+                StmtKind::Assign(name, _, _) => {
+                    // A bare module-level assignment creates a global too.
+                    self.module_names.insert(name.clone());
+                    if direct == 0 {
+                        self.module_defs.entry(name.clone()).or_insert(line);
+                    }
+                }
+                StmtKind::Function(name, params, _) => {
+                    self.module_names.insert(name.clone());
+                    if direct == 0 {
+                        self.module_defs.entry(name.clone()).or_insert(line);
+                    }
+                    let required = params.iter().filter(|(_, d)| d.is_none()).count();
+                    self.module_func_sigs.insert(
+                        name.clone(),
+                        FuncSig { required, total: params.len() },
+                    );
+                }
+                StmtKind::Class(name, _, _) => {
+                    self.module_names.insert(name.clone());
+                    if direct == 0 {
+                        self.module_defs.entry(name.clone()).or_insert(line);
+                    }
+                }
+                StmtKind::Native(name, _) => {
+                    self.module_names.insert(name.clone());
+                    if direct == 0 {
+                        self.module_defs.entry(name.clone()).or_insert(line);
+                    }
+                }
+                StmtKind::Import(items) => {
+                    for (name, alias) in items {
+                        let bound = alias.clone().unwrap_or_else(|| name.clone());
+                        self.module_names.insert(bound);
+                    }
+                }
+                StmtKind::FromImport(_, items) => {
+                    for (name, alias) in items {
+                        let bound = alias.clone().unwrap_or_else(|| name.clone());
+                        self.module_names.insert(bound);
+                    }
+                }
+                StmtKind::StarImport(_) | StmtKind::Include(_) | StmtKind::Load(_) => {
+                    self.opaque = true;
+                }
+                StmtKind::If(_, yes, no) => {
+                    self.precollect(yes, direct + 1);
+                    self.precollect(no, direct + 1);
+                }
+                StmtKind::While(_, body) => self.precollect(body, direct + 1),
+                StmtKind::For(_, _, body) => self.precollect(body, direct + 1),
+                StmtKind::Switch(_, cases, default) => {
+                    for (_, body) in cases {
+                        self.precollect(body, direct + 1);
+                    }
+                    if let Some(default) = default {
+                        self.precollect(default, direct + 1);
+                    }
+                }
+                StmtKind::Try(body, catches, finally) => {
+                    self.precollect(body, direct + 1);
+                    for catch in catches {
+                        self.precollect(&catch.body, direct + 1);
+                    }
+                    if let Some(finally) = finally {
+                        self.precollect(finally, direct + 1);
+                    }
+                }
+                StmtKind::With(_, _, body) => self.precollect(body, direct + 1),
+                _ => {}
+            }
+        }
+    }
+
+    fn walk_stmts(&mut self, stmts: &[Stmt]) {
+        let mut after: Option<&'static str> = None;
+        for (i, stmt) in stmts.iter().enumerate() {
+            self.cur_line = stmt.line;
+            self.in_block_last = i + 1 == stmts.len();
+            if let Some(kw) = after {
+                match &stmt.kind {
+                    StmtKind::Function(..)
+                    | StmtKind::Class(..)
+                    | StmtKind::Field(..)
+                    | StmtKind::Native(..) => {}
+                    _ => {
+                        self.warn_at(stmt.line, format!("unreachable statement after `{kw}`"))
+                    }
                 }
             }
-            StmtKind::Assign(n, _, _) => {
-                if consts.contains(n) {
-                    warnings.push(format!("assignment to constant '{n}'"));
+            self.walk_stmt(&stmt.kind, stmt.line);
+            after = match &stmt.kind {
+                StmtKind::Return(_) => Some("return"),
+                StmtKind::Break => Some("break"),
+                StmtKind::Continue => Some("continue"),
+                StmtKind::Throw(_) => Some("throw"),
+                _ => after,
+            };
+        }
+    }
+
+    fn walk_stmt(&mut self, kind: &StmtKind, line: usize) {
+        match kind {
+            StmtKind::Let(target, init, is_const) => {
+                self.walk_expr(init);
+                self.declare_target(target, *is_const, line);
+            }
+            StmtKind::Assign(name, op, e) => {
+                self.walk_expr(e);
+                if is_compound_assign(op) {
+                    if self.is_defined(name) {
+                        self.mark_read(name);
+                        if self.in_function == 0 {
+                            self.check_used_before_def(name);
+                        }
+                    } else if !self.opaque && self.in_class == 0 {
+                        self.warn(format!("undefined variable '{name}'"));
+                    }
+                }
+                if self.resolve_kind(name) == Some(DeclKind::Const)
+                    || self.module_consts.contains(name.as_str())
+                {
+                    self.warn_at(line, format!("assignment to constant '{name}'"));
+                } else if self.resolve_kind(name).is_none()
+                    && self.in_function > 0
+                    && self.in_class == 0
+                    && !self.opaque
+                    && !self.module_names.contains(name.as_str())
+                    && !self.builtins.contains(name.as_str())
+                    && self.implicit_globals.insert(name.clone())
+                {
+                    self.warn(format!(
+                        "assignment to undeclared variable '{name}' (implicitly creates a module-level global)"
+                    ));
                 }
             }
-            StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue => unreachable = true,
-            StmtKind::If(_, yes, no) => {
-                lint_block(yes, depth + 1, globals, consts, warnings);
-                lint_block(no, depth + 1, globals, consts, warnings);
+            StmtKind::Print(exprs, _, _) => {
+                for e in exprs {
+                    self.walk_expr(e);
+                }
             }
-            StmtKind::While(_, body) => lint_block(body, depth + 1, globals, consts, warnings),
-            StmtKind::For(_, _, body) => lint_block(body, depth + 1, globals, consts, warnings),
+            StmtKind::If(cond, yes, no) => {
+                self.walk_expr(cond);
+                if yes.is_empty() && no.is_empty() {
+                    self.warn_at(line, "empty 'if' block".into());
+                }
+                self.walk_stmts(yes);
+                self.walk_stmts(no);
+            }
+            StmtKind::While(cond, body) => {
+                self.walk_expr(cond);
+                if body.is_empty() {
+                    self.warn_at(line, "empty 'while' loop".into());
+                }
+                self.in_loop += 1;
+                self.walk_stmts(body);
+                self.in_loop -= 1;
+            }
+            StmtKind::For(names, iter, body) => {
+                self.walk_expr(iter);
+                if body.is_empty() {
+                    self.warn_at(line, "empty 'for' loop".into());
+                }
+                self.in_loop += 1;
+                for n in names {
+                    self.declare(n, DeclKind::LoopVar, line);
+                }
+                self.walk_stmts(body);
+                self.in_loop -= 1;
+            }
+            StmtKind::Break => {
+                if self.in_loop == 0 {
+                    self.warn_at(line, "'break' outside a loop (runtime error)".into());
+                }
+            }
+            StmtKind::Continue => {
+                if self.in_loop == 0 {
+                    self.warn_at(line, "'continue' outside a loop (runtime error)".into());
+                }
+            }
             StmtKind::Function(name, params, body) => {
-                let saved = globals.clone();
-                for (param, _) in params {
-                    globals.insert(param.clone());
+                self.push_function_scope(params);
+                self.walk_stmts(body);
+                self.pop_function_scope();
+                self.declare(name, DeclKind::Func, line);
+            }
+            StmtKind::Native(name, _) => {
+                self.declare(name, DeclKind::Func, line);
+            }
+            StmtKind::Field(name, init) => {
+                if let Some(e) = init {
+                    self.walk_expr(e);
                 }
-                lint_block(body, depth + 1, globals, consts, warnings);
-                *globals = saved;
                 let _ = name;
             }
-             StmtKind::With(_, _, body) => lint_block(body, depth + 1, globals, consts, warnings),
-             StmtKind::Try(body, catches, finally) => {
-                lint_block(body, depth + 1, globals, consts, warnings);
-                for clause in catches {
-                    lint_block(&clause.body, depth + 1, globals, consts, warnings);
+            StmtKind::Try(body, catches, finally) => {
+                if body.is_empty() {
+                    self.warn_at(line, "empty 'try' block".into());
                 }
-                if let Some(finally) = finally.as_ref() {
-                    lint_block(finally, depth + 1, globals, consts, warnings);
+                self.walk_stmts(body);
+                for catch in catches {
+                    if let Some(v) = &catch.var {
+                        self.declare(v, DeclKind::Let, line);
+                    }
+                    self.walk_stmts(&catch.body);
+                }
+                if let Some(finally) = finally {
+                    self.walk_stmts(finally);
                 }
             }
-            StmtKind::Switch(_, cases, default) => {
-                for (_, body) in cases {
-                    lint_block(body, depth + 1, globals, consts, warnings);
+            StmtKind::Throw(e) => {
+                self.walk_expr(e);
+            }
+            StmtKind::Return(Some(e)) => {
+                if self.in_function == 0 {
+                    self.warn_at(line, "'return' outside a function (runtime error)".into());
+                }
+                self.walk_expr(e);
+            }
+            StmtKind::Return(None) => {
+                if self.in_function == 0 {
+                    self.warn_at(line, "'return' outside a function (runtime error)".into());
+                }
+            }
+            StmtKind::Class(name, _, body) => {
+                self.declare(name, DeclKind::Class, line);
+                self.in_class += 1;
+                self.walk_stmts(body);
+                self.in_class -= 1;
+            }
+            StmtKind::Import(items) => {
+                for (name, alias) in items {
+                    let bound = alias.clone().unwrap_or_else(|| name.clone());
+                    self.declare(&bound, DeclKind::Imported, line);
+                }
+            }
+            StmtKind::FromImport(_, items) => {
+                for (name, alias) in items {
+                    let bound = alias.clone().unwrap_or_else(|| name.clone());
+                    self.declare(&bound, DeclKind::Imported, line);
+                }
+            }
+            StmtKind::StarImport(_) | StmtKind::Include(_) | StmtKind::Load(_) => {
+                self.opaque = true;
+            }
+            StmtKind::SetMember(obj, _, val) => {
+                self.walk_expr(obj);
+                self.walk_expr(val);
+            }
+            StmtKind::SetIndex(obj, idx, val) => {
+                self.walk_expr(obj);
+                self.walk_expr(idx);
+                self.walk_expr(val);
+            }
+            StmtKind::Switch(value, cases, default) => {
+                self.walk_expr(value);
+                if cases.is_empty() && default.is_none() {
+                    self.warn_at(line, "empty 'switch' block".into());
+                }
+                for (cv, body) in cases {
+                    self.walk_expr(cv);
+                    self.walk_stmts(body);
                 }
                 if let Some(default) = default {
-                    lint_block(default, depth + 1, globals, consts, warnings);
+                    self.walk_stmts(default);
                 }
             }
-            StmtKind::Expr(Expr::Call(callee, _)) => {
-                if let Expr::Var(name) = callee.as_ref() {
-                    if !globals.contains(name) {
-                        warnings.push(format!("call to possibly undefined function '{name}'"));
+            StmtKind::With(context, var, body) => {
+                self.walk_expr(context);
+                if let Some(v) = var {
+                    self.declare(v, DeclKind::Let, line);
+                }
+                if body.is_empty() {
+                    self.warn_at(line, "empty 'with' block".into());
+                }
+                self.walk_stmts(body);
+            }
+            StmtKind::Expr(e) => {
+                let no_effect = matches!(e, Expr::Var(_)) && !self.in_block_last;
+                self.walk_expr(e);
+                if no_effect {
+                    self.warn_at(line, "expression statement has no effect".into());
+                }
+            }
+        }
+    }
+
+    fn walk_expr(&mut self, e: &Expr) {
+        match e {
+            Expr::Value(_) => {}
+            Expr::Named(_, inner) => self.walk_expr(inner),
+            Expr::Var(name) => self.read_var(name),
+            Expr::List(items) => {
+                for item in items {
+                    self.walk_expr(item);
+                }
+            }
+            Expr::Dict(entries) => {
+                let mut seen = std::collections::HashSet::new();
+                for entry in entries {
+                    match entry {
+                        DictEntry::Pair(key, value) => {
+                            if !seen.insert(key.clone()) {
+                                self.warn(format!("duplicate key '{key}' in dict literal"));
+                            }
+                            self.walk_expr(value);
+                        }
+                        DictEntry::Spread(inner) => self.walk_expr(inner),
+                        DictEntry::Computed(key, value) => {
+                            self.walk_expr(key);
+                            self.walk_expr(value);
+                        }
                     }
                 }
             }
-            _ => {}
+            Expr::Unary(_, inner) => self.walk_expr(inner),
+            Expr::Binary(l, _, r) => {
+                self.walk_expr(l);
+                self.walk_expr(r);
+            }
+            Expr::Range(a, b, _) => {
+                self.walk_expr(a);
+                self.walk_expr(b);
+            }
+            Expr::Index(obj, idx) => {
+                self.walk_expr(obj);
+                self.walk_expr(idx);
+            }
+            Expr::Slice(obj, a, b) => {
+                self.walk_expr(obj);
+                if let Some(x) = a {
+                    self.walk_expr(x);
+                }
+                if let Some(x) = b {
+                    self.walk_expr(x);
+                }
+            }
+            Expr::Member(obj, _) | Expr::SafeMember(obj, _) => self.walk_expr(obj),
+            Expr::Call(callee, args) => self.walk_call(callee, args),
+            Expr::New(_, args) => {
+                for a in args {
+                    self.walk_expr(a);
+                }
+            }
+            Expr::Ternary(c, y, n) => {
+                self.walk_expr(c);
+                self.walk_expr(y);
+                self.walk_expr(n);
+            }
+            Expr::IfExpr(c, y, n) => {
+                self.walk_expr(c);
+                self.walk_stmts(y);
+                self.walk_stmts(n);
+            }
+            Expr::Increment(target, _) => match target.as_ref() {
+                Expr::Var(name) => self.read_var(name),
+                other => self.walk_expr(other),
+            },
+            Expr::Lambda(params, body) => {
+                self.push_function_scope(params);
+                self.walk_stmts(body);
+                self.pop_function_scope();
+            }
+            Expr::Spread(inner) => self.walk_expr(inner),
+            Expr::Super(args) => {
+                for a in args {
+                    self.walk_expr(a);
+                }
+            }
+            Expr::SuperMethod(_, args) => {
+                for a in args {
+                    self.walk_expr(a);
+                }
+            }
+            Expr::Match(scrutinee, arms) => {
+                if let Some(s) = scrutinee {
+                    self.walk_expr(s);
+                }
+                for arm in arms {
+                    self.scopes.push(Scope::default());
+                    if !matches!(&arm.pattern, Expr::Var(name) if name != "_") {
+                        self.walk_expr(&arm.pattern);
+                    }
+                    if let Expr::Var(name) = &arm.pattern {
+                        if name != "_" {
+                            self.declare(name, DeclKind::Let, self.cur_line);
+                        }
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.walk_expr(guard);
+                    }
+                    self.walk_stmts(&arm.body);
+                    self.scopes.pop();
+                }
+            }
+            Expr::Chain(operands, _) => {
+                for op in operands {
+                    self.walk_expr(op);
+                }
+            }
+            Expr::Comprehension(out, clauses, guards) => {
+                self.scopes.push(Scope::default());
+                for (var, iter) in clauses {
+                    self.walk_expr(iter);
+                    self.declare(var, DeclKind::LoopVar, self.cur_line);
+                }
+                for guard in guards {
+                    self.walk_expr(guard);
+                }
+                self.walk_expr(out);
+                self.scopes.pop();
+            }
+        }
+    }
+
+    fn walk_call(&mut self, callee: &Expr, args: &[Expr]) {
+        match callee {
+            Expr::Var(name) => {
+                if self.is_defined(name) {
+                    self.mark_read(name);
+                    if self.in_function == 0 {
+                        self.check_used_before_def(name);
+                    }
+                    if let Some(sig) = self.module_func_sigs.get(name).copied() {
+                        self.check_arity(name, sig, args);
+                    }
+                } else if !self.opaque && self.in_class == 0 {
+                    self.warn(format!("call to undefined function '{name}'"));
+                }
+            }
+            other => self.walk_expr(other),
+        }
+        for a in args {
+            self.walk_expr(a);
+        }
+    }
+
+    fn check_arity(&mut self, name: &str, sig: FuncSig, args: &[Expr]) {
+        let has_spread = args.iter().any(|a| matches!(a, Expr::Spread(_)));
+        let has_named = args.iter().any(|a| matches!(a, Expr::Named(_, _)));
+        if has_spread || has_named {
+            return;
+        }
+        let n = args.len();
+        if n < sig.required {
+            self.warn(format!(
+                "call to '{name}' has {n} argument(s); expected at least {}",
+                sig.required
+            ));
+        } else if n > sig.total {
+            self.warn(format!(
+                "call to '{name}' has {n} argument(s); expected at most {}",
+                sig.total
+            ));
         }
     }
 }
