@@ -3413,6 +3413,7 @@ dependencies = [
  "blake2",
  "cbc",
  "chrono",
+ "curve25519-dalek",
  "ed25519-dalek",
  "flate2",
  "get_if_addrs",

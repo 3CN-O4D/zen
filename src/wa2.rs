@@ -1048,6 +1048,29 @@ fn check_cert_validity(cert: &CertDetails) -> Result<(), Error> {
     Ok(())
 }
 
+/// Verify an XEd25519 signature — the libsignal/curve25519-go "ecc" scheme
+/// used to sign WhatsApp's noise certificate chain
+/// (`handshake.go: ecc.VerifySignature`), not RFC 8032. The verifying key is a
+/// Montgomery `u`-coordinate, mapped to an Edwards point via the birational
+/// map `y = (u-1)/(u+1)`; the signature's most significant bit carries the
+/// Edwards x-sign (XEdDSA convention) and is cleared before a standard
+/// Ed25519 verification.
+fn xed25519_verify(pub_u: &[u8; 32], signature: &[u8; 64], msg: &[u8]) -> bool {
+    use curve25519_dalek::montgomery::MontgomeryPoint;
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let Some(point) = MontgomeryPoint(*pub_u).to_edwards(signature[63] >> 7) else {
+        return false;
+    };
+    let Ok(vk) = VerifyingKey::from_bytes(&point.compress().to_bytes()) else {
+        return false;
+    };
+    let mut s = *signature;
+    s[63] &= 0x7f;
+    let sig = Signature::from_bytes(&s);
+    vk.verify(msg, &sig).is_ok()
+}
+
 /// Verify the noise certificate chain against `WA_CERT_PUB_KEY`
 /// (`whatsmeow/handshake.go: verifyServerCert`).
 fn verify_server_cert(chain_data: &[u8], server_static: &[u8]) -> Result<(), Error> {
@@ -1055,14 +1078,12 @@ fn verify_server_cert(chain_data: &[u8], server_static: &[u8]) -> Result<(), Err
     if inter_sig.len() != 64 || leaf_sig.len() != 64 {
         return Err(Error::Cert("unexpected signature length".into()));
     }
+    let inter_sig: [u8; 64] = inter_sig.try_into().map_err(|_| Error::Cert("bad length".into()))?;
+    let leaf_sig: [u8; 64] = leaf_sig.try_into().map_err(|_| Error::Cert("bad length".into()))?;
 
-    use ed25519_dalek::{Signature, VerifyingKey};
-    let vk = VerifyingKey::from_bytes(&WA_CERT_PUB_KEY)
-        .map_err(|e| Error::Cert(format!("bad ca key: {e}")))?;
-    let sig = Signature::from_slice(&inter_sig)
-        .map_err(|e| Error::Cert(format!("bad intermediate signature: {e}")))?;
-    vk.verify_strict(&inter_det, &sig)
-        .map_err(|_| Error::Cert("intermediate cert signature verification failed".into()))?;
+    if !xed25519_verify(&WA_CERT_PUB_KEY, &inter_sig, &inter_det) {
+        return Err(Error::Cert("intermediate cert signature verification failed".into()));
+    }
 
     let intermediate = parse_cert_details(&inter_det)?;
     if intermediate.issuer_serial != WA_CERT_ISSUER_SERIAL {
@@ -1075,14 +1096,10 @@ fn verify_server_cert(chain_data: &[u8], server_static: &[u8]) -> Result<(), Err
         return Err(Error::Cert("unexpected intermediate key length".into()));
     }
 
-    let ik = VerifyingKey::from_bytes(
-        &<[u8; 32]>::try_from(&intermediate.key[..]).map_err(|_| Error::Cert("bad key".into()))?,
-    )
-    .map_err(|e| Error::Cert(format!("bad intermediate key: {e}")))?;
-    let sig = Signature::from_slice(&leaf_sig)
-        .map_err(|e| Error::Cert(format!("bad leaf signature: {e}")))?;
-    ik.verify_strict(&leaf_det, &sig)
-        .map_err(|_| Error::Cert("leaf cert signature verification failed".into()))?;
+    let ik: [u8; 32] = intermediate.key.as_slice().try_into().map_err(|_| Error::Cert("bad key".into()))?;
+    if !xed25519_verify(&ik, &leaf_sig, &leaf_det) {
+        return Err(Error::Cert("leaf cert signature verification failed".into()));
+    }
 
     check_cert_validity(&intermediate)?;
 
@@ -1777,6 +1794,34 @@ mod tests {
         md5::Md5::new();
     }
 
+    /// Real certificate chain captured from a live Noise XX ServerHello
+    /// (verified against libsignal's `ecc.VerifySignature` in Go: both links
+    /// pass). XEd25519, not RFC 8032.
+    #[test]
+    fn xed25519_verify_real_whatsapp_certs() {
+        let ca = hex("142375574d0a587166aae71ebe516437c4a28b73e3695c6ce1f7f9545da8ee6b");
+        let inter_det = hex("080310001a201c51a9ac303994c6c8d0b92ea1878a533476599cc599fbea35997d9aa90cce62208091aebe0628ffdeb7dc06");
+        let inter_sig = hex("270f294648539fed4870e25054dd4e95983aba29189c2ba6c8eeda7055555f753740f5ec192ab64c26c26d6ade6d20b9f774aee37120a6b20395f53c66058507");
+        let ik = hex("1c51a9ac303994c6c8d0b92ea1878a533476599cc599fbea35997d9aa90cce62");
+        let leaf_det = hex("08e80210031a201a37008921173f8872b760c854e4a049de90a53e522804be1319afc2fe5dfe1420d0e5f7d00628d09f90d606");
+        let leaf_sig = hex("9335ae26e75d448f8a96a78f89d9588d7f114271aa6559b904ec3e0d4a4da9031c8c323731fe2e84f6fdc5592283ce72ed3d5b59d22045be799ac57060ba600f");
+
+        let ca: [u8; 32] = ca.as_slice().try_into().unwrap();
+        let ik: [u8; 32] = ik.as_slice().try_into().unwrap();
+        assert!(xed25519_verify(&ca, &inter_sig.as_slice().try_into().unwrap(), &inter_det));
+        assert!(xed25519_verify(&ik, &leaf_sig.as_slice().try_into().unwrap(), &leaf_det));
+
+        // Negative controls: tamper with message, key, and signature.
+        let mut bad_det = inter_det.clone();
+        bad_det[10] ^= 1;
+        assert!(!xed25519_verify(&ca, &inter_sig.as_slice().try_into().unwrap(), &bad_det));
+        let mut bad_sig = inter_sig.clone();
+        bad_sig[0] ^= 1;
+        assert!(!xed25519_verify(&ca, &bad_sig.as_slice().try_into().unwrap(), &inter_det));
+        let mut wrong_key = ca;
+        wrong_key[0] ^= 1;
+        assert!(!xed25519_verify(&wrong_key, &inter_sig.as_slice().try_into().unwrap(), &inter_det));
+    }
 
     /// Live check: full Noise XX handshake against web.whatsapp.com.
     #[test]
