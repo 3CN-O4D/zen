@@ -1071,8 +1071,69 @@ fn xed25519_verify(pub_u: &[u8; 32], signature: &[u8; 64], msg: &[u8]) -> bool {
     vk.verify(msg, &sig).is_ok()
 }
 
-/// Verify the noise certificate chain against `WA_CERT_PUB_KEY`
-/// (`whatsmeow/handshake.go: verifyServerCert`).
+/// Sign with XEd25519 — libsignal's `ecc.CalculateSignature`
+/// (`curve25519.go: PrivateKey.Sign`), i.e. the counterpart of
+/// [`xed25519_verify`] used for identity/signed-prekey signatures. The private
+/// key is a 32-byte Curve25519 key whose scalar is the RFC 8032-clamped value
+/// itself (not the SHA-512-derived seed used by dalek): `a = clamp(seed)`,
+/// `r = uniform(SHA-512(0xFE ∥ 0xFF∥31 ∥ a-canonical ∥ msg ∥ Z))`,
+/// `h = uniform(SHA-512(R ∥ A-compressed ∥ msg))`, `s = a·h + r`, and the
+/// signature's MSB carries the x-sign bit of `A`.
+fn xed25519_sign(seed: &[u8; 32], msg: &[u8]) -> [u8; 64] {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::scalar::Scalar;
+    use sha2::Digest as _;
+
+    let mut prefix = [0xffu8; 32];
+    prefix[0] = 0xfe;
+
+    let mut clamped = *seed;
+    clamped[0] &= 248;
+    clamped[31] &= 63;
+    clamped[31] |= 64;
+    let a = Scalar::from_bytes_mod_order(clamped);
+    let a_bytes = a.to_bytes();
+
+    let a_pub = ED25519_BASEPOINT_TABLE * &a;
+
+    let mut z = [0u8; 64];
+    use rand::Rng as _;
+    z.copy_from_slice(&rand::rng().random::<[u8; 64]>());
+
+    let mut hash = sha2::Sha512::new();
+    hash.update(prefix);
+    hash.update(a_bytes);
+    hash.update(msg);
+    hash.update(z);
+    let digest = hash.finalize();
+    let mut r_bytes_in = [0u8; 64];
+    r_bytes_in.copy_from_slice(&digest);
+    let r = Scalar::from_bytes_mod_order_wide(&r_bytes_in);
+
+    let r_pub = ED25519_BASEPOINT_TABLE * &r;
+    let r_bytes = r_pub.compress().to_bytes();
+    let a_bytes_compressed = a_pub.compress().to_bytes();
+
+    let mut hash = sha2::Sha512::new();
+    hash.update(r_bytes);
+    hash.update(a_bytes_compressed);
+    hash.update(msg);
+    let digest = hash.finalize();
+    let mut h_bytes_in = [0u8; 64];
+    h_bytes_in.copy_from_slice(&digest);
+    let h = Scalar::from_bytes_mod_order_wide(&h_bytes_in);
+
+    let s = (a * h) + r;
+
+    let mut signature = [0u8; 64];
+    signature[..32].copy_from_slice(&r_bytes);
+    signature[32..].copy_from_slice(&s.to_bytes());
+    signature[63] = (signature[63] & 0x7f) | (a_bytes_compressed[31] & 0x80);
+    signature
+}
+
+// Verify the noise certificate chain against `WA_CERT_PUB_KEY`
+// (`whatsmeow/handshake.go: verifyServerCert`).
 fn verify_server_cert(chain_data: &[u8], server_static: &[u8]) -> Result<(), Error> {
     let ((inter_det, inter_sig), (leaf_det, leaf_sig)) = parse_cert_chain(chain_data)?;
     if inter_sig.len() != 64 || leaf_sig.len() != 64 {
@@ -1319,39 +1380,49 @@ impl FrameSocket {
 // Client payload (registration path; store/clientpayload.go)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Key material the client presents during registration. In the real
-/// whatsmeow flow the identity/prekey signing uses libsignal's curve
-/// semantics; parity for that scheme is an M2 follow-up — the fields here
-/// are self-consistent so the handshake envelope passes.
+/// Key material the client presents during registration. `identity_*` is the
+/// X25519-style identity key used for the signed prekey signature (XEd25519)
+/// and — after the phone scans the QR — for the pairing exchange; `noise_*`
+/// is the permanent Noise static key sent in ClientFinish and embedded in the
+/// QR; `adv_secret_key` proves device ownership to the phone and later keys
+/// the `pair-success` HMAC.
 pub struct PairingMaterial {
     pub registration_id: u32,
+    pub identity_priv: [u8; 32],
     pub identity_pub: [u8; 32],
+    pub noise_priv: [u8; 32],
+    pub noise_pub: [u8; 32],
     pub prekey_id: u32,
     pub signed_prekey_pub: [u8; 32],
     pub signed_prekey_sig: [u8; 64],
+    pub adv_secret_key: [u8; 32],
 }
 
 pub fn generate_pairing_material() -> PairingMaterial {
     use rand::Rng as _;
 
-    let (_, identity_pub) = generate_ephemeral();
+    let (identity_priv, identity_pub) = generate_ephemeral();
+    let (noise_priv, noise_pub) = generate_ephemeral();
     let (_, signed_prekey_pub) = generate_ephemeral();
 
-    // libsignal-compatible identity signatures are an M2 follow-up; sign the
-    // signed prekey with a throwaway Ed25519 key for now so every field is
-    // well-formed and cryptographically self-consistent.
-    let mut rng_key = [0u8; 32];
-    rng_key.copy_from_slice(&rand::rng().random::<[u8; 32]>());
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&rng_key);
-    use ed25519_dalek::Signer as _;
-    let signature = signing_key.sign(&signed_prekey_pub);
+    // Signed prekey signature: XEdDSA(identity, 0x05 ∥ skey_pub), exactly how
+    // whatsmeow's `KeyPair.CreateSignedPreKey` (→ ecc.CalculateSignature)
+    // signs it.
+    let mut skey_to_sign = [0u8; 33];
+    skey_to_sign[0] = ecc_curve_djb_type();
+    skey_to_sign[1..].copy_from_slice(&signed_prekey_pub);
+    let signed_prekey_sig = xed25519_sign(&identity_priv, &skey_to_sign);
 
     PairingMaterial {
         registration_id: rand::rng().random::<u32>() | 1,
+        identity_priv,
         identity_pub,
+        noise_priv,
+        noise_pub,
         prekey_id: rand::rng().random::<u32>() | 1,
         signed_prekey_pub,
-        signed_prekey_sig: signature.to_bytes(),
+        signed_prekey_sig,
+        adv_secret_key: rand::rng().random::<[u8; 32]>(),
     }
 }
 
@@ -1370,8 +1441,9 @@ fn app_version_msg() -> Vec<u8> {
 
 fn device_props_msg() -> Vec<u8> {
     let mut version = Vec::new();
-    // AppVersion{secondary=1} (0.1.0)
-    pb::field_uint(2, 1, &mut version);
+    pb::field_uint(1, 0, &mut version); // primary
+    pb::field_uint(2, 1, &mut version); // secondary
+    pb::field_uint(3, 0, &mut version); // tertiary
 
     let mut hsc = Vec::new();
     pb::field_uint(3, 10240, &mut hsc); // storageQuotaMb
@@ -1392,6 +1464,8 @@ fn device_props_msg() -> Vec<u8> {
     let mut props = Vec::new();
     pb::field_string(1, "whatsmeow", &mut props); // os
     pb::field_msg(2, &version, &mut props); // version
+    pb::field_uint(3, 0, &mut props); // platformType: UNKNOWN
+    pb::field_uint(4, 0, &mut props); // requireFullSync
     pb::field_msg(5, &hsc, &mut props); // historySyncConfig
     props
 }
@@ -1409,6 +1483,7 @@ pub fn build_client_payload(material: &PairingMaterial) -> Vec<u8> {
     pb::field_string(6, "", &mut ua); // manufacturer
     pb::field_string(7, "Desktop", &mut ua); // device
     pb::field_string(8, "0.1", &mut ua); // osBuildNumber
+    pb::field_uint(10, 0, &mut ua); // releaseChannel: RELEASE
     pb::field_string(11, "en", &mut ua); // localeLanguageIso6391
     pb::field_string(12, "US", &mut ua); // localeCountryIso31661Alpha2
 
@@ -1426,18 +1501,40 @@ pub fn build_client_payload(material: &PairingMaterial) -> Vec<u8> {
     pb::field_bytes(7, &build_hash[..], &mut pairing); // buildHash
     pb::field_bytes(8, &device_props_msg(), &mut pairing); // deviceProps
 
+    let mut web_info = Vec::new();
+    pb::field_uint(4, 0, &mut web_info); // webSubPlatform: WEB_BROWSER
+
     let mut payload = Vec::new();
+    pb::field_uint(3, 0, &mut payload); // passive
     pb::field_msg(5, &ua, &mut payload); // userAgent
-    pb::field_msg(6, &[], &mut payload); // webInfo (webSubPlatform=WEB_BROWSER=0, default)
+    pb::field_msg(6, &web_info, &mut payload); // webInfo
     pb::field_uint(12, 1, &mut payload); // connectType: WIFI_UNKNOWN
     pb::field_uint(13, 1, &mut payload); // connectReason: USER_ACTIVATED
     pb::field_msg(19, &pairing, &mut payload); // devicePairingData
+    pb::field_uint(33, 0, &mut payload); // pull
     payload
 }
 
 /// libsignal `ecc.DjbType` — Curve25519 public key marker.
 fn ecc_curve_djb_type() -> u8 {
     5
+}
+
+/// Build a scannable linked-device QR URL
+/// (`whatsmeow/pair.go: makeQRData`). `ref` is the raw `<ref>` content the
+/// server sent; client type for the WEB platform is `PairClientOtherWebClient`
+/// ("9").
+fn qr_code(ref_data: &[u8], material: &PairingMaterial) -> String {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine as _;
+
+    format!(
+        "https://wa.me/settings/linked_devices#{},{},{},{},9",
+        String::from_utf8_lossy(ref_data),
+        B64.encode(material.noise_pub),
+        B64.encode(material.identity_pub),
+        B64.encode(material.adv_secret_key),
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1477,6 +1574,15 @@ impl Wa2Session {
 
     /// Run the full Noise XX handshake (`whatsmeow/handshake.go: doHandshake`).
     pub fn handshake(&mut self, material: &PairingMaterial) -> Result<(), Error> {
+        let payload = build_client_payload(material);
+        self.handshake_with_payload(payload, (material.noise_priv, material.noise_pub))
+    }
+
+    fn handshake_with_payload(
+        &mut self,
+        payload: Vec<u8>,
+        noise_key: ([u8; 32], [u8; 32]),
+    ) -> Result<(), Error> {
         if self.handshaken {
             return Err(Error::Noise("handshake already complete".into()));
         }
@@ -1512,11 +1618,10 @@ impl Wa2Session {
 
         // ClientFinish: encrypt our permanent Noise public key, then mix the
         // same Noise key against the server ephemeral.
-        let (noise_priv, noise_pub) = generate_ephemeral();
+        let (noise_priv, noise_pub) = noise_key;
         let encrypted_noise_pub = nh.encrypt(&noise_pub)?;
         nh.mix_shared_secret_into_key(&noise_priv, &server_hello.ephemeral)?;
 
-        let payload = build_client_payload(material);
         let encrypted_payload = nh.encrypt(&payload)?;
         self.fs
             .send_frame(&marshal_client_finish(&encrypted_noise_pub, &encrypted_payload))?;
@@ -1540,6 +1645,34 @@ impl Wa2Session {
     pub fn recv_node(&mut self) -> Result<WaNode, Error> {
         let data = self.recv_raw()?;
         WaNode::unpack(&data)
+    }
+
+    /// Complete the pre-login `pair-device` exchange
+    /// (`whatsmeow/pair.go: handlePairDevice`): acknowledge the iq with a
+    /// `result` and return the scannable QR strings — one per `ref`.
+    pub fn pair_device(&mut self, iq: &WaNode, material: &PairingMaterial) -> Result<Vec<String>, Error> {
+        let pair = iq
+            .child("pair-device")
+            .ok_or_else(|| Error::Noise("pair-device missing from iq".into()))?;
+
+        // <iq to="s.whatsapp.net" id=… type="result"/>
+        let ack = WaNode::new("iq")
+            .attr("to", "s.whatsapp.net")
+            .attr("id", iq.attr_str("id").unwrap_or_default())
+            .attr("type", "result");
+        self.send_node(&ack)?;
+
+        let mut codes = Vec::new();
+        for child in pair.children() {
+            if child.tag != "ref" {
+                continue;
+            }
+            let WaVal::Bytes(ref_data) = &child.content else {
+                continue;
+            };
+            codes.push(qr_code(ref_data, material));
+        }
+        Ok(codes)
     }
 
     /// Send raw plaintext through the Noise socket.
@@ -1584,6 +1717,22 @@ impl Wa2Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// XEd25519 sign/verify roundtrip: signatures produced by `xed25519_sign`
+    /// must verify against the Montgomery public key (and a tampered message
+    /// must not).
+    #[test]
+    fn xed25519_sign_verify_roundtrip() {
+        use rand::Rng as _;
+        let (privk, pubk) = generate_ephemeral();
+        let msg = b"roundtrip message";
+        let sig = xed25519_sign(&privk, msg);
+        assert!(xed25519_verify(&pubk, &sig, msg));
+        let mut bad = msg.to_vec();
+        bad[0] ^= 1;
+        assert!(!xed25519_verify(&pubk, &sig, &bad));
+        let _ = rand::rng().random::<u8>();
+    }
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len())
@@ -1823,12 +1972,34 @@ mod tests {
         assert!(!xed25519_verify(&wrong_key, &inter_sig.as_slice().try_into().unwrap(), &inter_det));
     }
 
-    /// Live check: full Noise XX handshake against web.whatsapp.com.
+    /// Live check: full Noise XX handshake against web.whatsapp.com, then the
+    /// pre-login `pair-device` exchange → scannable QR.
     #[test]
     #[ignore]
     fn live_handshake() {
         let mut s = Wa2Session::connect().expect("wss connect");
-        s.handshake(&generate_pairing_material()).expect("handshake");
+        let material = generate_pairing_material();
+        s.handshake(&material).expect("handshake");
         assert!(s.is_handshaken());
+        // First post-handshake server frame is the pair-device iq.
+        let node = s.recv_node().expect("first frame");
+        assert_eq!(node.tag, "iq");
+        let codes = s.pair_device(&node, &material).expect("pair-device flow");
+        assert!(!codes.is_empty());
+        eprintln!("QR: {}", codes[0]);
+    }
+
+    /// Live check with the *exact* payload bytes a fresh whatsmeow would send.
+    /// Isolates whether our handshake/codec or our payload builder gets a 405.
+    #[test]
+    #[ignore]
+    fn live_handshake_go_payload() {
+        const GO_PAYLOAD: &str = "18002a38080e120b080210b817188fff8cf3031a0330303022033030302a03302e3132003a074465736b746f704203302e3150005a02656e6202555332022000600168019a01e1010a04deadb33f1201051a20d4a92579878480de33ce50fb4271dec7801982923b5780dc32946b8043010e5f22030000012a20a4d24d39c2f17e6385a5ad83c7086d57e12ea20d9baac31bc42a3f6ce8e976633240410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003a10e9c4f5e3263f119d1ed6423317d0cff242390a0977686174736d656f771206080010011800180020002a20188050200130013801400148015001580160017001780198013ca80101b00101880200";
+        let payload = hex(GO_PAYLOAD);
+        let mut s = Wa2Session::connect().expect("wss connect");
+        let (np, npr) = generate_ephemeral();
+        s.handshake_with_payload(payload, (np, npr)).expect("handshake with go payload");
+        let node = s.recv_node().expect("first frame");
+        eprintln!("first node (go payload): tag={:?} attrs={:?}", node.tag, node.attrs);
     }
 }
