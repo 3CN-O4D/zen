@@ -6365,29 +6365,38 @@ Expr::Index(obj, idx) => {
                 }
             }
             Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge => {
-                match (&a, &b) {
-                    (Value::Number(x), Value::Number(y)) => {
-                        Ok(Value::Bool(match op {
-                            Kind::Lt => x < y,
-                            Kind::Le => x <= y,
-                            Kind::Gt => x > y,
-                            Kind::Ge => x >= y,
-                            _ => unreachable!(),
-                        }))
-                    }
-                    _ => {
-                        let at = a.type_name();
-                        let bt = b.type_name();
-                        let hint = if at == "string" && bt == "string" {
-                            ""
-                        } else if at != "int" && at != "float" && bt != "int" && bt != "float" {
-                            "\nnote: '<', '>', '<=', '>=' only work on numbers\n      for string comparison, use == or !="
-                        } else {
-                            ""
-                        };
-                        Err(format!("unsupported operand type(s) for {}: `{}` and `{}`{}", op_symbol(op), at, bt, hint))
-                    }
+                if let (Value::Number(x), Value::Number(y)) = (&a, &b) {
+                    return Ok(Value::Bool(match op {
+                        Kind::Lt => x < y,
+                        Kind::Le => x <= y,
+                        Kind::Gt => x > y,
+                        Kind::Ge => x >= y,
+                        _ => unreachable!(),
+                    }));
                 }
+                if let (Value::String(x), Value::String(y)) = (&a, &b) {
+                    return Ok(Value::Bool(match op {
+                        Kind::Lt => x < y,
+                        Kind::Le => x <= y,
+                        Kind::Gt => x > y,
+                        Kind::Ge => x >= y,
+                        _ => unreachable!(),
+                    }));
+                }
+                let at = a.type_name();
+                let bt = b.type_name();
+                let hint = if matches!((at, bt), ("string", _) | (_, "string")) {
+                    "\n  \x1b[1;33m= help:\x1b[0m `<`, `>`, `<=`, `>=` compare two numbers or two strings\n      convert one side first — `int(\"...\")`, `float(\"...\")`, or `str(value)`".to_string()
+                } else {
+                    format!(
+                        "\n  \x1b[1;33m= help:\x1b[0m `<`, `>`, `<=`, `>=` compare two numbers or two strings (got `{at}` and `{bt}`)"
+                    )
+                };
+                Err(format!(
+                    "cannot compare `{at}` with `{bt}` using `{}`{}",
+                    op_symbol(op),
+                    hint
+                ))
             }
             _ => Err("unsupported operator".into()),
         }

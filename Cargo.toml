@@ -1,6 +1,6 @@
 [package]
 name = "zen"
-version = "2.1.2"
+version = "2.2.0"
 edition = "2021"
 description = "Native Rust runtime for the Zen language"
 license = "MIT"
