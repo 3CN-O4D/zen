@@ -1,0 +1,78 @@
+# Language-level features: implicit line continuation and escape sequences.
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+# ── implicit line continuation ────────────────────────────────────────
+var s1 = "a" +
+         "b" +
+         "c"
+check(s1 == "abc", "trailing + continuation")
+
+var n = 1 -
+        2 +
+        3
+check(n == 2, "trailing - and +")
+
+var n2 = 1 +
+         2 * 3
+check(n2 == 7, "precedence preserved across lines")
+
+var nested = max(10,
+                 max(2,
+                     7))
+check(nested == 10, "multi-line nested calls")
+
+var d = {
+    "a": 1,
+    "b": 2,
+}
+check(d["a"] == 1 and d["b"] == 2, "multi-line dict literal")
+
+let lst = [
+    1,
+    2,
+    3,
+]
+check(lst.length() == 3, "multi-line list literal")
+
+var logical = (1 < 2
+    and 2 < 3
+    and 3 < 4)
+check(logical, "multi-line logical inside parens")
+
+var logical2 = 1 < 2 and
+               2 < 3
+check(logical2, "trailing 'and' continuation")
+
+# A trailing operator must NOT swallow the next statement.
+var a = 5
+var b = -3
+check(a == 5 and b == -3, "statements still separate")
+
+# ── escape sequences ──────────────────────────────────────────────────
+check("\x41\x42\x43" == "ABC", "hex byte escapes")
+check("\x1b" == "\e", "esc and \\x1b agree")
+check("\u{2588}" == "█" and "\u{1F600}".length() == 1, "unicode codepoint escapes")
+check("\0".length() == 1, "null escape")
+check("\a" == "\x07" and "\b" == "\x08", "bell and backspace")
+check("\f" == "\x0c" and "\v" == "\x0b", "form feed and vertical tab")
+check("L1\nL2" == "L1\u{0a}L2", "newline escape")
+check("\t" == "\x09", "tab escape")
+check("\\" == "\x5c", "backslash escape")
+check("it's" == "it\\'s" or "\"quotes\"".length() == 8, "quote escapes")
+
+# ── UTF-8 string literals ─────────────────────────────────────────────
+var lit = "█" + "▀"
+var esc = "\u{2588}\u{2580}"
+check(lit == esc, "utf-8 literal matches codepoint escapes")
+check(lit.length() == 2, "utf-8 literals count chars, not bytes")
+check("\u{2588}\u{2580}".contains("▀"), "contains works on multibyte literals")
+check("ΖΕΝ".upper() == "ΖΕΝ" or "ΖΕΝ".length() == 3, "non-ascii literal scans")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }
+exit(if fails > 0 { 1 } else { 0 })

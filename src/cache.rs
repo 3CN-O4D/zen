@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 const MAGIC: &[u8; 4] = b"ZENC";
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 const MAX_DEPTH: usize = 64;
 
 /// Stable opcode <-> u16 mapping. The enum's memory layout must never be

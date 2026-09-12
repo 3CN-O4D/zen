@@ -620,6 +620,35 @@ fn return_escape(c: char, i: &mut usize, col: &mut usize) -> Result<String, Stri
     Ok(c.to_string())
 }
 
+/// Decode a full UTF-8 char starting at `bytes[i]`, returning the char and its
+/// byte width. Invalid sequences fall back to the raw byte as a latin-1 char
+/// so the lexer stays tolerant of non-UTF-8 sources.
+fn utf8_char_at(bytes: &[u8], i: usize) -> (char, usize) {
+    if let Some(&b) = bytes.get(i) {
+        if b < 0x80 {
+            return (b as char, 1);
+        }
+        let len = match b {
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            _ => 1,
+        };
+        match bytes.get(i..i + len) {
+            Some(s) => match std::str::from_utf8(s) {
+                Ok(text) => match text.chars().next() {
+                    Some(c) => (c, c.len_utf8()),
+                    None => (b as char, 1),
+                },
+                Err(_) => (b as char, 1),
+            },
+            None => (b as char, 1),
+        }
+    } else {
+        ('\0', 1)
+    }
+}
+
 fn lex(source: &str) -> Result<Vec<Token>, String> {
     let bytes = source.as_bytes();
     let (mut i, mut line, mut col) = (0, 1, 1);
@@ -714,7 +743,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 col += 3;
                 // Triple-quoted string: scan until """
                 while i < bytes.len() {
-                    let ch = bytes[i] as char;
+                    let (ch, chw) = utf8_char_at(bytes, i);
                     if ch == quote
                         && bytes.get(i + 1) == Some(&(quote as u8))
                         && bytes.get(i + 2) == Some(&(quote as u8))
@@ -766,7 +795,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         col += 1;
                     } else {
                         text.push(ch);
-                        i += 1;
+                        i += chw;
                         if ch == '\n' {
                             line += 1;
                             col = 1;
@@ -802,7 +831,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             i += 1;
             col += 1;
             while i < bytes.len() {
-                let ch = bytes[i] as char;
+                let (ch, chw) = utf8_char_at(bytes, i);
                 if ch == quote {
                     i += 1;
                     col += 1;
@@ -852,7 +881,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     col += 1;
                 } else {
                     text.push(ch);
-                    i += 1;
+                    i += chw;
                     if ch == '\n' {
                         line += 1;
                         col = 1
@@ -1344,8 +1373,8 @@ pub(crate) enum StmtKind {
     StarImport(String),
     Include(String),
     Load(String),
-    SetMember(Expr, String, Expr),
-    SetIndex(Expr, Expr, Expr),
+    SetMember(Expr, String, Expr, Option<Kind>),
+    SetIndex(Expr, Expr, Expr, Option<Kind>),
      Switch(Expr, Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>),
      With(Expr, Option<String>, Vec<Stmt>),
      Expr(Expr),
@@ -2069,10 +2098,10 @@ impl Parser {
                     match expression {
                         Expr::Var(name) => Ok(mk(StmtKind::Assign(name, op, value))),
                         Expr::Index(object, index) if matches!(op, Kind::Assign) => {
-                            Ok(mk(StmtKind::SetIndex(*object, *index, value)))
+                            Ok(mk(StmtKind::SetIndex(*object, *index, value, None)))
                         }
                         Expr::Member(object, member) if matches!(op, Kind::Assign) => {
-                            Ok(mk(StmtKind::SetMember(*object, member, value)))
+                            Ok(mk(StmtKind::SetMember(*object, member, value, None)))
                         }
                         Expr::Index(object, index) => {
                             let bin_op = match &op {
@@ -2088,9 +2117,10 @@ impl Parser {
                                 Kind::RShiftAssign => Kind::RShift,
                                 _ => return Err("invalid compound assignment target".into()),
                             };
-                            let read = Expr::Index(object.clone(), index.clone());
-                            let new_val = Expr::Binary(Box::new(read), bin_op, Box::new(value));
-                            Ok(mk(StmtKind::SetIndex(*object, *index, new_val)))
+                            // Compound `obj[idx] op= rhs`: evaluate obj and idx
+                            // exactly once (the executor reads the current value
+                            // and applies `bin_op` to it with the rhs).
+                            Ok(mk(StmtKind::SetIndex(*object, *index, value, Some(bin_op))))
                         }
                         Expr::Member(object, member) => {
                             let bin_op = match &op {
@@ -2106,9 +2136,7 @@ impl Parser {
                                 Kind::RShiftAssign => Kind::RShift,
                                 _ => return Err("invalid compound assignment target".into()),
                             };
-                            let read = Expr::Member(object.clone(), member.clone());
-                            let new_val = Expr::Binary(Box::new(read), bin_op, Box::new(value));
-                            Ok(mk(StmtKind::SetMember(*object, member, new_val)))
+                            Ok(mk(StmtKind::SetMember(*object, member, value, Some(bin_op))))
                         }
                         _ => Err("invalid assignment target".into()),
                     }
@@ -3167,20 +3195,57 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
 }
 
 pub(crate) fn collect_free_vars_stmts(stmts: &[Stmt], params: &std::collections::HashSet<String>, free: &mut std::collections::HashSet<String>) {
+    let mut scoped = params.clone();
     for stmt in stmts {
-        collect_free_vars_stmt(&stmt.kind, params, free);
+        collect_free_vars_stmt(&stmt.kind, &scoped, free);
+        collect_declared_names(&stmt.kind, &mut scoped);
+    }
+}
+
+/// Record the names introduced by the current statement so that later
+/// statements in the same block resolve them as function-local bindings
+/// instead of free (captured/global) references. This gives correct
+/// shadowing: `var n = 20; return n` keeps `n` local to the function.
+fn collect_declared_names(kind: &StmtKind, scoped: &mut std::collections::HashSet<String>) {
+    match kind {
+        StmtKind::Let(target, _, _) => match target {
+            LetTarget::Var(n) => {
+                scoped.insert(n.clone());
+            }
+            LetTarget::List(ps) => {
+                for p in ps {
+                    match p {
+                        PatternItem::Name(n) | PatternItem::Rest(n) => {
+                            scoped.insert(n.clone());
+                        }
+                    }
+                }
+            }
+            LetTarget::Dict(ns) => {
+                for n in ns {
+                    scoped.insert(n.clone());
+                }
+            }
+        },
+        StmtKind::For(names, _, _) => {
+            for n in names {
+                scoped.insert(n.clone());
+            }
+        }
+        StmtKind::With(_, Some(n), _) => {
+            scoped.insert(n.clone());
+        }
+        StmtKind::Function(name, _, _) => {
+            scoped.insert(name.clone());
+        }
+        _ => {}
     }
 }
 
 fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<String>, free: &mut std::collections::HashSet<String>) {
     match kind {
-        StmtKind::Let(target, e, _) => {
+        StmtKind::Let(_target, e, _) => {
             collect_free_vars_expr(e, params, free);
-            match target {
-                LetTarget::Var(_n) => { /* n is now in scope, but we don't remove from free since outer scope still applies */ }
-                LetTarget::List(ps) => { for p in ps { let _ = p; } }
-                LetTarget::Dict(ps) => { for p in ps { let _ = p; } }
-            }
         }
         StmtKind::Assign(n, _, e) => {
             collect_free_vars_expr(e, params, free);
@@ -3222,8 +3287,8 @@ fn collect_free_vars_stmt(kind: &StmtKind, params: &std::collections::HashSet<St
             if let Some(p) = parent { if !params.contains(p.as_str()) { free.insert(p.clone()); } }
             collect_free_vars_stmts(body, params, free);
         }
-        StmtKind::SetMember(obj, _, val) => { collect_free_vars_expr(obj, params, free); collect_free_vars_expr(val, params, free); }
-        StmtKind::SetIndex(obj, idx, val) => { collect_free_vars_expr(obj, params, free); collect_free_vars_expr(idx, params, free); collect_free_vars_expr(val, params, free); }
+        StmtKind::SetMember(obj, _, val, _) => { collect_free_vars_expr(obj, params, free); collect_free_vars_expr(val, params, free); }
+        StmtKind::SetIndex(obj, idx, val, _) => { collect_free_vars_expr(obj, params, free); collect_free_vars_expr(idx, params, free); collect_free_vars_expr(val, params, free); }
         StmtKind::Expr(e) => { collect_free_vars_expr(e, params, free); }
         StmtKind::Switch(e, cases, default) => {
             collect_free_vars_expr(e, params, free);
@@ -3388,6 +3453,7 @@ impl Vm {
                     Expr::Var("self".into()),
                     "message".into(),
                     Expr::Var("message".into()),
+                    None,
                 ),
                 line: 0,
                 col: 0,
@@ -9128,6 +9194,205 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
         Ok(Some(result))
     }
 
+    /// Flatten a variable-rooted member/index chain into steps + the root name.
+    fn flatten_nested_target(&mut self, object: &Expr) -> Result<Option<(String, Vec<NestedStep>)>, String> {
+        let mut steps: Vec<NestedStep> = Vec::new();
+        let mut cur = object;
+        let root: String = loop {
+            match cur {
+                Expr::Member(inner, field) => {
+                    steps.push(NestedStep::Key(field.clone()));
+                    cur = inner;
+                }
+                Expr::Index(inner, idx) => {
+                    steps.push(NestedStep::Index(self.eval(idx)?));
+                    cur = inner;
+                }
+                Expr::Var(name) => break name.clone(),
+                _ => return Ok(None),
+            }
+        };
+        steps.reverse();
+        if steps.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some((root, steps)))
+        }
+    }
+
+    /// Walk `steps` from `root_val`, writing `new_val` at the terminal step and
+    /// propagating mutated containers up to the root; returns the root value.
+    fn nested_set_inplace(
+        &self,
+        mut root_val: Value,
+        steps: &[NestedStep],
+        new_val: Value,
+    ) -> Result<Option<Value>, String> {
+        let get_child = |container: &Value, step: &NestedStep| -> Option<Value> {
+            match step {
+                NestedStep::Key(k) => match container {
+                    Value::Dict(arc) => arc.get(k).cloned(),
+                    Value::Instance(inst) => inst.lock().unwrap().fields.get(k).cloned(),
+                    _ => None,
+                },
+                NestedStep::Index(v) => match (container, v) {
+                    (Value::List(arc), Value::Number(n)) => {
+                        let items = arc.as_ref();
+                        let idx = *n as i64;
+                        let len = items.len() as i64;
+                        let norm = if idx < 0 { len + idx } else { idx };
+                        if norm < 0 || norm >= len { None } else { items.get(norm as usize).cloned() }
+                    }
+                    (Value::Dict(arc), Value::String(key)) => arc.get(key).cloned(),
+                    _ => None,
+                },
+            }
+        };
+        let set_child = |container: &mut Value, step: &NestedStep, child: Value| -> Result<(), ()> {
+            match step {
+                NestedStep::Key(k) => match container {
+                    Value::Dict(arc) => {
+                        Arc::make_mut(arc).insert(k.clone(), child);
+                        Ok(())
+                    }
+                    Value::Instance(inst) => {
+                        inst.lock().unwrap().fields.insert(k.clone(), child);
+                        Ok(())
+                    }
+                    _ => Err(()),
+                },
+                NestedStep::Index(v) => match (container, v) {
+                    (Value::List(arc), Value::Number(n)) => {
+                        let items = Arc::make_mut(arc);
+                        let idx = *n as i64;
+                        let len = items.len() as i64;
+                        let norm = if idx < 0 { len + idx } else { idx };
+                        if norm < 0 || norm >= len { Err(()) } else {
+                            items[norm as usize] = child;
+                            Ok(())
+                        }
+                    }
+                    (Value::Dict(arc), Value::String(key)) => {
+                        Arc::make_mut(arc).insert(key.clone(), child);
+                        Ok(())
+                    }
+                    _ => Err(()),
+                },
+            }
+        };
+        let last = steps.last().unwrap();
+        let mut ancestors: Vec<(Value, NestedStep)> = Vec::new();
+        let mut cur_val = root_val.clone();
+        let mut step_iter = steps.iter().peekable();
+        while let Some(step) = step_iter.next() {
+            if step_iter.peek().is_none() {
+                // Last step: write the new value *only if* ancestors exist
+                // (a subsequent set_child on `cur_val` addresses this step).
+                break;
+            }
+            let Some(next) = get_child(&cur_val, step) else {
+                return Ok(None);
+            };
+            ancestors.push((cur_val.clone(), step.clone()));
+            cur_val = next;
+        }
+        // `cur_val` now addresses the container named by `last`.
+        if set_child(&mut cur_val, last, new_val).is_err() {
+            return Ok(None);
+        }
+        while let Some((mut parent, step)) = ancestors.pop() {
+            let child = cur_val.clone();
+            if set_child(&mut parent, &step, child).is_err() {
+                return Ok(None);
+            }
+            cur_val = parent;
+        }
+        root_val = cur_val;
+        Ok(Some(root_val))
+    }
+
+    /// Assign `rhs_index`/`rhs_member` on a nested chain ending in a variable
+    /// root — `m.x[1] = v`, `m.a.b = v`, `grid[0][1] = v`. The target is the
+    /// concatenation of `object`'s chain (already evaluated into `nested_steps`)
+    /// plus this statement's own final member/index step. Persists through the
+    /// root binding (locals / cells / globals) so copy-on-write mutation sticks.
+    fn assign_nested_target(
+        &mut self,
+        nested_steps: &[NestedStep],
+        root: &str,
+        final_step: NestedStep,
+        rhs: Expr,
+        compound_op: Option<Kind>,
+    ) -> Result<bool, String> {
+        let mut steps = nested_steps.to_vec();
+        steps.push(final_step);
+        let local_idx = self.locals.iter().rposition(|(n, _)| n == root);
+        let root_val = match local_idx {
+            Some(i) => self.locals[i].1.clone(),
+            None => match self.vars.get(root) {
+                Some(v) => v.clone(),
+                None => return Err(format!("undefined variable: `{root}`")),
+            },
+        };
+        let new_val = if let Some(op) = compound_op {
+            let current = self.read_at_steps(&root_val, &steps)?;
+            let rhs = self.eval(&rhs)?;
+            self.binary(current, &op, rhs)?
+        } else {
+            self.eval(&rhs)?
+        };
+        let result_root = match self.nested_set_inplace(root_val, &steps, new_val)? {
+            Some(v) => v,
+            None => return Ok(false),
+        };
+        // Write back into the binding, honoring captured cells.
+        match local_idx {
+            Some(i) => {
+                if matches!(self.locals[i].1, Value::Cell(_)) {
+                    cell_set(&self.locals[i].1, result_root);
+                } else {
+                    self.locals[i].1 = result_root;
+                }
+            }
+            None => {
+                self.vars.insert(root.to_string(), result_root);
+                self.global_cache = None;
+            }
+        }
+        Ok(true)
+    }
+
+    /// Read the value addressed by `steps` from a root value.
+    fn read_at_steps(&self, root_val: &Value, steps: &[NestedStep]) -> Result<Value, String> {
+        let mut cur = root_val.clone();
+        for step in steps {
+            cur = match step {
+                NestedStep::Key(k) => match &cur {
+                    Value::Dict(d) => d.get(k).cloned(),
+                    Value::Instance(i) => i.lock().unwrap().fields.get(k).cloned(),
+                    _ => None,
+                },
+                NestedStep::Index(v) => match (&cur, v) {
+                    (Value::List(l), Value::Number(n)) => {
+                        let i = if *n < 0.0 { l.len() as i64 + *n as i64 } else { *n as i64 };
+                        if i < 0 || i as usize >= l.len() { None } else { l.get(i as usize).cloned() }
+                    }
+                    (Value::Dict(d), Value::String(k)) => d.get(k).cloned(),
+                    (Value::String(s), Value::Number(n)) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let i = if *n < 0.0 { chars.len() as i64 + *n as i64 } else { *n as i64 };
+                        if i < 0 || i as usize >= chars.len() { None } else {
+                            Some(Value::String(chars[i as usize].to_string()))
+                        }
+                    }
+                    _ => None,
+                },
+            }
+            .ok_or_else(|| "member/index does not exist on target".to_string())?;
+        }
+        Ok(cur)
+    }
+
     /// Dispatch `obj.method(args)` for any value type. Shared by the tree-walk
     /// interpreter and the bytecode VM's CallMethod opcode. `object_expr` is the
     /// original expression when available (needed for push/pop field mutation).
@@ -9462,6 +9727,7 @@ let function = self
                         Expr::Var("self".into()),
                         "message".into(),
                         Expr::Var("message".into()),
+                        None,
                     ),
                     line: 0,
                     col: 0,
@@ -9914,10 +10180,24 @@ let function = self
                     self.vars.insert(name.clone(), Value::Function(name.clone()));
                     Ok(Flow::Normal)
                 }
-                StmtKind::SetMember(object, member, value) => {
+                StmtKind::SetMember(object, member, value, compound_op) => {
+                    if !matches!(object, Expr::Var(_)) {
+                        if let Some((root, steps)) = self.flatten_nested_target(object)? {
+                            let final_step = NestedStep::Key(member.clone());
+                            if self.assign_nested_target(&steps, &root, final_step, value.clone(), compound_op.clone())? {
+                                return Ok(Flow::Normal);
+                            }
+                        }
+                    }
                     match self.eval(object)? {
                         Value::Instance(instance) => {
                             let new_val = self.eval(value)?;
+                            let new_val = if let Some(op) = compound_op {
+                                let current = instance.lock().unwrap().fields.get(member).cloned().unwrap_or(Value::Null);
+                                self.binary(current, op, new_val)?
+                            } else {
+                                new_val
+                            };
                             instance
                                 .lock()
                                 .unwrap()
@@ -9926,6 +10206,12 @@ let function = self
                         }
                         Value::Dict(mut dict) => {
                             let new_val = self.eval(value)?;
+                            let new_val = if let Some(op) = compound_op {
+                                let current = dict.get(member).cloned().unwrap_or(Value::Null);
+                                self.binary(current, op, new_val)?
+                            } else {
+                                new_val
+                            };
                             // Drop the binding's reference so make_mut mutates
                             // in place when this is the only live handle.
                             if let Expr::Var(vname) = object {
@@ -9941,10 +10227,56 @@ let function = self
                     }
                     Ok(Flow::Normal)
                 }
-                StmtKind::SetIndex(object, index, value) => {
+                StmtKind::SetIndex(object, index, value, compound_op) => {
+                    if !matches!(object, Expr::Var(_)) {
+                        if let Some((root, steps)) = self.flatten_nested_target(object)? {
+                            let idx_val = self.eval(index)?;
+                            let final_step = NestedStep::Index(idx_val);
+                            if self.assign_nested_target(&steps, &root, final_step, value.clone(), compound_op.clone())? {
+                                return Ok(Flow::Normal);
+                            }
+                        }
+                    }
                     let obj = self.eval(object)?;
                     let idx = self.eval(index)?;
                     let new_val = self.eval(value)?;
+                    let new_val = if let Some(op) = compound_op {
+                        let current = match &idx {
+                            Value::Number(n) if n.fract() == 0.0 => {
+                                let i = if *n < 0.0 {
+                                    match &obj {
+                                        Value::List(v) => v.len() as i64 + *n as i64,
+                                        Value::String(s) => s.chars().count() as i64 + *n as i64,
+                                        _ => *n as i64,
+                                    }
+                                } else {
+                                    *n as i64
+                                };
+                                match &obj {
+                                    Value::List(v) => v
+                                        .get(i as usize)
+                                        .cloned()
+                                        .ok_or_else(|| "list index out of bounds: {i}".to_string())?,
+                                    Value::String(s) => s
+                                        .chars()
+                                        .nth(i as usize)
+                                        .map(|c| Value::String(c.to_string()))
+                                        .ok_or_else(|| "string index out of bounds: {i}".to_string())?,
+                                    _ => return Err("invalid index operation".to_string()),
+                                }
+                            }
+                            Value::String(key) => match &obj {
+                                Value::Dict(v) => v.get(key).cloned().ok_or_else(|| {
+                                    format!("dictionary has no key: {key}")
+                                })?,
+                                _ => return Err("invalid index operation".into()),
+                            },
+                            _ => return Err("invalid index operation".into()),
+                        };
+                        self.binary(current, op, new_val)?
+                    } else {
+                        new_val
+                    };
                     match obj {
                         Value::Dict(mut dict) => {
                             let key = match idx {
@@ -19669,11 +20001,11 @@ impl LintReport {
             StmtKind::StarImport(_) | StmtKind::Include(_) | StmtKind::Load(_) => {
                 self.opaque = true;
             }
-            StmtKind::SetMember(obj, _, val) => {
+            StmtKind::SetMember(obj, _, val, _) => {
                 self.walk_expr(obj);
                 self.walk_expr(val);
             }
-            StmtKind::SetIndex(obj, idx, val) => {
+            StmtKind::SetIndex(obj, idx, val, _) => {
                 self.walk_expr(obj);
                 self.walk_expr(idx);
                 self.walk_expr(val);

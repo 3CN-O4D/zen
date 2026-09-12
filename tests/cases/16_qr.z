@@ -9,12 +9,12 @@ func check(cond, name) {
 
 import qr
 
-# Render first (matrix afterwards keeps render working).
+# Render the QR; the terminal art uses UTF-8 half-block glyphs.
 var s = qr.render("hello world")
 check(typeof(s) == "string", "render returns a string")
 var lines = s.split("\n")
 check(lines[0].replace(" ", "").length() == 0, "quiet zone is blank")
-check(s.replace(" ", "").length() > 0, "render has dark modules")
+check(s.contains("█"), "render has dark modules")
 
 var m1 = qr.matrix("https://example.com/zen")
 var m2 = qr.matrix("https://example.com/zen")

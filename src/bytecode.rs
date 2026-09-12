@@ -407,12 +407,21 @@ impl FunctionCompiler {
                 LetTarget::Var(n) => {
                     self.compile_expr(e)?;
                     // Inside function bodies (allow_defs == false), `var`
-                    // declares a function-local: allocate a slot so this and
-                    // later references stay isolated from the caller's globals.
-                    if !self.allow_defs && !self.slots.contains_key(n) {
-                        let slot = self.next_slot;
-                        self.next_slot += 1;
-                        self.slots.insert(n.clone(), slot);
+                    // declares a function-local: reuse an existing slot when
+                    // the name already aliases a param/captured binding (matching
+                    // the tree-walk rebind semantics), otherwise allocate a fresh
+                    // one. This keeps the declaration isolated from the caller's
+                    // globals even when the name is also captured.
+                    if !self.allow_defs {
+                        let slot = match self.slots.get(n) {
+                            Some(&slot) => slot,
+                            None => {
+                                let slot = self.next_slot;
+                                self.next_slot += 1;
+                                self.slots.insert(n.clone(), slot);
+                                slot
+                            }
+                        };
                         self.emit(Opcode::StoreLocal, slot, 0, 0);
                         return Ok(());
                     }
