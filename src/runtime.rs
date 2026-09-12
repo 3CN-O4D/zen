@@ -270,7 +270,13 @@ impl Value {
         match self {
             Self::Null => "null",
             Self::Bool(_) => "bool",
-            Self::Number(_) => "int",
+            Self::Number(v) => {
+                if v.fract() == 0.0 {
+                    "int"
+                } else {
+                    "float"
+                }
+            }
             Self::String(_) => "string",
             Self::List(_) => "list",
             Self::Dict(_) => "dict",
@@ -459,10 +465,169 @@ pub(crate) enum InterpPart {
     Expr(String),
 }
 
+/// Returns true when the given token implies an expression is still open, so a
+/// following newline should act as an implicit line continuation instead of
+/// terminating the statement.
+fn continues_expression(k: &Kind) -> bool {
+    matches!(
+        k,
+        Kind::Plus
+            | Kind::Minus
+            | Kind::Star
+            | Kind::Slash
+            | Kind::Percent
+            | Kind::Pow
+            | Kind::Amp
+            | Kind::Pipe
+            | Kind::Caret
+            | Kind::Tilde
+            | Kind::LShift
+            | Kind::RShift
+            | Kind::Eq
+            | Kind::Ne
+            | Kind::Lt
+            | Kind::Le
+            | Kind::Gt
+            | Kind::Ge
+            | Kind::StrictEq
+            | Kind::StrictNe
+            | Kind::Is
+            | Kind::In
+            | Kind::And
+            | Kind::Or
+            | Kind::Nullish
+            | Kind::Assign
+            | Kind::PlusAssign
+            | Kind::MinusAssign
+            | Kind::StarAssign
+            | Kind::SlashAssign
+            | Kind::PercentAssign
+            | Kind::AmpAssign
+            | Kind::PipeAssign
+            | Kind::CaretAssign
+            | Kind::LShiftAssign
+            | Kind::RShiftAssign
+            | Kind::NullishAssign
+            | Kind::Arrow
+            | Kind::FatArrow
+            | Kind::Lambda
+            | Kind::Question
+            | Kind::Colon
+            | Kind::Dot
+            | Kind::SafeDot
+            | Kind::DotDot
+            | Kind::Comma
+            | Kind::Ellipsis
+            | Kind::LParen
+            | Kind::LBracket
+            | Kind::LBrace
+    )
+}
+
+/// Decode a `\` escape sequence. `*i` points at the backslash; on success the
+/// decoded text is returned and `i`/`line`/`col` advance past the whole escape.
+fn lex_escape(
+    bytes: &[u8],
+    i: &mut usize,
+    line: &mut usize,
+    col: &mut usize,
+) -> Result<String, String> {
+    *i += 1; // consume backslash
+    *col += 1;
+    let esc = *bytes
+        .get(*i)
+        .ok_or_else(|| format!("{line}:{col}: unfinished escape"))?;
+    match esc {
+        b'n' => return_escape('\n', i, col),
+        b't' => return_escape('\t', i, col),
+        b'r' => return_escape('\r', i, col),
+        b'0' => return_escape('\0', i, col),
+        b'a' => return_escape('\x07', i, col),
+        b'b' => return_escape('\x08', i, col),
+        b'e' => return_escape('\x1b', i, col),
+        b'f' => return_escape('\x0c', i, col),
+        b'v' => return_escape('\x0b', i, col),
+        b'\\' => return_escape('\\', i, col),
+        b'\'' => return_escape('\'', i, col),
+        b'"' => return_escape('"', i, col),
+        b'`' => return_escape('`', i, col),
+        b'$' => return_escape('$', i, col),
+        b'x' => {
+            *i += 1;
+            *col += 1;
+            let mut code: u8 = 0;
+            for _ in 0..2 {
+                let d = (*bytes
+                    .get(*i)
+                    .ok_or_else(|| format!("{line}:{col}: incomplete `\\xNN` escape, expected two hex digits"))?
+                    as char)
+                    .to_digit(16)
+                    .ok_or_else(|| {
+                        format!("{line}:{col}: invalid `\\xNN` escape, expected two hex digits")
+                    })?;
+                code = code * 16 + d as u8;
+                *i += 1;
+                *col += 1;
+            }
+            Ok((code as char).to_string())
+        }
+        b'u' => {
+            *i += 1;
+            *col += 1;
+            if bytes.get(*i) != Some(&b'{') {
+                return Err(format!(
+                    "{line}:{col}: invalid `\\u{{...}}` escape, expected `{{` after `\\u`"
+                ));
+            }
+            *i += 1;
+            *col += 1;
+            let mut cp: u32 = 0;
+            let mut digits = 0;
+            loop {
+                let b = *bytes
+                    .get(*i)
+                    .ok_or_else(|| format!("{line}:{col}: unterminated `\\u{{...}}` escape"))?;
+                if b == b'}' {
+                    break;
+                }
+                let d = (b as char).to_digit(16).ok_or_else(|| {
+                    format!("{line}:{col}: invalid `\\u{{...}}` escape, expected hex digit")
+                })?;
+                cp = cp * 16 + d;
+                *i += 1;
+                *col += 1;
+                digits += 1;
+                if digits > 6 {
+                    return Err(format!("{line}:{col}: `\\u{{...}}` escape has too many digits"));
+                }
+            }
+            if digits == 0 {
+                return Err(format!("{line}:{col}: empty `\\u{{...}}` escape"));
+            }
+            *i += 1; // consume closing }
+            *col += 1;
+            char::from_u32(cp)
+                .map(|c| c.to_string())
+                .ok_or_else(|| format!("{line}:{col}: invalid unicode code point `\\u{{{cp}}}`"))
+        }
+        other => return_escape(other as char, i, col),
+    }
+}
+
+fn return_escape(c: char, i: &mut usize, col: &mut usize) -> Result<String, String> {
+    *i += 1;
+    *col += 1;
+    Ok(c.to_string())
+}
+
 fn lex(source: &str) -> Result<Vec<Token>, String> {
     let bytes = source.as_bytes();
     let (mut i, mut line, mut col) = (0, 1, 1);
     let mut out = vec![];
+    // Depth of open `(`/`[` delimiters. While positive, newlines are treated
+    // as plain whitespace so multi-line call arguments and list literals parse
+    // as a single expression (braces are not counted: blocks need newlines).
+    let mut paren_depth = 0usize;
     while i < bytes.len() {
         let c = bytes[i] as char;
         let start = (line, col);
@@ -472,11 +637,22 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             continue;
         }
         if c == '\n' {
-            out.push(Token {
-                kind: Kind::Newline,
-                line,
-                col,
-            });
+            // Suppress the newline when the previous significant token shows the
+            // expression is still open (trailing binary operator, comma, dot,
+            // colon, or opening delimiter). This is the Kotlin/Python-style
+            // "implicit line continuation" rule, so statements like
+            //     let s = "a" +
+            //             "b"
+            // parse as a single expression.
+            let prev = out.last().map(|t: &Token| &t.kind);
+            let continuing = paren_depth > 0 || prev.is_some_and(continues_expression);
+            if !continuing {
+                out.push(Token {
+                    kind: Kind::Newline,
+                    line,
+                    col,
+                });
+            }
             i += 1;
             line += 1;
             col = 1;
@@ -549,24 +725,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         break;
                     }
                     if ch == '\\' {
-                        i += 1;
-                        col += 1;
-                        let escape = *bytes
-                            .get(i)
-                            .ok_or_else(|| format!("{line}:{col}: unfinished escape"))?
-                            as char;
-                        text.push(match escape {
-                            'n' => '\n',
-                            't' => '\t',
-                            'r' => '\r',
-                            '\\' => '\\',
-                            '\'' => '\'',
-                            '"' => '"',
-                            '$' => '$',
-                            x => x,
-                        });
-                        i += 1;
-                        col += 1;
+                        text.push_str(&lex_escape(bytes, &mut i, &mut line, &mut col)?);
                     } else if is_interpolated && ch == '$' && bytes.get(i + 1) == Some(&b'{') {
                         if !text.is_empty() {
                             parts.push(InterpPart::Text(std::mem::take(&mut text)));
@@ -651,24 +810,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     break;
                 }
                 if ch == '\\' {
-                    i += 1;
-                    col += 1;
-                    let escape = *bytes
-                        .get(i)
-                        .ok_or_else(|| format!("{line}:{col}: unfinished escape"))?
-                        as char;
-                    text.push(match escape {
-                        'n' => '\n',
-                        't' => '\t',
-                        'r' => '\r',
-                        '\\' => '\\',
-                        '\'' => '\'',
-                        '"' => '"',
-                        '$' => '$',
-                        x => x,
-                    });
-                    i += 1;
-                    col += 1;
+                    text.push_str(&lex_escape(bytes, &mut i, &mut line, &mut col)?);
                 } else if is_interpolated && ch == '$' && bytes.get(i + 1) == Some(&b'{') {
                     // Flush accumulated literal text, then capture the expression.
                     if !text.is_empty() {
@@ -1097,6 +1239,11 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 _ => return Err(format!("{}:{}: unexpected character {c:?}\n  \x1b[1;33m= help:\x1b[0m Zen does not recognize `{c}` in this context\n  \x1b[1;33m= note:\x1b[0m  if you meant to use this in a string, wrap it in quotes", line, col)),
             },
         };
+        if matches!(kind, Kind::LParen | Kind::LBracket) {
+            paren_depth += 1;
+        } else if matches!(kind, Kind::RParen | Kind::RBracket) {
+            paren_depth = paren_depth.saturating_sub(1);
+        }
         out.push(Token { kind, line, col });
         i += 1;
         col += 1;
@@ -2148,15 +2295,31 @@ impl Parser {
             self.expect(Kind::RBrace)?;
             if let Some(last) = body.last() {
                 if let StmtKind::Expr(e) = &last.kind {
-                    let e = e.clone();
-                    let line = last.line;
-                    let col = last.col;
-                    body.pop();
-                    body.push(Stmt {
-                        kind: StmtKind::Return(Some(e)),
-                        line,
-                        col,
-                    });
+                    // Do not auto-return list mutator calls (push/pop/shift)
+                    // so that statement-form mutation in lambdas works.
+                    let is_mutator = matches!(
+                        e,
+                        Expr::Call(callee, _)
+                            if matches!(
+                                callee.as_ref(),
+                                Expr::Member(_, name)
+                                    | Expr::Var(name)
+                                        if *name == "push"
+                                            || *name == "pop"
+                                            || *name == "shift"
+                            )
+                    );
+                    if !is_mutator {
+                        let e = e.clone();
+                        let line = last.line;
+                        let col = last.col;
+                        body.pop();
+                        body.push(Stmt {
+                            kind: StmtKind::Return(Some(e)),
+                            line,
+                            col,
+                        });
+                    }
                 }
             }
             Ok(Expr::Lambda(params, body))
@@ -2665,18 +2828,34 @@ impl Parser {
                 if self.take(Kind::LBrace) {
                     let mut body = self.program()?;
                     self.expect(Kind::RBrace)?;
-                    // Auto-return the last expression if it's a bare expression statement
+                    // Auto-return the last expression if it's a bare expression
+                    // statement (skipping list mutator calls push/pop/shift so
+                    // statement-form mutation in lambdas works).
                     if let Some(last) = body.last() {
                         if let StmtKind::Expr(e) = &last.kind {
-                            let e = e.clone();
-                            let line = last.line;
-                            let col = last.col;
-                            body.pop();
-                            body.push(Stmt {
-                                kind: StmtKind::Return(Some(e)),
-                                line,
-                                col,
-                            });
+                            let is_mutator = matches!(
+                                e,
+                                Expr::Call(callee, _)
+                                    if matches!(
+                                        callee.as_ref(),
+                                        Expr::Member(_, name)
+                                            | Expr::Var(name)
+                                                if *name == "push"
+                                                    || *name == "pop"
+                                                    || *name == "shift"
+                                    )
+                            );
+                            if !is_mutator {
+                                let e = e.clone();
+                                let line = last.line;
+                                let col = last.col;
+                                body.pop();
+                                body.push(Stmt {
+                                    kind: StmtKind::Return(Some(e)),
+                                    line,
+                                    col,
+                                });
+                            }
                         }
                     }
                     Ok(Expr::Lambda(params, body))
@@ -3945,6 +4124,12 @@ impl Vm {
         // wa module (WhatsApp bridge over Node/Baileys)
         crate::wa::init_wa_module(self);
 
+        // qr module (pure-Rust QR code generation)
+        crate::qr::init_qr_module(self);
+
+        // sqlite module (bundled embedded SQLite)
+        crate::sqlite::init_sqlite_module(self);
+
         // smtp module (pure-Rust SMTP client)
         crate::smtp::init_smtp_module(self);
 
@@ -4012,7 +4197,7 @@ impl Vm {
         crate::binascii::init_binascii_module(self);
 
         // Register all core native functions eagerly
-            const NATIVES: [&str; 457] = [
+            const NATIVES: [&str; 470] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -4289,10 +4474,23 @@ impl Vm {
             "wa_state",
             "wa_qr",
             "wa_pairing_code",
+            "wa_last_error",
             "wa_poll",
             "wa_send_text",
             "wa_logout",
             "wa_disconnect",
+            "wa_send_file",
+            "wa_download",
+            "qr_matrix",
+            "qr_render",
+            "qr_version",
+            "qr_dimension",
+            "sqlite_open",
+            "sqlite_open_memory",
+            "sqlite_close",
+            "sqlite_exec",
+            "sqlite_query",
+            "sqlite_escape",
             "ftp_connect",
             "ftp_login",
             "ftp_pwd",
@@ -4676,7 +4874,12 @@ impl Vm {
                 if matches!(object, Value::Null) {
                     Ok(Value::Null)
                 } else {
-                    self.member(object, name)
+                    // Safe access also returns null for missing members
+                    // (operators.md:271 `d?.missing` → null).
+                    match self.member(object, name) {
+                        Ok(v) => Ok(v),
+                        Err(_) => Ok(Value::Null),
+                    }
                 }
             }
             Expr::Ternary(condition, yes, no) => {
@@ -6326,8 +6529,12 @@ Expr::Index(obj, idx) => {
                 self.register_function(ns_key.clone(), f.clone());
                 // Plain-name alias is first-wins so a later module cannot
                 // silently redirect closures that captured an earlier
-                // module's helper.
-                if !self.functions.contains_key(fname) {
+                // module's helper. A function whose plain name equals the
+                // module namespace is NOT aliased so the module dict
+                // binding wins.
+                if fname != namespace
+                    && !self.functions.contains_key(fname)
+                {
                     self.register_function(fname.clone(), f.clone());
                 }
                 self.foreign_fns.insert(ns_key);
@@ -6421,8 +6628,13 @@ Expr::Index(obj, idx) => {
         for (fname, function) in &art_functions {
             let key = format!("{namespace}::{fname}");
             self.register_function(key, function.clone());
-            // Plain alias: first-wins (see note above).
-            if !self.functions.contains_key(fname) {
+            // Plain alias: first-wins (see note above). A function whose
+            // plain name equals the module namespace is NOT aliased, so the
+            // module dict binding (`module.func`) wins and stays accessible
+            // as `module.func`.
+            if fname != namespace
+                && !self.functions.contains_key(fname)
+            {
                 self.register_function(fname.clone(), function.clone());
             }
         }
@@ -7570,6 +7782,10 @@ Expr::Index(obj, idx) => {
                         _ => return Err("bad constant in Add/SubGlobalImm".into()),
                     };
                     let imm = if inst.opcode == Opcode::AddGlobalImm { imm } else { -imm };
+                    // Like StoreGlobal, in-place arithmetic on a global must
+                    // invalidate the single-entry global cache so a following
+                    // LoadGlobal re-reads self.vars instead of a stale copy.
+                    self.global_cache = None;
                     let raw = self.vars.get(name.as_str()).cloned();
                     match raw {
                         Some(cell @ Value::Cell(_)) => {
@@ -8009,6 +8225,14 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                     let idx = base + inst.arg1 as usize;
                     let v = stack.pop().unwrap_or(Value::Null);
                     match locals.get_mut(idx) {
+                        Some(Value::Cell(cell)) => {
+                            let mut g = cell.lock().unwrap_or_else(|p| p.into_inner());
+                            match &mut *g {
+                                Value::List(list) => Arc::make_mut(list).push(v),
+                                Value::Null => *g = Value::List(Arc::new(vec![v])),
+                                _ => return Err("push target is not a list".into()),
+                            }
+                        }
                         Some(Value::List(list)) => Arc::make_mut(list).push(v),
                         Some(Value::Null) => {
                             locals[idx] = Value::List(Arc::new(vec![v]));
@@ -8019,6 +8243,16 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                 Opcode::PopSlot => {
                     let idx = base + inst.arg1 as usize;
                     match locals.get_mut(idx) {
+                        Some(Value::Cell(cell)) => {
+                            let mut g = cell.lock().unwrap_or_else(|p| p.into_inner());
+                            match &mut *g {
+                                Value::List(list) => {
+                                    let popped = Arc::make_mut(list).pop().unwrap_or(Value::Null);
+                                    stack.push(popped);
+                                }
+                                _ => return Err("pop target is not a list".into()),
+                            }
+                        }
                         Some(Value::List(list)) => {
                             let popped = Arc::make_mut(list).pop().unwrap_or(Value::Null);
                             stack.push(popped);
@@ -8031,7 +8265,16 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         return Err("bad constant in PushGlobal".into());
                     };
                     let v = stack.pop().unwrap_or(Value::Null);
+                    self.global_cache = None;
                     match self.vars.get_mut(name.as_str()) {
+                        Some(Value::Cell(cell)) => {
+                            let mut g = cell.lock().unwrap_or_else(|p| p.into_inner());
+                            match &mut *g {
+                                Value::List(list) => Arc::make_mut(list).push(v),
+                                Value::Null => *g = Value::List(Arc::new(vec![v])),
+                                _ => return Err("push target is not a list".into()),
+                            }
+                        }
                         Some(Value::List(list)) => Arc::make_mut(list).push(v),
                         _ => {
                             let name = name.clone();
@@ -8043,7 +8286,18 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                     let Value::String(name) = &cur.constants[inst.arg1 as usize] else {
                         return Err("bad constant in PopGlobal".into());
                     };
+                    self.global_cache = None;
                     match self.vars.get_mut(name.as_str()) {
+                        Some(Value::Cell(cell)) => {
+                            let mut g = cell.lock().unwrap_or_else(|p| p.into_inner());
+                            match &mut *g {
+                                Value::List(list) => {
+                                    let popped = Arc::make_mut(list).pop().unwrap_or(Value::Null);
+                                    stack.push(popped);
+                                }
+                                _ => return Err("pop target is not a list".into()),
+                            }
+                        }
                         Some(Value::List(list)) => {
                             let popped = Arc::make_mut(list).pop().unwrap_or(Value::Null);
                             stack.push(popped);
@@ -14318,10 +14572,23 @@ fn native_for(name: &str) -> NativeFunc {
         "wa_state" => |args| crate::wa::wa_state(&args),
         "wa_qr" => |args| crate::wa::wa_qr(&args),
         "wa_pairing_code" => |args| crate::wa::wa_pairing_code(&args),
+        "wa_last_error" => |args| crate::wa::wa_last_error(&args),
         "wa_poll" => |args| crate::wa::wa_poll(&args),
         "wa_send_text" => |args| crate::wa::wa_send_text(&args),
         "wa_logout" => |args| crate::wa::wa_logout(&args),
         "wa_disconnect" => |args| crate::wa::wa_disconnect(&args),
+        "wa_send_file" => |args| crate::wa::wa_send_file(&args),
+        "wa_download" => |args| crate::wa::wa_download(&args),
+        "qr_matrix" => |args| crate::qr::qr_matrix(&args),
+        "qr_render" => |args| crate::qr::qr_render(&args),
+        "qr_version" => |args| crate::qr::qr_version(&args),
+        "qr_dimension" => |args| crate::qr::qr_dimension(&args),
+        "sqlite_open" => |args| crate::sqlite::sqlite_open(&args),
+        "sqlite_open_memory" => |args| crate::sqlite::sqlite_open_memory(&args),
+        "sqlite_close" => |args| crate::sqlite::sqlite_close(&args),
+        "sqlite_exec" => |args| crate::sqlite::sqlite_exec(&args),
+        "sqlite_query" => |args| crate::sqlite::sqlite_query(&args),
+        "sqlite_escape" => |args| crate::sqlite::sqlite_escape(&args),
         "ftp_connect" => |args| {
             let host = arg_string(&args, 0)?;
             let port = match args.get(1) {

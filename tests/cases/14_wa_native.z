@@ -1,0 +1,44 @@
+# wa module — native client API surface (offline, no network).
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import wa
+
+check(wa.state() == "idle", "wa.state is idle before connect")
+check(wa.qr() == null, "wa.qr is null before connect")
+check(wa.pairingCode() == null, "wa.pairingCode is null")
+check(wa.disconnect() == false, "wa.disconnect returns false with no session")
+
+var caught = false
+try {
+    wa.poll(0)
+} catch {
+    caught = true
+}
+check(caught, "wa.poll raises when not connected")
+
+caught = false
+try {
+    wa.sendText("1@2@c.us", "hello")
+} catch {
+    caught = true
+}
+check(caught, "wa.sendText raises (needs Signal sessions)")
+
+caught = false
+try {
+    wa.logout()
+} catch {
+    caught = true
+}
+check(caught, "wa.logout raises when not connected")
+
+if fails == 0 {
+    print("14_wa_native: all ok")
+}
+exit(if fails > 0 { 1 } else { 0 })

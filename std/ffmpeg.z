@@ -1,0 +1,170 @@
+# ffmpeg.z — media toolkit wrapping the system ffmpeg/ffprobe binaries.
+# Every command shells out via os.execute and returns {ok, code, stdout,
+# stderr}; media helpers include {out, width, height, duration}.
+
+func _q(s) {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+# Is the ffmpeg + ffprobe pair installed and on PATH?
+func available() {
+    let r = os.execute("command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1")
+    return r.ok
+}
+
+# probe(path) -> {ok, width, height, duration_ms}
+# Runs ffprobe and parses its JSON so bots can inspect real media:
+#   - ok          whether ffprobe ran successfully
+#   - width/height  dimensions of the first video stream
+#   - duration_ms   duration in milliseconds (0 if the format has none)
+func probe(path) {
+    let r = os.execute("ffprobe -v error -print_format json -show_format -show_streams " + _q(path))
+    var out = {}
+    out.ok = r.ok
+    out.width = 0
+    out.height = 0
+    out.duration_ms = 0
+    if r.ok {
+        let info = json.parse(r.stdout)
+        if info.format != null and info.format.has("duration") {
+            out.duration_ms = float(info.format.duration) * 1000
+        }
+        if info.streams != null {
+            for s in info.streams {
+                if s.codec_type == "video" {
+                    out.width = int(s.width)
+                    out.height = int(s.height)
+                }
+            }
+        }
+    }
+    return out
+}
+
+# duration_ms(path) -> duration in milliseconds (0 on failure).
+func duration_ms(path) {
+    return probe(path).duration_ms
+}
+
+# thumbnail(src, out, sizePx) — JPEG preview, longest side capped at sizePx.
+func thumbnail(src, out, size) {
+    var size = size
+    if size == null {
+        size = 960
+    }
+    let cmd = "ffmpeg -y -v error -i " + _q(src) +
+        " -vf " + _q("scale='" + int(size) + "':-2") +
+        " -frames:v 1 -q:v 3 " + _q(out)
+    return os.execute(cmd)
+}
+
+# image(src, out) — transcode to any container ffmpeg can write
+# (webp / png / jpg / avif ...).
+func image(src, out) {
+    let r = os.execute("ffmpeg -y -v error -i " + _q(src) + " " + _q(out))
+    return r
+}
+
+# to_webp(src, out) — webp image (base building block for stickers).
+func to_webp(src, out) {
+    let cmd = "ffmpeg -y -v error -i " + _q(src) +
+        " -vf " + _q("scale=512:512") +
+        " -c:v libwebp -lossless 0 -q:v 80 -loop 0 " + _q(out)
+    return os.execute(cmd)
+}
+
+# sticker(src, out) — first-frame 512x512 letterboxed webp that WhatsApp
+# accepts as a sticker.
+func sticker(src, out) {
+    let cmd = "ffmpeg -y -v error -i " + _q(src) +
+        " -vf " + _q("scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2") +
+        " -c:v libwebp -loop 0 " + _q(out)
+    return os.execute(cmd)
+}
+
+# video_to_gif(src, out, fps) — animated gif (default 12 fps).
+func video_to_gif(src, out, fps) {
+    var fps = fps
+    if fps == null {
+        fps = 12
+    }
+    let cmd = "ffmpeg -y -v error -i " + _q(src) +
+        " -vf " + _q("fps=" + int(fps) + ",scale=512:-2") +
+        " -loop 0 " + _q(out)
+    return os.execute(cmd)
+}
+
+# mp3(src, out) — extract the audio track as mp3.
+func mp3(src, out) {
+    let cmd = "ffmpeg -y -v error -i " + _q(src) +
+        " -vn -codec:a libmp3lame -qscale:a 2 " + _q(out)
+    return os.execute(cmd)
+}
+
+# audio(src, out, mime) — extract audio as opus/ogg (default), mp3 or aac,
+# chosen from the mime hint (opts: "audio/mpeg" or "audio/mp4").
+func audio(src, out, mime) {
+    var codec = "libopus"
+    if mime != null {
+        if mime.contains("mpeg") {
+            codec = "libmp3lame"
+        }
+        if mime.contains("mp4") or mime.contains("m4a") {
+            codec = "aac"
+        }
+    }
+    let cmd = "ffmpeg -y -v error -i " + _q(src) +
+        " -vn -codec:a " + codec + " -b:a 64k " + _q(out)
+    return os.execute(cmd)
+}
+
+# trim(src, out, startSec, durationSec) — cut from startSec for durationSec
+# seconds; both may be fractional. durationSec=null means "to the end".
+func trim(src, out, start, duration) {
+    var cmd = "ffmpeg -y -v error -ss " + _q(str(start)) + " -i " + _q(src) + " -c copy"
+    if duration != null {
+        cmd = cmd + " -t " + _q(str(duration))
+    }
+    cmd = cmd + " " + _q(out)
+    return os.execute(cmd)
+}
+
+# resize(src, out, w, h) — scale to a box (h=-2 keeps aspect; give both to
+# fit an exact size without distortion).
+func resize(src, out, w, h) {
+    var h = h
+    if h == null {
+        h = -2
+    }
+    let cmd = "ffmpeg -y -v error -i " + _q(src) +
+        " -vf " + _q("scale=" + int(w) + ":" + int(h)) + " " + _q(out)
+    return os.execute(cmd)
+}
+
+# to_mp4(src, out) — h264/aac with faststart, phone-friendly.
+func to_mp4(src, out) {
+    let cmd = "ffmpeg -y -v error -i " + _q(src) +
+        " -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k" +
+        " -movflags +faststart " + _q(out)
+    return os.execute(cmd)
+}
+
+# merge(out, inputs) — concatenate a list of files into one (same codec).
+func merge(out, inputs) {
+    if inputs == null or inputs.length() == 0 {
+        let r = {}
+        r.ok = false
+        r.code = -1
+        r.stderr = "ffmpeg.merge: no inputs"
+        return r
+    }
+    let list = "/tmp/zen_ffmpeg_concat_" + str(uuid.uuid4()) + ".txt"
+    var lines = ""
+    for f in inputs {
+        lines = lines + "file " + _q(f) + "\n"
+    }
+    fs.write(list, lines)
+    let r = os.execute("ffmpeg -y -v error -f concat -safe 0 -i " + _q(list) + " -c copy " + _q(out))
+    fs.remove(list)
+    return r
+}

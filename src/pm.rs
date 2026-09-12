@@ -461,6 +461,14 @@ pub fn install_requirements(path: &str) -> Result<(), String> {
         let spec = if let Some(src) = sources.get(name) {
             src.clone()
         } else {
+            // No recorded source (e.g. a lockfile-less module seeded into the
+            // modules dir). Nothing to pin or re-fetch: if it is already
+            // installed keep it, otherwise fall back to the bare name so
+            // resolve_source can still try a local path / repo shorthand.
+            if modules_dir().join(name).exists() {
+                eprintln!("{name} already installed; skipping");
+                continue;
+            }
             line.to_string()
         };
         match install(&spec, true) {

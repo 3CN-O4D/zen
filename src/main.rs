@@ -48,6 +48,12 @@ mod wifi;
 mod cdp;
 mod wa;
 mod wa2;
+mod wa_bot;
+mod wa_media;
+mod wa_signal;
+mod wa_signal_session;
+mod qr;
+mod sqlite;
 mod pm;
 mod runtime;
 mod state;
@@ -143,6 +149,28 @@ fn main() {
     }
     if args.first().is_some_and(|arg| arg == "repl") {
         repl();
+        return;
+    }
+    if args.first().is_some_and(|arg| arg == "bot") {
+        let device_path = args
+            .get(1)
+            .filter(|a| !a.starts_with('-'))
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "zen_wa_bot.txt".to_string());
+        let mut log = |kind: &str, msg: &str| {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            println!("[{}] {kind}: {msg}", ts);
+        };
+        match crate::wa_bot::run_bot(&device_path, &mut log) {
+            Ok(()) => (),
+            Err(err) => {
+                eprintln!("bot error: {err}");
+                process::exit(1);
+            }
+        }
         return;
     }
     if args.first().is_some_and(|arg| arg == "check") || args.first().is_some_and(|arg| arg == "lint") {

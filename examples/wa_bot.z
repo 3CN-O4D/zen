@@ -1,0 +1,42 @@
+# Zen WhatsApp test bot — native Rust client (wa2 + wa_bot, no Node).
+#
+#   zen run examples/wa_bot.z
+#
+# On first run it connects, prints a QR, and waits for you to scan it with
+#   WhatsApp  >  Settings  >  Linked Devices  >  Link a Device
+# once scanned+approved the bot completes pairing, saves its device keys, and
+# reconnects as a logged-in session, printing every live event.
+
+import wa
+import time
+
+print("connecting...")
+wa.connect("~/.zen/zen_wa_bot", "")
+time.sleep(2)
+
+while true {
+    var st = wa.state()
+    if st == "qr" {
+        print("")
+        print("SCAN THIS QR (WhatsApp > Linked Devices > Link a Device):")
+        print(wa.qr())
+        print("waiting for the phone to approve...")
+        time.sleep(3)
+    } else if st == "open" {
+        print("")
+        print("BOT READY: session authenticated, listening for events (Ctrl-C to stop)")
+        while true {
+            for msg in wa.poll(500) {
+                if msg["tag"] == "message" {
+                    print("EVENT message  from=" + msg["from"] + "  id=" + msg["id"])
+                } else {
+                    print("EVENT node=" + msg["tag"] + "  from=" + msg["from"] + "  type=" + msg["type"])
+                }
+            }
+            time.sleep(0.5)
+        }
+    } else {
+        print("state: " + st)
+        time.sleep(1)
+    }
+}

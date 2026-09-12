@@ -1,6 +1,6 @@
 [package]
 name = "zen"
-version = "2.1.0"
+version = "2.1.2"
 edition = "2021"
 description = "Native Rust runtime for the Zen language"
 license = "MIT"
@@ -40,6 +40,8 @@ tar = "0.4"
 websocket = "0.27"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 native-tls = "0.2"
+qrcode = "0.14.1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [profile.release]
 opt-level = 3

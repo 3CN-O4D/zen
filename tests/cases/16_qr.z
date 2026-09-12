@@ -1,0 +1,53 @@
+# qr module — pure-Rust QR generation (offline, deterministic).
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import qr
+
+# Render first (matrix afterwards keeps render working).
+var s = qr.render("hello world")
+check(typeof(s) == "string", "render returns a string")
+var lines = s.split("\n")
+check(lines[0].replace(" ", "").length() == 0, "quiet zone is blank")
+check(s.replace(" ", "").length() > 0, "render has dark modules")
+
+var m1 = qr.matrix("https://example.com/zen")
+var m2 = qr.matrix("https://example.com/zen")
+check(m1.length() == m2.length(), "same dimension")
+check(m1.length() >= 21, "QR is at least 21 modules")
+check(m1[0].length() == m1.length(), "matrix is square")
+
+# Deterministic across calls.
+var same = true
+for i in range(0, m1.length()) {
+    for j in range(0, m1.length()) {
+        if m1[i][j] != m2[i][j] {
+            same = false
+        }
+    }
+}
+check(same, "matrix deterministic")
+
+# Finder pattern: outer border (rows/cols 0 and 6) and centre 3×3 are dark.
+check(m1[0][0] == 1, "finder top-left dark")
+check(m1[0][6] == 1, "finder top-right dark")
+check(m1[6][0] == 1, "finder bottom-left dark")
+check(m1[6][6] == 1, "finder bottom-right dark")
+check(m1[2][2] == 1, "finder centre dark")
+
+check(qr.dimension("a") == qr.matrix("a").length(), "dimension matches matrix")
+check(qr.version("abc") >= 1, "version is positive")
+
+# Longer payloads still render.
+var big = qr.render("wa.sendFile('x') supports media; this payload forces a larger QR briefly.")
+check(big.length() > 100, "long payload renders")
+
+if fails == 0 {
+    print("16_qr: all ok")
+}
+exit(if fails > 0 { 1 } else { 0 })

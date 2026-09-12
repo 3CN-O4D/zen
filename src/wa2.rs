@@ -88,6 +88,8 @@ pub enum Error {
     Cert(String),
     /// Unexpected websocket message type (e.g. text when binary expected).
     BadWs(&'static str),
+    /// Socket read timed out (used by the bot session loop for keepalives).
+    Timeout,
 }
 
 impl std::fmt::Display for Error {
@@ -102,6 +104,7 @@ impl std::fmt::Display for Error {
             Error::Codec(e) => write!(f, "wa2: codec error: {e}"),
             Error::Cert(e) => write!(f, "wa2: certificate error: {e}"),
             Error::BadWs(e) => write!(f, "wa2: bad websocket message: {e}"),
+            Error::Timeout => write!(f, "wa2: read timed out"),
         }
     }
 }
@@ -1055,7 +1058,7 @@ fn check_cert_validity(cert: &CertDetails) -> Result<(), Error> {
 /// map `y = (u-1)/(u+1)`; the signature's most significant bit carries the
 /// Edwards x-sign (XEdDSA convention) and is cleared before a standard
 /// Ed25519 verification.
-fn xed25519_verify(pub_u: &[u8; 32], signature: &[u8; 64], msg: &[u8]) -> bool {
+pub fn xed25519_verify(pub_u: &[u8; 32], signature: &[u8; 64], msg: &[u8]) -> bool {
     use curve25519_dalek::montgomery::MontgomeryPoint;
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
@@ -1079,7 +1082,7 @@ fn xed25519_verify(pub_u: &[u8; 32], signature: &[u8; 64], msg: &[u8]) -> bool {
 /// `r = uniform(SHA-512(0xFE ∥ 0xFF∥31 ∥ a-canonical ∥ msg ∥ Z))`,
 /// `h = uniform(SHA-512(R ∥ A-compressed ∥ msg))`, `s = a·h + r`, and the
 /// signature's MSB carries the x-sign bit of `A`.
-fn xed25519_sign(seed: &[u8; 32], msg: &[u8]) -> [u8; 64] {
+pub fn xed25519_sign(seed: &[u8; 32], msg: &[u8]) -> [u8; 64] {
     use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
     use curve25519_dalek::scalar::Scalar;
     use sha2::Digest as _;
@@ -1316,9 +1319,9 @@ impl FrameSocket {
         Ok(FrameSocket { ws: client, header_sent: false, buffer: Vec::new() })
     }
 
-    fn set_read_timeout(&mut self, secs: Option<u64>) -> Result<(), Error> {
-        if let Some(secs) = secs {
-            self.ws.stream_ref().get_ref().set_read_timeout(Some(std::time::Duration::from_secs(secs)))?;
+    fn set_read_timeout_millis(&mut self, millis: u64) -> Result<(), Error> {
+        if millis > 0 {
+            self.ws.stream_ref().get_ref().set_read_timeout(Some(std::time::Duration::from_millis(millis)))?;
         } else {
             self.ws.stream_ref().get_ref().set_read_timeout(None)?;
         }
@@ -1371,6 +1374,45 @@ impl FrameSocket {
                     return Err(Error::Ws("connection closed by server".into()))
                 }
                 _ => return Err(Error::BadWs("expected binary frame")),
+            }
+        }
+    }
+}
+
+/// A frame either missing due to a read timeout (`Ok(None)`) or present.
+type TimeoutResult<T> = Result<Option<T>, Error>;
+
+impl FrameSocket {
+    /// Receive that first drains the buffer, then reads a frame with a
+    /// bounded socket timeout. `Ok(None)` means the read timed out.
+    fn recv_frame_timeout(&mut self, millis: u64) -> TimeoutResult<Vec<u8>> {
+        loop {
+            if let Some(frame) = try_drain_frame(&mut self.buffer)? {
+                return Ok(Some(frame));
+            }
+            self.set_read_timeout_millis(millis)?;
+            match self.ws.recv_message().map_err(|e| Error::Ws(format!("recv: {e}"))) {
+                Ok(websocket::OwnedMessage::Binary(data)) => {
+                    if data.len() > FRAME_MAX_SIZE {
+                        return Err(Error::Noise(format!(
+                            "incoming ws message too large: {}",
+                            data.len()
+                        )));
+                    }
+                    self.buffer.extend_from_slice(&data);
+                }
+                Ok(websocket::OwnedMessage::Ping(payload)) => {
+                    self.ws
+                        .send_message(&websocket::OwnedMessage::Pong(payload))
+                        .map_err(|e| Error::Ws(format!("pong: {e}")))?;
+                }
+                Ok(websocket::OwnedMessage::Close(_)) => {
+                    return Err(Error::Ws("connection closed by server".into()))
+                }
+                Err(Error::Ws(e)) if e.contains("timed out") || e.contains("os error 11")
+                    || e.contains("Would block") => return Ok(None),
+                Err(e) => return Err(e),
+                Ok(_) => return Err(Error::BadWs("expected binary frame")),
             }
         }
     }
@@ -1470,10 +1512,8 @@ fn device_props_msg() -> Vec<u8> {
     props
 }
 
-/// Build the registration-style `ClientPayload` protobuf.
-pub fn build_client_payload(material: &PairingMaterial) -> Vec<u8> {
-    use md5::Digest as _;
-
+/// Build the platform `UserAgent` protobuf (whatsmeow `ClientUserAgent`).
+pub fn base_user_agent_msg() -> Vec<u8> {
     let mut ua = Vec::new();
     pb::field_uint(1, 14, &mut ua); // platform: WEB
     pb::field_msg(2, &app_version_msg(), &mut ua); // appVersion
@@ -1486,6 +1526,21 @@ pub fn build_client_payload(material: &PairingMaterial) -> Vec<u8> {
     pb::field_uint(10, 0, &mut ua); // releaseChannel: RELEASE
     pb::field_string(11, "en", &mut ua); // localeLanguageIso6391
     pb::field_string(12, "US", &mut ua); // localeCountryIso31661Alpha2
+    ua
+}
+
+/// Build the `WebInfo` protobuf with an explicit webSubPlatform field.
+pub fn base_web_info_msg() -> Vec<u8> {
+    let mut web_info = Vec::new();
+    pb::field_uint(4, 0, &mut web_info); // webSubPlatform: WEB_BROWSER
+    web_info
+}
+
+/// Build the registration-style `ClientPayload` protobuf.
+pub fn build_client_payload(material: &PairingMaterial) -> Vec<u8> {
+    use md5::Digest as _;
+
+    let ua = base_user_agent_msg();
 
     let reg_id = material.registration_id.to_be_bytes();
     let prekey_id = material.prekey_id.to_be_bytes();
@@ -1501,8 +1556,7 @@ pub fn build_client_payload(material: &PairingMaterial) -> Vec<u8> {
     pb::field_bytes(7, &build_hash[..], &mut pairing); // buildHash
     pb::field_bytes(8, &device_props_msg(), &mut pairing); // deviceProps
 
-    let mut web_info = Vec::new();
-    pb::field_uint(4, 0, &mut web_info); // webSubPlatform: WEB_BROWSER
+    let web_info = base_web_info_msg();
 
     let mut payload = Vec::new();
     pb::field_uint(3, 0, &mut payload); // passive
@@ -1516,7 +1570,7 @@ pub fn build_client_payload(material: &PairingMaterial) -> Vec<u8> {
 }
 
 /// libsignal `ecc.DjbType` — Curve25519 public key marker.
-fn ecc_curve_djb_type() -> u8 {
+pub fn ecc_curve_djb_type() -> u8 {
     5
 }
 
@@ -1578,7 +1632,7 @@ impl Wa2Session {
         self.handshake_with_payload(payload, (material.noise_priv, material.noise_pub))
     }
 
-    fn handshake_with_payload(
+    pub fn handshake_with_payload(
         &mut self,
         payload: Vec<u8>,
         noise_key: ([u8; 32], [u8; 32]),
@@ -1595,9 +1649,9 @@ impl Wa2Session {
         self.fs.send_frame(&marshal_client_hello(&e_pub))?;
 
         // ServerHello arrives as a plain frame (header was sent once, above).
-        self.fs.set_read_timeout(Some(HANDSHAKE_TIMEOUT_SECS))?;
+        self.fs.set_read_timeout_millis(HANDSHAKE_TIMEOUT_SECS * 1000)?;
         let resp = self.fs.recv_frame()?;
-        self.fs.set_read_timeout(None)?;
+        self.fs.set_read_timeout_millis(0)?;
 
         let server_hello = parse_server_hello(&resp)?;
 
@@ -1645,6 +1699,15 @@ impl Wa2Session {
     pub fn recv_node(&mut self) -> Result<WaNode, Error> {
         let data = self.recv_raw()?;
         WaNode::unpack(&data)
+    }
+
+    /// Receive one node with a bounded read timeout in milliseconds;
+    /// `Ok(None)` when the socket goes silent (keepalive-driven loops).
+    pub fn recv_node_timeout(&mut self, millis: u64) -> Result<Option<WaNode>, Error> {
+        match self.fs.recv_frame_timeout(millis)? {
+            Some(data) => Ok(Some(WaNode::unpack(&data)?)),
+            None => Ok(None),
+        }
     }
 
     /// Complete the pre-login `pair-device` exchange

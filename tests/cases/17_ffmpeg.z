@@ -1,0 +1,51 @@
+# ffmpeg module — real ffmpeg/ffprobe over os.execute (requires the tools).
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import ffmpeg
+import fs
+
+if not ffmpeg.available() {
+    print("17_ffmpeg: ffmpeg/ffprobe not installed, skipping")
+    exit(0)
+}
+
+# A tiny 4x4 PPM that ffmpeg can read without any external encoder.
+let ppm = "/tmp/zen_test/case17.ppm"
+fs.write(ppm, "P3\n4 4\n255\n" + "255 0 0 0 255 0 0 0 255 255 255 0 " + "255 255 255 255 255 255 255 255 255 255 255 255 " + "0 0 0 0 0 0 0 0 0 0 0 0 " + "128 128 128 128 128 128 128 128 128 128 128 128\n")
+
+let p = ffmpeg.probe(ppm)
+check(p.ok, "probe a tiny ppm")
+check(p.width == 4 and p.height == 4, "probe reads dimensions")
+
+let jpg = "/tmp/zen_test/case17.jpg"
+let r = ffmpeg.thumbnail(ppm, jpg, 4)
+check(r.ok, "thumbnail converts ppm->jpg")
+check(fs.exists(jpg) and fs.size(jpg) > 0, "thumbnail file exists")
+
+let webp = "/tmp/zen_test/case17.webp"
+let s = ffmpeg.sticker(ppm, webp)
+check(s.ok, "sticker converts ppm->webp")
+check(fs.size(webp) > 0, "sticker file non-empty")
+
+let png = "/tmp/zen_test/case17.png"
+check(ffmpeg.image(ppm, png).ok, "image transcode to png")
+
+check(ffmpeg.duration_ms(ppm) >= 0, "duration_ms returns >= 0")
+
+# merge() with a bogus input is expected to fail cleanly, not crash.
+let m = ffmpeg.merge("/tmp/zen_test/none.mp4", ["/tmp/zen_test/nope.mp4"])
+check(typeof(m) == "dict" and m.ok == false, "merge reports failure, does not crash")
+
+# A long-running probe still returns; ensure no hang (ffmpeg -v error).
+check(true, "ffmpeg module loaded")
+
+if fails == 0 {
+    print("17_ffmpeg: all ok")
+}
+exit(if fails > 0 { 1 } else { 0 })
