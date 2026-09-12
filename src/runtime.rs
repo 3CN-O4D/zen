@@ -5327,6 +5327,17 @@ Expr::Index(obj, idx) => {
                         let v = self.invoke_member(obj, method, values, Some(object))?;
                         Ok(v)
                     }
+                    Expr::SafeMember(object, method) => {
+                        // `obj?.method(args)`: null propagates to null, otherwise
+                        // behaves exactly like a plain member call.
+                        let obj = self.eval(object)?;
+                        if matches!(obj, Value::Null) {
+                            Ok(Value::Null)
+                        } else {
+                            let v = self.invoke_member(obj, method, values, Some(object))?;
+                            Ok(v)
+                        }
+                    }
                     _ => {
                         // General callee: any expression evaluating to a
                         // callable (function value, native, or lambda).
