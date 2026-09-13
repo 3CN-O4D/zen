@@ -99,7 +99,7 @@ fn sql_to_zen(v: ValueRef) -> Value {
 }
 
 /// `sqlite.open(path) -> handle`.
-pub fn sqlite_open(args: &Vec<Value>) -> Result<Value, String> {
+pub fn sqlite_open(args: &[Value]) -> Result<Value, String> {
     let path = match args.first() {
         Some(Value::String(s)) => s.clone(),
         _ => return Err("sqlite.open: expected a database path".into()),
@@ -122,7 +122,7 @@ pub fn sqlite_open(args: &Vec<Value>) -> Result<Value, String> {
 }
 
 /// `sqlite.openMemory() -> handle` — an in-memory database.
-pub fn sqlite_open_memory(_args: &Vec<Value>) -> Result<Value, String> {
+pub fn sqlite_open_memory(_args: &[Value]) -> Result<Value, String> {
     let conn =
         Connection::open_in_memory().map_err(|e| format!("sqlite.openMemory: {e}"))?;
     let mut map = handles().lock().unwrap();
@@ -135,14 +135,14 @@ pub fn sqlite_open_memory(_args: &Vec<Value>) -> Result<Value, String> {
 }
 
 /// `sqlite.close(handle) -> bool`.
-pub fn sqlite_close(args: &Vec<Value>) -> Result<Value, String> {
+pub fn sqlite_close(args: &[Value]) -> Result<Value, String> {
     let h = handle_arg(args)?;
     let removed = handles().lock().unwrap().remove(&h).is_some();
     Ok(Value::Bool(removed))
 }
 
 /// `sqlite.exec(handle, sql, [params...]) -> {rows, lastId}`.
-pub fn sqlite_exec(args: &Vec<Value>) -> Result<Value, String> {
+pub fn sqlite_exec(args: &[Value]) -> Result<Value, String> {
     let h = conn_for(args)?;
     let sql = match args.get(1) {
         Some(Value::String(s)) => s.clone(),
@@ -163,7 +163,7 @@ pub fn sqlite_exec(args: &Vec<Value>) -> Result<Value, String> {
 }
 
 /// `sqlite.query(handle, sql, [params...]) -> list of row dicts`.
-pub fn sqlite_query(args: &Vec<Value>) -> Result<Value, String> {
+pub fn sqlite_query(args: &[Value]) -> Result<Value, String> {
     let h = conn_for(args)?;
     let sql = match args.get(1) {
         Some(Value::String(s)) => s.clone(),
@@ -193,7 +193,7 @@ pub fn sqlite_query(args: &Vec<Value>) -> Result<Value, String> {
 
 /// `sqlite.escape(text) -> text` — quote a literal for embedding in SQL when
 /// only string interpolation is available. Prefer bound parameters instead.
-pub fn sqlite_escape(args: &Vec<Value>) -> Result<Value, String> {
+pub fn sqlite_escape(args: &[Value]) -> Result<Value, String> {
     let s = match args.first() {
         Some(Value::String(s)) => s.clone(),
         _ => return Err("sqlite.escape: expected a string".into()),
@@ -222,7 +222,7 @@ mod tests {
         std::fs::create_dir_all(&dir).ok();
         let db = dir.join("t.db");
         let _ = std::fs::remove_file(&db);
-        let h = match sqlite_open(&vec![Value::String(db.to_string_lossy().into_owned())])? {
+        let h = match sqlite_open(&[Value::String(db.to_string_lossy().into_owned())])? {
             Value::Number(n) => n as u64,
             _ => return Err("bad handle".into()),
         };
@@ -255,7 +255,7 @@ mod tests {
                 Value::Number(42.0),
             ]))),
         )?;
-        let rows = sqlite_query(&vec![
+        let rows = sqlite_query(&[
             Value::Number(h as f64),
             Value::String("SELECT k, v, n FROM kv ORDER BY k".into()),
         ])?;
@@ -273,7 +273,7 @@ mod tests {
             "INSERT INTO b VALUES (?)",
             Some(Value::List(Arc::new(vec![Value::List(Arc::new(blob))]))),
         )?;
-        let rows = sqlite_query(&vec![
+        let rows = sqlite_query(&[
             Value::Number(h as f64),
             Value::String("SELECT bl FROM b".into()),
         ])?;
@@ -285,8 +285,8 @@ mod tests {
         assert_eq!(vals.len(), 6);
         assert_eq!(vals[5], Value::Number(5.0));
         // close then use → error
-        sqlite_close(&vec![Value::Number(h as f64)])?;
-        assert!(sqlite_query(&vec![
+        sqlite_close(&[Value::Number(h as f64)])?;
+        assert!(sqlite_query(&[
             Value::Number(h as f64),
             Value::String("SELECT 1".into())
         ])
@@ -301,11 +301,11 @@ mod tests {
 
     #[test]
     fn memory_db_round_trips() {
-        let h = sqlite_open_memory(&vec![]).unwrap();
-        let ex = |sql: &str| sqlite_exec(&vec![h.clone(), Value::String(sql.into())]);
+        let h = sqlite_open_memory(&[]).unwrap();
+        let ex = |sql: &str| sqlite_exec(&[h.clone(), Value::String(sql.into())]);
         ex("CREATE TABLE t (x INTEGER)").unwrap();
         ex("INSERT INTO t VALUES (7)").unwrap();
-        let rows = sqlite_query(&vec![h, Value::String("SELECT x FROM t".into())]).unwrap();
+        let rows = sqlite_query(&[h, Value::String("SELECT x FROM t".into())]).unwrap();
         let Value::List(l) = &rows else { panic!() };
         assert_eq!(l.len(), 1);
     }

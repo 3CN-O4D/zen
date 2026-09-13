@@ -154,8 +154,7 @@ fn main() {
     if args.first().is_some_and(|arg| arg == "bot") {
         let device_path = args
             .get(1)
-            .filter(|a| !a.starts_with('-'))
-            .map(|s| s.clone())
+            .filter(|a| !a.starts_with('-')).cloned()
             .unwrap_or_else(|| "zen_wa_bot.txt".to_string());
         let mut log = |kind: &str, msg: &str| {
             let ts = std::time::SystemTime::now()

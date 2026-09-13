@@ -1201,7 +1201,7 @@ mod tests {
         assert_eq!(dev.user, "6012345678");
         assert_eq!(dev.device, 12);
         assert_eq!(dev.lid_user, "9123456789012");
-        assert!(dev.account.len() > 0, "account proto must be stored");
+        assert!(!dev.account.is_empty(), "account proto must be stored");
         assert_eq!(dev.platform, "SMBA");
         assert_eq!(dev.business_name, "ZEN Bot Co");
 
@@ -1253,7 +1253,7 @@ mod tests {
         dev.gen_prekeys(3);
         dev.mark_prekeys_uploaded(dev.one_time_prekeys[1].id);
         let sess = vec![9u8; 32];
-        let addr = format!("6012345678.1");
+        let addr = "6012345678.1".to_string();
         dev.put_session(&addr, sess.clone());
         let path = std::env::temp_dir().join(format!("zen_bot_{}.txt", hex(&dev.adv_secret_key)));
         let path = path.to_str().unwrap().to_string();

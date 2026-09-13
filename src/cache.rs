@@ -276,7 +276,7 @@ impl<'a> Reader<'a> {
         self.take(8).map(|s| u64::from_le_bytes(s.try_into().unwrap()))
     }
     fn f64(&mut self) -> Option<f64> {
-        self.u64().map(|b| f64::from_bits(b))
+        self.u64().map(f64::from_bits)
     }
     fn str(&mut self) -> Option<String> {
         let len = self.u32()? as usize;

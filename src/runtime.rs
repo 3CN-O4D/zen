@@ -83,8 +83,8 @@ fn render_context(
     let width = format!("{}", end).len();
     let gutter = |n: usize| -> String { format!("{:>width$} |", n + 1, width = width) };
 
-    for i in start..end {
-        let src_line = source_lines[i].trim_end();
+    for (i, src_line) in source_lines.iter().enumerate().skip(start).take(end - start) {
+        let src_line = src_line.trim_end();
         if src_line.is_empty() {
             continue;
         }
@@ -92,12 +92,12 @@ fn render_context(
             out.push_str(&format!(" {} {}\n", gutter(i), src_line));
             let trimmed_len = src_line.chars().count();
             let arrow_col = col.saturating_sub(1).min(trimmed_len);
-            let _underline = "\x1b[1;31m".to_string() + &"~".repeat(1.max(trimmed_len - arrow_col)) + "\x1b[0m";
+            let underline = format!("^{}", "~".repeat((trimmed_len - arrow_col).saturating_sub(1)));
             out.push_str(&format!(
                 " {} {}\x1b[1;31m{}\x1b[0m\n",
                 " ".repeat(width),
                 " ".repeat(arrow_col),
-                format!("^{}", "~".repeat((trimmed_len - arrow_col).saturating_sub(1).max(0)))
+                underline
             ));
         } else {
             out.push_str(&format!(" {} {}\n", gutter(i), src_line));
@@ -107,6 +107,10 @@ fn render_context(
 }
 
 type InstanceRef = Arc<Mutex<Instance>>;
+
+/// Append-only registry of every function/class name registered in a VM,
+/// shared across nested VMs (see `Vm::reg_log`).
+type RegistryLog = Vec<Option<(bool, String)>>;
 
 use hmac::Mac as HmacMac;
 use chrono::{Datelike, Timelike};
@@ -154,11 +158,11 @@ fn function_registry() -> &'static std::sync::Mutex<std::collections::HashMap<St
 
 // Pending error class definitions from errors.define() native calls.
 // (name, optional_parent, optional_message)
-static PENDING_ERROR_CLASSES: std::sync::OnceLock<
-    std::sync::Mutex<Vec<(String, Option<String>, String)>>,
-> = std::sync::OnceLock::new();
+type PendingErrorClass = (String, Option<String>, String);
+static PENDING_ERROR_CLASSES: std::sync::OnceLock<std::sync::Mutex<Vec<PendingErrorClass>>> =
+    std::sync::OnceLock::new();
 
-fn pending_error_classes() -> &'static std::sync::Mutex<Vec<(String, Option<String>, String)>> {
+fn pending_error_classes() -> &'static std::sync::Mutex<Vec<PendingErrorClass>> {
     PENDING_ERROR_CLASSES.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
@@ -1310,7 +1314,7 @@ pub(crate) enum Expr {
     Call(Box<Expr>, Vec<Expr>),
     New(String, Vec<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
-    IfExpr(Box<Expr>, Vec<Stmt>, Vec<Stmt>),
+    IfExpression(Box<Expr>, Vec<Stmt>, Vec<Stmt>),
     Increment(Box<Expr>, i64),
     Lambda(Vec<(String, Option<Expr>)>, Vec<Stmt>),
     Spread(Box<Expr>),
@@ -2392,7 +2396,7 @@ impl Parser {
         } else {
             vec![]
         };
-        Ok(Expr::IfExpr(Box::new(condition), yes, no))
+        Ok(Expr::IfExpression(Box::new(condition), yes, no))
     }
 
     /// Parse `match value { pattern: expr, ... }` or `when { cond: expr, ... }`.
@@ -2975,11 +2979,8 @@ impl Parser {
                     loop {
                         self.separators();
                         let spread = self.take(Kind::Ellipsis);
-                        let elem = if spread {
-                            self.expr()?
-                        } else {
-                            self.expr()?
-                        };
+                        let _ = spread;
+                        let elem = self.expr()?;
                         // Comprehension: `[out for x in it (for y in it2)* (if c)*]`
                         if values.is_empty() && self.take(Kind::For) {
                             let mut clauses = vec![];
@@ -3152,7 +3153,11 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
         }
         Expr::Range(s, e, _) => { collect_free_vars_expr(s, params, free); collect_free_vars_expr(e, params, free); }
         Expr::Index(o, i) => { collect_free_vars_expr(o, params, free); collect_free_vars_expr(i, params, free); }
-        Expr::Slice(o, s, e) => { collect_free_vars_expr(o, params, free); if let Some(s) = s { collect_free_vars_expr(s, params, free); } if let Some(e) = e { collect_free_vars_expr(e, params, free); } }
+        Expr::Slice(o, s, e) => {
+            collect_free_vars_expr(o, params, free);
+            if let Some(s) = s { collect_free_vars_expr(s, params, free); }
+            if let Some(e) = e { collect_free_vars_expr(e, params, free); }
+        }
         Expr::Member(o, _) => { collect_free_vars_expr(o, params, free); }
         Expr::SafeMember(o, _) => { collect_free_vars_expr(o, params, free); }
         Expr::Call(callee, args) => { collect_free_vars_expr(callee, params, free); for a in args { collect_free_vars_expr(a, params, free); } }
@@ -3164,7 +3169,7 @@ fn collect_free_vars_expr(expr: &Expr, params: &std::collections::HashSet<String
         Expr::SuperMethod(_, args) => { for a in args { collect_free_vars_expr(a, params, free); } }
         Expr::New(_, args) => { for a in args { collect_free_vars_expr(a, params, free); } }
         Expr::Ternary(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_expr(y, params, free); collect_free_vars_expr(n, params, free); }
-        Expr::IfExpr(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_stmts(y, params, free); collect_free_vars_stmts(n, params, free); }
+        Expr::IfExpression(c, y, n) => { collect_free_vars_expr(c, params, free); collect_free_vars_stmts(y, params, free); collect_free_vars_stmts(n, params, free); }
         Expr::Match(v, arms) => {
             if let Some(v) = v { collect_free_vars_expr(v, params, free); }
             for arm in arms {
@@ -3332,7 +3337,7 @@ pub struct Vm {
     /// Append-only log of every function/class name registered in this VM,
     /// shared (Arc) across nested VMs so run_module can diff its own window
     /// by index instead of snapshotting whole maps (O(total) per import).
-    reg_log: std::sync::Arc<std::sync::Mutex<Vec<Option<(bool, String)>>>>,
+    reg_log: std::sync::Arc<std::sync::Mutex<RegistryLog>>,
     foreign_classes: ahash::AHashSet<String>,
     stdlib_factories: HashMap<String, fn() -> Value>,
     lambda_counter: u64,
@@ -3617,7 +3622,7 @@ impl Vm {
         );
         self.native_functions.insert(
             "bool".into(),
-            |args| Ok(Value::Bool(args.first().map_or(false, |v| v.truthy()))),
+            |args| Ok(Value::Bool(args.first().is_some_and(|v| v.truthy()))),
         );
         macro_rules! arith_native {
             ($name:literal, $f:expr) => {
@@ -4100,7 +4105,7 @@ impl Vm {
         self.native_functions.insert(
             "assert".into(),
             |args| {
-                let cond = args.first().map_or(false, |v| v.truthy());
+                let cond = args.first().is_some_and(|v| v.truthy());
                 if cond {
                     Ok(Value::Null)
                 } else {
@@ -4867,12 +4872,21 @@ impl Vm {
                         values
                             .get(index as usize)
                             .cloned()
-                            .ok_or_else(|| "list index out of bounds".into())
+                            .ok_or_else(|| {
+                                format!(
+                                    "cannot read list index `{index}`: index out of bounds (length `{}`)",
+                                    values.len()
+                                )
+                            })
                     }
                     (Value::Dict(values), Value::String(key)) => values
                         .get(&key)
                         .cloned()
-                        .ok_or_else(|| format!("dictionary has no key: {key}")),
+                        .ok_or_else(|| {
+                            format!(
+                                "dictionary has no key: `{key}`\n  \x1b[1;33m= help:\x1b[0m use `.get(\"{key}\", default)` to return a fallback when the key is missing"
+                            )
+                        }),
                     (Value::String(value), Value::Number(index)) if index.fract() == 0.0 => {
                         let chars: Vec<char> = value.chars().collect();
                         let index = if index < 0.0 {
@@ -4883,29 +4897,44 @@ impl Vm {
                         chars
                             .get(index as usize)
                             .map(|c| Value::String(c.to_string()))
-                            .ok_or_else(|| "string index out of bounds".into())
+                            .ok_or_else(|| {
+                                format!(
+                                    "cannot read string index `{index}`: index out of bounds (length `{}`)",
+                                    chars.len()
+                                )
+                            })
                     }
-                    _ => Err("invalid index operation".into()),
+                    (object, index) => {
+                        let at = object.type_name();
+                        let bt = index.type_name();
+                        Err(format!("cannot index a `{at}` with a `{bt}`"))
+                    }
                 }
             }
             Expr::Slice(object, start, end) => {
                 let object = self.eval(object)?;
                 let s = match start {
-                    Some(start) => {
-                        let Value::Number(s) = self.eval(start)? else {
-                            return Err("slice start must be a number".into());
-                        };
-                        s as i64
-                    }
+                    Some(start) => match self.eval(start)? {
+                        Value::Number(s) => s as i64,
+                        v => {
+                            return Err(format!(
+                                "cannot use `{}` as a slice start: slice bounds must be numbers",
+                                v.type_name()
+                            ));
+                        }
+                    },
                     None => i64::MIN,
                 };
                 let e = match end {
-                    Some(end) => {
-                        let Value::Number(e) = self.eval(end)? else {
-                            return Err("slice end must be a number".into());
-                        };
-                        e as i64
-                    }
+                    Some(end) => match self.eval(end)? {
+                        Value::Number(e) => e as i64,
+                        v => {
+                            return Err(format!(
+                                "cannot use `{}` as a slice end: slice bounds must be numbers",
+                                v.type_name()
+                            ));
+                        }
+                    },
                     None => i64::MAX,
                 };
                 match object {
@@ -4928,7 +4957,10 @@ impl Vm {
                         let b = b.max(0).min(len) as usize;
                         Ok(Value::List(Arc::new(values.get(a..b).unwrap_or(&[]).to_vec())))
                     }
-                    _ => Err("slice requires a string or list".into()),
+                    other => Err(format!(
+                        "cannot slice a `{}`: slicing applies to strings and lists",
+                        other.type_name()
+                    )),
                 }
             }
             Expr::Member(object, name) => {
@@ -4955,7 +4987,7 @@ impl Vm {
                     self.eval(no)
                 }
             }
-            Expr::IfExpr(condition, yes, no) => {
+            Expr::IfExpression(condition, yes, no) => {
                 if self.eval(condition)?.truthy() {
                     self.eval_block_expr(yes)
                 } else {
@@ -5120,7 +5152,7 @@ Expr::Index(obj, idx) => {
                             }
                             (Value::Dict(mut dvalues), Value::String(key)) => {
                                 let current = dvalues.get(&key).cloned().ok_or_else(|| {
-                                    format!("dictionary has no key: {key}")
+                                    format!("dictionary has no key: `{key}`")
                                 })?;
                                 let Value::Number(value) = current else {
                                     return Err("increment/decrement requires a number".into());
@@ -5140,7 +5172,10 @@ Expr::Index(obj, idx) => {
                             }
                         };
                         let current = values.get(index as usize).cloned().ok_or_else(|| {
-                            "list index out of bounds".to_string()
+                            format!(
+                                "cannot update list index `{index}`: index out of bounds (length `{}`)",
+                                values.len()
+                            )
                         })?;
                         let Value::Number(value) = current else {
                             return Err("increment/decrement requires a number".into());
@@ -5180,10 +5215,7 @@ Expr::Index(obj, idx) => {
                     None
                 } else {
                     std::env::set_var("ZEN_DBG_FN", format!("eval:{fname}"));
-                    let bc = match crate::bytecode::compile_function(&fname, &names, &captured_names, body) {
-                        Ok(b) => Some(b),
-                        Err(_) => None
-                    };
+                    let bc = crate::bytecode::compile_function(&fname, &names, &captured_names, body).ok();
                     std::env::remove_var("ZEN_DBG_FN");
                     bc
                 };
@@ -5350,12 +5382,12 @@ Expr::Index(obj, idx) => {
                                 ))
                             }
                         };
-                        return match self.call(&name, values)? {
+                        match self.call(&name, values)? {
                             Flow::Return(v) => Ok(v),
                             Flow::Throw(v) => Err(self.escape_throw(v)),
                             Flow::Normal => Ok(Value::Null),
                             _ => Err("loop control escaped call".into()),
-                        };
+                        }
                     }
                 }
             }
@@ -5428,10 +5460,10 @@ Expr::Index(obj, idx) => {
                         .filter(|k| !k.contains("::"))
                         .collect();
                     let hint = suggest_name(name, &keys, 4)
-                        .map(|s| format!("\nnote: did you mean `{}`? available: {}", s, keys.iter().take(8).map(|s| *s).collect::<Vec<_>>().join(", ")))
+                        .map(|s| format!("\nnote: did you mean `{}`? available: {}", s, keys.iter().take(8).copied().collect::<Vec<_>>().join(", ")))
                         .unwrap_or_else(|| {
                             if !keys.is_empty() {
-                                format!("\nnote: available members: {}", keys.iter().take(8).map(|s| *s).collect::<Vec<_>>().join(", "))
+                                format!("\nnote: available members: {}", keys.iter().take(8).copied().collect::<Vec<_>>().join(", "))
                             } else {
                                 String::new()
                             }
@@ -5454,7 +5486,7 @@ Expr::Index(obj, idx) => {
                     let hint = format!("\nnote: use `self.{}` in __init__ to define fields", name);
                     format!("object has no field: `{}`{}", name, hint)
                 }),
-            value => Err(format!("{} has no member: {name}", value)),
+            value => Err(format!("`{value}` has no member `{name}`")),
         }
     }
     fn number_method(&mut self, n: f64, method: &str, args: Vec<Value>) -> Result<Value, String> {
@@ -5672,9 +5704,9 @@ Expr::Index(obj, idx) => {
                     let right = pads - left;
                     Ok(Value::String(format!(
                         "{}{}{}",
-                        std::iter::repeat(fill).take(left).collect::<String>(),
+                        std::iter::repeat_n(fill, left).collect::<String>(),
                         value,
-                        std::iter::repeat(fill).take(right).collect::<String>()
+                        std::iter::repeat_n(fill, right).collect::<String>()
                     )))
                 }
             }
@@ -5688,7 +5720,7 @@ Expr::Index(obj, idx) => {
                     Ok(Value::String(value))
                 } else {
                     let zeros = width - len;
-                    let pad = std::iter::repeat('0').take(zeros).collect::<String>();
+                    let pad = std::iter::repeat_n('0', zeros).collect::<String>();
                     if let Some(rest) = value.strip_prefix(['-', '+']) {
                         let sign = &value[..1];
                         Ok(Value::String(format!("{sign}{pad}{rest}")))
@@ -5771,7 +5803,7 @@ Expr::Index(obj, idx) => {
             "clear" => Ok(Value::List(Arc::new(Vec::new()))),
             "sorted" => {
                 let mut list = list;
-                list.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+                list.sort_by_key(|a| a.to_string());
                 Ok(Value::List(Arc::new(list)))
             }
             "pop" => {
@@ -5813,7 +5845,7 @@ Expr::Index(obj, idx) => {
             }
             "sort" => {
                 let mut list = list;
-                list.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+                list.sort_by_key(|a| a.to_string());
                 Ok(Value::List(Arc::new(list)))
             }
             "skip" => {
@@ -5821,7 +5853,7 @@ Expr::Index(obj, idx) => {
                     Some(Value::Number(n)) => *n as usize,
                     _ => return Err("skip expects a number".into()),
                 };
-                Ok(Value::List(Arc::new(list.iter().cloned().skip(n).collect::<Vec<Value>>())))
+                Ok(Value::List(Arc::new(list.iter().skip(n).cloned().collect::<Vec<Value>>())))
             }
             "concat" => {
                 let extra: Vec<Value> = args
@@ -5920,7 +5952,7 @@ Expr::Index(obj, idx) => {
                 Ok(Value::List(Arc::new(out)))
             }
             "compact" => {
-                Ok(Value::List(Arc::new(list.iter().cloned().filter(|v| v.truthy()).collect::<Vec<Value>>())))
+                Ok(Value::List(Arc::new(list.iter().filter(|&v| v.truthy()).cloned().collect::<Vec<Value>>())))
             }
             "uniq" | "unique" => {
                 let mut seen = Vec::new();
@@ -5954,14 +5986,14 @@ Expr::Index(obj, idx) => {
                     Some(Value::Number(n)) => *n as usize,
                     _ => return Err("take expects a number".into()),
                 };
-                Ok(Value::List(Arc::new(list.iter().cloned().take(n).collect::<Vec<Value>>())))
+                Ok(Value::List(Arc::new(list.iter().take(n).cloned().collect::<Vec<Value>>())))
             }
             "drop" => {
                 let n = match args.first() {
                     Some(Value::Number(n)) => *n as usize,
                     _ => return Err("drop expects a number".into()),
                 };
-                Ok(Value::List(Arc::new(list.iter().cloned().skip(n).collect::<Vec<Value>>())))
+                Ok(Value::List(Arc::new(list.iter().skip(n).cloned().collect::<Vec<Value>>())))
             }
             "chunk" => {
                 let size = match args.first() {
@@ -6264,11 +6296,19 @@ Expr::Index(obj, idx) => {
                 _ => Err("right side of 'in' must be a list, dictionary, or string".into()),
             },
             Kind::Amp | Kind::Pipe | Kind::Caret | Kind::LShift | Kind::RShift => {
+                let at = a.type_name();
+                let bt = b.type_name();
                 let (Value::Number(left), Value::Number(right)) = (a, b) else {
-                    return Err("bitwise operators require integers".into());
+                    return Err(format!(
+                        "cannot apply `{}` to `{at}` and `{bt}`\n  \x1b[1;33m= help:\x1b[0m bitwise operators require whole-number integers",
+                        op_symbol(op)
+                    ));
                 };
                 if left.fract() != 0.0 || right.fract() != 0.0 {
-                    return Err("bitwise operators require integers".into());
+                    return Err(format!(
+                        "cannot apply `{}` to non-integer numbers\n  \x1b[1;33m= help:\x1b[0m bitwise operators require whole-number integers",
+                        op_symbol(op)
+                    ));
                 }
                 let value = match op {
                     Kind::Amp => (left as i64) & (right as i64),
@@ -6302,10 +6342,10 @@ Expr::Index(obj, idx) => {
                 (Value::String(s), Value::Number(n)) => {
                     let count = n.round() as i64;
                     if count < 0 {
-                        return Err("string repetition requires a non-negative count".into());
+                        return Err("cannot repeat a string by a negative count\n  \x1b[1;33m= help:\x1b[0m the repetition count must be non-negative".into());
                     }
                     if (n - n.round()).abs() > f64::EPSILON {
-                        return Err("string repetition requires an integer count".into());
+                        return Err("cannot repeat a string by a non-integer count\n  \x1b[1;33m= help:\x1b[0m the repetition count must be a whole number, e.g. `\"ab\" * 3`".into());
                     }
                     let mut out = String::new();
                     for _ in 0..count {
@@ -6316,10 +6356,10 @@ Expr::Index(obj, idx) => {
                 (Value::Number(n), Value::String(s)) => {
                     let count = n.round() as i64;
                     if count < 0 {
-                        return Err("string repetition requires a non-negative count".into());
+                        return Err("cannot repeat a string by a negative count\n  \x1b[1;33m= help:\x1b[0m the repetition count must be non-negative".into());
                     }
                     if (n - n.round()).abs() > f64::EPSILON {
-                        return Err("string repetition requires an integer count".into());
+                        return Err("cannot repeat a string by a non-integer count\n  \x1b[1;33m= help:\x1b[0m the repetition count must be a whole number, e.g. `\"ab\" * 3`".into());
                     }
                     let mut out = String::new();
                     for _ in 0..count {
@@ -6328,7 +6368,11 @@ Expr::Index(obj, idx) => {
                     Ok(Value::String(out))
                 }
                 (Value::Number(x), Value::Number(y)) => Ok(Value::Number(x * y)),
-                _ => Err("string repetition requires a string and a number".into()),
+                (x, y) => Err(format!(
+                    "cannot apply `*` to `{}` and `{}`\n  \x1b[1;33m= help:\x1b[0m to repeat a string, multiply it by a whole-number count, e.g. `\"ab\" * 3`",
+                    x.type_name(),
+                    y.type_name()
+                )),
             },
             Kind::Minus | Kind::Slash | Kind::Percent | Kind::Pow => {
                 if let (Value::Number(x), Value::Number(y)) = (&a, &b) {
@@ -6338,13 +6382,13 @@ Expr::Index(obj, idx) => {
                         Kind::Minus => Ok(Value::Number(x - y)),
                         Kind::Slash => {
                             if y == 0.0 {
-                                return Err("division by zero\n  \x1b[1;33m= help:\x1b[0m check if the divisor is zero before dividing".into());
+                                return Err("cannot divide by zero\n  \x1b[1;33m= help:\x1b[0m check whether the divisor is zero before dividing".into());
                             }
                             Ok(Value::Number(x / y))
                         },
                         Kind::Percent => {
                             if y == 0.0 {
-                                return Err("modulo by zero\n  \x1b[1;33m= help:\x1b[0m check if the divisor is zero before modulo".into());
+                                return Err("cannot compute modulo by zero\n  \x1b[1;33m= help:\x1b[0m check whether the divisor is zero before computing modulo".into());
                             }
                             Ok(Value::Number(x % y))
                         },
@@ -6355,13 +6399,17 @@ Expr::Index(obj, idx) => {
                     let at = a.type_name();
                     let bt = b.type_name();
                     let hint = if (at == "string" || bt == "string") && matches!(op, Kind::Minus | Kind::Slash | Kind::Percent) {
-                        "\n  \x1b[1;33m= help:\x1b[0m to concatenate strings, use `+` instead"
+                        "\n  \x1b[1;33m= help:\x1b[0m strings support `+` (concatenation) and `*` (repetition), not arithmetic"
                     } else if matches!(op, Kind::Slash) && matches!(b, Value::Number(n) if n == 0.0) {
-                        "\n  \x1b[1;33m= help:\x1b[0m cannot divide by zero — check if the divisor is zero before dividing"
+                        "\n  \x1b[1;33m= help:\x1b[0m check whether the divisor is zero before dividing"
                     } else {
                         ""
                     };
-                    Err(format!("unsupported operand type(s) for {}: `{}` and `{}`{}", op_symbol(op), at, bt, hint))
+                    Err(format!(
+                        "cannot apply `{}` to `{at}` and `{bt}`{}",
+                        op_symbol(op),
+                        hint
+                    ))
                 }
             }
             Kind::Lt | Kind::Le | Kind::Gt | Kind::Ge => {
@@ -6450,17 +6498,18 @@ Expr::Index(obj, idx) => {
                 let parts: Vec<&str> = module.splitn(2, '.').collect();
                 let parent = parts[0];
                 let child = parts[1];
-                if let Some(parent_mod) = self.imported_modules.get(parent).cloned() {
-                    if let Some(child_val) = parent_mod.get(child) {
-                        if let Value::Dict(d) = child_val {
-                            let mut map = HashMap::new();
-                            for (k, v) in (**d).clone() {
-                                map.insert(k, v);
-                            }
-                            self.imported_modules.insert(name, map);
-                            continue;
-                        }
+                if let Some(Value::Dict(d)) = self
+                    .imported_modules
+                    .get(parent)
+                    .and_then(|m| m.get(child))
+                    .cloned()
+                {
+                    let mut map = HashMap::new();
+                    for (k, v) in (*d).clone() {
+                        map.insert(k, v);
                     }
+                    self.imported_modules.insert(name, map);
+                    continue;
                 }
             }
             // Check stdlib lazy registry
@@ -6624,7 +6673,7 @@ Expr::Index(obj, idx) => {
                     self.register_function(fname.clone(), f.clone());
                 }
                 self.foreign_fns.insert(ns_key);
-                if !self.functions.contains_key(fname) || art.functions.len() > 0 {
+                if !self.functions.contains_key(fname) || !art.functions.is_empty() {
                     self.foreign_fns.insert(fname.clone());
                 }
             }
@@ -7220,7 +7269,7 @@ Expr::Index(obj, idx) => {
                 } else {
                     function.captured.clone()
                 };
-                let bound = bind_args(&function, &values);
+                let bound = bind_args(function, &values);
                 let param_count = function.params.len();
                 let cache_matches = self
                     .call_cache
@@ -7247,7 +7296,7 @@ Expr::Index(obj, idx) => {
             }
             let body = Arc::clone(&function.body);
             let cap_count = function.effective_captured.len();
-            let bound = bind_args(&function, &values);
+            let bound = bind_args(function, &values);
             // Save locals stack position, push params + captured onto fast local stack
             let saved_len = self.locals.len();
             self.frame_starts.push(saved_len);
@@ -7316,7 +7365,7 @@ Expr::Index(obj, idx) => {
             }
         }
 
-        Err(format!("undefined function: {name}"))
+Err(format!("undefined function: `{name}`"))
     }
     /// Execute a compiled function body. Returns a Flow like `exec` does so
     /// `Flow::Throw` propagates to tree-walk try/catch callers.
@@ -7917,7 +7966,7 @@ Expr::Index(obj, idx) => {
                         return Err("bad constant in Call".into());
                     };
                     let argc = inst.arg2 as usize;
-                    let start = stack.len().checked_sub(argc).unwrap_or(0);
+                    let start = stack.len().saturating_sub(argc);
                     // 1. Cache fast path: repeated calls to the same compiled
                     // function (recursion).
                     if let Some(c) = &self.call_cache {
@@ -8101,11 +8150,11 @@ Expr::Index(obj, idx) => {
                             _ => {}
                         }
                     }
-                    return Err(format!("undefined function: {name}"));
+                    return Err(format!("undefined function: `{name}`"));
                 }
                 Opcode::CallValue => {
                     let argc = inst.arg1 as usize;
-                    let start = stack.len().checked_sub(argc).unwrap_or(0);
+                    let start = stack.len().saturating_sub(argc);
                     if start == 0 {
                         return Err("call: missing callee".into());
                     }
@@ -8121,7 +8170,7 @@ Expr::Index(obj, idx) => {
                                 Some(&native_fn) => {
                                     stack.push(native_fn(vals)?);
                                 }
-                                None => return Err(format!("undefined function: {n}")),
+                                None => return Err(format!("undefined function: `{n}`")),
                             }
                         }
                         Value::Function(fname) => {
@@ -8200,8 +8249,7 @@ Expr::Index(obj, idx) => {
                 }
                 Opcode::Return => {
                     let v = stack.pop().unwrap_or(Value::Null);
-                    if cur.name == "f" {
-                    }
+                    
 if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         locals.truncate(fnew_base);
                         stack.truncate(fstack_len);
@@ -8277,12 +8325,21 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                             values
                                 .get(index as usize)
                                 .cloned()
-                                .ok_or_else(|| "list index out of bounds".into())
+                                .ok_or_else(|| {
+                                    format!(
+                                        "cannot read list index `{index}`: index out of bounds (length `{}`)",
+                                        values.len()
+                                    )
+                                })
                         }
                         (Value::Dict(values), Value::String(key)) => values
                             .get(&key)
                             .cloned()
-                            .ok_or_else(|| format!("dictionary has no key: {key}")),
+                            .ok_or_else(|| {
+                                format!(
+                                    "dictionary has no key: `{key}`\n  \x1b[1;33m= help:\x1b[0m use `.get(\"{key}\", default)` to return a fallback when the key is missing"
+                                )
+                            }),
                         (Value::String(value), Value::Number(index)) if index.fract() == 0.0 => {
                             let chars: Vec<char> = value.chars().collect();
                             let index = if index < 0.0 {
@@ -8293,9 +8350,14 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                             chars
                                 .get(index as usize)
                                 .map(|c| Value::String(c.to_string()))
-                                .ok_or_else(|| "string index out of bounds".into())
+                                .ok_or_else(|| {
+                                    format!(
+                                        "cannot read string index `{index}`: index out of bounds (length `{}`)",
+                                        chars.len()
+                                    )
+                                })
                         }
-                        _ => Err("invalid index operation".into()),
+                        _ => Err("cannot index a value with this index type".into()),
                     }?;
                     stack.push(v);
                 }
@@ -9493,7 +9555,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                     "last" => return Ok(list.last().cloned().unwrap_or(Value::Null)),
                     "contains" => {
                         let needle = values.first().cloned().unwrap_or(Value::Null);
-                        return Ok(Value::Bool(list.iter().any(|v| *v == needle)));
+                        return Ok(Value::Bool(list.contains(&needle)));
                     }
                     _ => {}
                 }
@@ -9879,13 +9941,9 @@ let function = self
                         // Fast path: in-place string append for += avoids
                         // the O(n²) allocation pattern in loops.
                         if matches!(op, Kind::PlusAssign) {
-                            if let Some(val) = self.get_var_mut(n) {
-                                if let Value::String(s) = val {
-                                    if let Value::String(rhs_s) = &rhs {
-                                        s.push_str(rhs_s);
-                                        return Ok(Flow::Normal);
-                                    }
-                                }
+                            if let (Some(Value::String(s)), Value::String(rhs_s)) = (self.get_var_mut(n), &rhs) {
+                                s.push_str(rhs_s);
+                                return Ok(Flow::Normal);
                             }
                         }
                         if matches!(op, Kind::NullishAssign) {
@@ -10017,8 +10075,8 @@ let function = self
                     }
                     Ok(Flow::Normal)
                 }
-                StmtKind::Break => return Ok(Flow::Break),
-                StmtKind::Continue => return Ok(Flow::Continue),
+                StmtKind::Break => Ok(Flow::Break),
+                StmtKind::Continue => Ok(Flow::Continue),
                 StmtKind::Function(name, params, body) => {
                     let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
                     let param_set: std::collections::HashSet<String> = names.iter().cloned().collect();
@@ -10038,10 +10096,7 @@ let function = self
                         None
                     } else {
                         std::env::set_var("ZEN_DBG_FN", format!("stmt:{name}"));
-                        match crate::bytecode::compile_function(name, &names, &captured_names, body) {
-                            Ok(b) => Some(b),
-                            Err(_) => None
-                        }
+                        crate::bytecode::compile_function(name, &names, &captured_names, body).ok()
                     };
                     let function = Function {
                         params: params.clone(),
@@ -10063,7 +10118,7 @@ let function = self
                  StmtKind::With(context, var, body) => {
                      let value = self.eval(context)?;
                      if let Some(name) = var {
-                         self.bind_let(&name, value.clone());
+                         self.bind_let(name, value.clone());
                      }
                      self.exec(body)
                  }
@@ -10091,7 +10146,7 @@ let function = self
                         Ok(f) => Outcome::Flow(f),
                     };
                     if let Some(finally) = finally_body {
-                        match self.exec(&finally) {
+                        match self.exec(finally) {
                 Ok(Flow::Normal) => {}
                 Ok(Flow::Continue) => return Ok(Flow::Continue),
                             Ok(flow) => return Ok(flow),
@@ -10110,11 +10165,11 @@ let function = self
                 }
                 StmtKind::Throw(e) => {
                     let val = self.eval(e)?;
-                    return Ok(Flow::Throw(self.to_error(val, stmt.line, stmt.col)));
+                    Ok(Flow::Throw(self.to_error(val, stmt.line, stmt.col)))
                 }
                 StmtKind::Import(imports) => self.do_import(imports.clone()),
-                StmtKind::FromImport(module, items) => self.do_from_import(&module, &items),
-                StmtKind::StarImport(module) => self.do_star_import(&module),
+                StmtKind::FromImport(module, items) => self.do_from_import(module, items),
+                StmtKind::StarImport(module) => self.do_star_import(module),
                 StmtKind::Load(path) => {
                     let resolved = if path.ends_with(".z") || path.contains('/') {
                         path.clone()
@@ -10140,10 +10195,10 @@ let function = self
                     Ok(Flow::Normal)
                 }
                 StmtKind::Return(value) => {
-                    return Ok(Flow::Return(match value {
+                    Ok(Flow::Return(match value {
                         Some(value) => self.eval(value)?,
                         None => Value::Null,
-                    }));
+                    }))
                 }
                 StmtKind::Class(name, parent, body) => {
                     if let Some(parent) = parent {
@@ -10276,22 +10331,32 @@ let function = self
                                     Value::List(v) => v
                                         .get(i as usize)
                                         .cloned()
-                                        .ok_or_else(|| "list index out of bounds: {i}".to_string())?,
+                                        .ok_or_else(|| {
+                                            format!(
+                                                "cannot update list index `{i}`: index out of bounds (length `{}`)",
+                                                v.len()
+                                            )
+                                        })?,
                                     Value::String(s) => s
                                         .chars()
                                         .nth(i as usize)
                                         .map(|c| Value::String(c.to_string()))
-                                        .ok_or_else(|| "string index out of bounds: {i}".to_string())?,
-                                    _ => return Err("invalid index operation".to_string()),
+                                        .ok_or_else(|| {
+                                            format!(
+                                                "cannot update string index `{i}`: index out of bounds (length `{}`)",
+                                                s.chars().count()
+                                            )
+                                        })?,
+                                    _ => return Err("cannot index a value with a number".to_string()),
                                 }
                             }
                             Value::String(key) => match &obj {
                                 Value::Dict(v) => v.get(key).cloned().ok_or_else(|| {
-                                    format!("dictionary has no key: {key}")
+                                    format!("dictionary has no key: `{key}`")
                                 })?,
-                                _ => return Err("invalid index operation".into()),
+                                _ => return Err("cannot index a value with a string".into()),
                             },
-                            _ => return Err("invalid index operation".into()),
+                            _ => return Err("cannot index a value with this index type".into()),
                         };
                         self.binary(current, op, new_val)?
                     } else {
@@ -10301,7 +10366,12 @@ let function = self
                         Value::Dict(mut dict) => {
                             let key = match idx {
                                 Value::String(s) => s,
-                                _ => return Err("dictionary index must be a string".into()),
+                                other => {
+                                    return Err(format!(
+                                        "cannot index a dictionary with a `{}`: dictionary keys must be strings",
+                                        other.type_name()
+                                    ))
+                                }
                             };
                             // Drop the binding's reference so make_mut mutates
                             // in place when this is the only live handle.
@@ -10317,14 +10387,20 @@ let function = self
                         }
                         Value::List(mut list) => {
                             let Value::Number(n) = idx else {
-                                return Err("list index must be a number".into());
+                                return Err(format!(
+                                    "cannot index a list with a `{}`: list indices must be numbers",
+                                    idx.type_name()
+                                ));
                             };
                             let mut i = n as i64;
                             if i < 0 {
                                 i += list.len() as i64;
                             }
                             if i < 0 || i as usize >= list.len() {
-                                return Err("list index out of bounds".into());
+                                return Err(format!(
+                                    "cannot update list index `{i}`: index out of bounds (length `{}`)",
+                                    list.len()
+                                ));
                             }
                             if let Expr::Var(vname) = object {
                                 self.release_binding_arc(vname, &Value::List(list.clone()));
@@ -10391,11 +10467,11 @@ let function = self
                 " \x1b[1;34m-->\x1b[0m {}:{}:{}\n",
                 self.file, line, col
             ));
-            out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+            out.push_str("  \x1b[1;34m|\x1b[0m\n");
             if line > 0 && !self.lines.is_empty() {
                 out.push_str(&render_context(&self.lines, line, col, 2));
             }
-            out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+            out.push_str("  \x1b[1;34m|\x1b[0m\n");
             // Append inner traceback indented
             for ln in inner.lines() {
                 out.push_str(&format!("  {}\n", ln));
@@ -10410,11 +10486,11 @@ let function = self
             " \x1b[1;34m-->\x1b[0m {}:{}:{}\n",
             self.file, line, col
         ));
-        out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+        out.push_str("  \x1b[1;34m|\x1b[0m\n");
         if line > 0 && !self.lines.is_empty() {
             out.push_str(&render_context(&self.lines, line, col, 2));
         }
-        out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+        out.push_str("  \x1b[1;34m|\x1b[0m\n");
         // Split message into main + notes
         let parts: Vec<&str> = message.splitn(2, "\nnote: ").collect();
         let main_msg = parts[0];
@@ -10829,7 +10905,7 @@ fn aes_decrypt(key: &str, data: &str, iv: Option<&str>) -> Result<String, String
 
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())
@@ -10912,7 +10988,7 @@ fn http_request_impl(args: &[Value], method: &str) -> Result<Value, String> {
     }
     let mut result = indexmap::IndexMap::new();
     result.insert("status".into(), Value::Number(status));
-    result.insert("ok".into(), Value::Bool(status >= 200.0 && status < 400.0));
+    result.insert("ok".into(), Value::Bool((200.0..400.0).contains(&status)));
     result.insert("headers".into(), Value::Dict(Arc::new(header_dict)));
     result.insert("__id".into(), Value::Number(id as f64));
     result.insert("json".into(), Value::NativeFunction("__http_response_json".into()));
@@ -11164,7 +11240,7 @@ fn csv_field(v: &Value) -> String {
     }
 }
 
-fn csv_encode_impl(rows: &[Value], headers: Option<&Vec<Value>>) -> String {
+fn csv_encode_impl(rows: &[Value], headers: Option<&[Value]>) -> String {
     let mut lines = Vec::new();
     if let Some(headers) = headers {
         lines.push(headers.iter().map(csv_field).collect::<Vec<_>>().join(","));
@@ -11764,10 +11840,7 @@ fn struct_size_of(fmt: &str) -> Result<usize, String> {
 }
 
 fn struct_parse_format(fmt: &str) -> Result<(bool, Vec<(char, usize)>), String> {
-    let big_endian = match fmt.chars().next() {
-        Some('>') | Some('!') => true,
-        _ => false,
-    };
+    let big_endian = matches!(fmt.chars().next(), Some('>') | Some('!'));
     let mut codes = Vec::new();
     let mut count = 0usize;
     let mut prev: Option<char> = None;
@@ -12269,7 +12342,7 @@ fn bytes_to_mac(b: &[u8]) -> String {
 
 fn local_mac(iface: Option<&str>) -> String {
     // Prefer the requested interface, else the default route interface.
-    let ifname = iface.map(str::to_string).unwrap_or_else(|| default_route_iface());
+    let ifname = iface.map(str::to_string).unwrap_or_else(default_route_iface);
     let path = format!("/sys/class/net/{ifname}/address");
     if let Ok(content) = fs::read_to_string(&path) {
         return content.trim().to_string();
@@ -12278,7 +12351,7 @@ fn local_mac(iface: Option<&str>) -> String {
 }
 
 fn local_ip(iface: Option<&str>) -> String {
-    let ifname = iface.map(str::to_string).unwrap_or_else(|| default_route_iface());
+    let ifname = iface.map(str::to_string).unwrap_or_else(default_route_iface);
     if let Some(ip) = iface_ipv4(&ifname) {
         return ip;
     }
@@ -12644,7 +12717,7 @@ fn scapy_syn_scan(host: &str, ports: Vec<u16>, timeout_ms: u64, sport_offset: u1
         let pkt = build_syn(&target_ip, *port, sport, seq, &src_ip);
         seq = seq.wrapping_add(1);
         sport = sport.wrapping_add(1);
-        if sport < 40000 || sport > 60000 { sport = 40000; }
+        if !(40000..=60000).contains(&sport) { sport = 40000; }
         unsafe {
             libc::sendto(send_fd, pkt.as_ptr() as *const libc::c_void, pkt.len(), 0,
                 &sa as *const _ as *const libc::sockaddr, std::mem::size_of::<std::net::SocketAddr>() as libc::socklen_t);
@@ -12691,11 +12764,10 @@ fn scapy_syn_scan(host: &str, ports: Vec<u16>, timeout_ms: u64, sport_offset: u1
             if !open_ports.contains(&dport) {
                 open_ports.push(dport);
             }
-        } else if flags & 0x04 != 0 {
-            if !closed_ports.contains(&dport) {
+        } else if flags & 0x04 != 0
+            && !closed_ports.contains(&dport) {
                 closed_ports.push(dport);
             }
-        }
     }
     unsafe { libc::close(l2) };
     open_ports.sort_unstable();
@@ -12947,7 +13019,7 @@ fn pack_impl(fmt: &str, values: &[Value]) -> Result<Value, String> {
     let mut vi = 0usize;
     for (code, count) in codes {
         match code {
-            'x' => out.extend(std::iter::repeat(0u8).take(count)),
+            'x' => out.extend(std::iter::repeat_n(0u8, count)),
             's' | 'p' => {
                 let s = match values.get(vi) {
                     Some(Value::String(s)) => {
@@ -12959,7 +13031,7 @@ fn pack_impl(fmt: &str, values: &[Value]) -> Result<Value, String> {
                 let bytes = s.as_bytes();
                 let n = count.min(bytes.len());
                 out.extend_from_slice(&bytes[..n]);
-                out.extend(std::iter::repeat(0u8).take(count - n));
+                out.extend(std::iter::repeat_n(0u8, count - n));
             }
             _ => {
                 let size = match code {
@@ -13319,7 +13391,7 @@ fn native_for(name: &str) -> NativeFunc {
                         .map_err(|e| format!("failed to send_to: {e}"))?;
                     Ok(Value::Bool(true))
                 }
-                _ => return Err("socket_send_to expects (UdpSocket, data, addr?)".into()),
+                _ => Err("socket_send_to expects (UdpSocket, data, addr?)".into()),
             }
         },
         "socket_recv_from" => |args| {
@@ -13401,12 +13473,9 @@ fn native_for(name: &str) -> NativeFunc {
             let mut open_ports = Vec::new();
             for port in start_port..=end_port {
                 let addr = std::net::SocketAddr::new(ip_addr, port);
-                match TcpStream::connect_timeout(&addr, timeout) {
-                    Ok(stream) => {
-                        drop(stream);
-                        open_ports.push(Value::Number(port as f64));
-                    }
-                    Err(_) => {}
+                if let Ok(stream) = TcpStream::connect_timeout(&addr, timeout) {
+                    drop(stream);
+                    open_ports.push(Value::Number(port as f64));
                 }
             }
             Ok(Value::List(Arc::new(open_ports)))
@@ -13419,7 +13488,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::String(env!("CARGO_PKG_VERSION").to_string()))
         },
         "cli_args" => |_| {
-            let args: Vec<Value> = env::args().map(|s| Value::String(s)).collect();
+            let args: Vec<Value> = env::args().map(Value::String).collect();
             Ok(Value::List(Arc::new(args)))
         },
         "fs_read" => |args| {
@@ -14183,7 +14252,7 @@ fn native_for(name: &str) -> NativeFunc {
         },
         "os_args" => |_| {
             let args: Vec<Value> = std::env::args().skip(1)
-                .map(|a| Value::String(a))
+                .map(Value::String)
                 .collect();
             Ok(Value::List(Arc::new(args)))
         },
@@ -14388,13 +14457,12 @@ fn native_for(name: &str) -> NativeFunc {
                 }
             };
             let mut derived = [0u8; 64];
-            let result = pbkdf2::pbkdf2_hmac::<sha2::Sha256>(
+            pbkdf2::pbkdf2_hmac::<sha2::Sha256>(
                 password.as_bytes(),
                 salt.as_bytes(),
                 iterations,
                 &mut derived,
             );
-            let _ = result;
             let hex: String = derived[..dklen.min(derived.len())]
                 .iter()
                 .map(|b| format!("{b:02x}"))
@@ -14768,7 +14836,7 @@ fn native_for(name: &str) -> NativeFunc {
                 }
                 _ => return Err("csv.write expects (path, rows, headers?)".into()),
             };
-            let encoded = csv_encode_impl(rows.as_ref(), headers.map(|h| h.as_ref()));
+            let encoded = csv_encode_impl(rows.as_ref(), headers.map(|h| h.as_slice()));
             fs::write(path, encoded).map_err(|e| format!("csv.write {path}: {e}"))?;
             Ok(Value::Bool(true))
         },
@@ -14778,7 +14846,7 @@ fn native_for(name: &str) -> NativeFunc {
                 [Value::List(rows), Value::List(headers)] => (rows, Some(headers)),
                 _ => return Err("csv.encode expects (rows, headers?)".into()),
             };
-            Ok(Value::String(csv_encode_impl(rows.as_ref(), headers.map(|h| h.as_ref()))))
+            Ok(Value::String(csv_encode_impl(rows.as_ref(), headers.map(|h| h.as_slice()))))
         },
         "decimal_decimal" => |args| {
             let v = match args.first() {
@@ -15703,7 +15771,7 @@ fn native_for(name: &str) -> NativeFunc {
         "scapy_tcp" => |args| {
             let mut layer = indexmap::IndexMap::new();
             layer.insert("type".into(), Value::String("TCP".into()));
-            if let Some(Value::Number(s)) = args.get(0) {
+            if let Some(Value::Number(s)) = args.first() {
                 layer.insert("sport".into(), Value::Number(*s));
             }
             if let Some(Value::Number(d)) = args.get(1) {
@@ -15717,7 +15785,7 @@ fn native_for(name: &str) -> NativeFunc {
         "scapy_udp" => |args| {
             let mut layer = indexmap::IndexMap::new();
             layer.insert("type".into(), Value::String("UDP".into()));
-            if let Some(Value::Number(s)) = args.get(0) {
+            if let Some(Value::Number(s)) = args.first() {
                 layer.insert("sport".into(), Value::Number(*s));
             }
             if let Some(Value::Number(d)) = args.get(1) {
@@ -15731,7 +15799,7 @@ fn native_for(name: &str) -> NativeFunc {
         "scapy_icmp" => |args| {
             let mut layer = indexmap::IndexMap::new();
             layer.insert("type".into(), Value::String("ICMP".into()));
-            if let Some(Value::Number(t)) = args.get(0) {
+            if let Some(Value::Number(t)) = args.first() {
                 layer.insert("icmp_type".into(), Value::Number(*t));
             }
             if let Some(Value::Number(c)) = args.get(1) {
@@ -15761,7 +15829,7 @@ fn native_for(name: &str) -> NativeFunc {
                     for item in items.iter().cloned() {
                         match item {
                             Value::Number(n) => {
-                                if n < 0.0 || n > 255.0 || n.fract() != 0.0 {
+                                if !(0.0..=255.0).contains(&n) || n.fract() != 0.0 {
                                     return Err(format!("scapy.parse byte out of range (0-255): {n}"));
                                 }
                                 bytes.push(n as u8);
@@ -15789,7 +15857,7 @@ fn native_for(name: &str) -> NativeFunc {
                     for item in items.iter().cloned() {
                         match item {
                             Value::Number(n) => {
-                                if n < 0.0 || n > 255.0 || n.fract() != 0.0 {
+                                if !(0.0..=255.0).contains(&n) || n.fract() != 0.0 {
                                     return Err(format!("scapy.send byte out of range (0-255): {n}"));
                                 }
                                 bytes.push(n as u8);
@@ -15811,7 +15879,7 @@ fn native_for(name: &str) -> NativeFunc {
             if !is_root {
                 return Err("scapy send/sniff requires root privileges. Run with: sudo zen <script>".into());
             }
-            let count = match args.get(0) {
+            let count = match args.first() {
                 Some(Value::Number(n)) => *n as u32,
                 _ => 1,
             };
@@ -15876,7 +15944,7 @@ fn native_for(name: &str) -> NativeFunc {
             Ok(Value::List(Arc::new(out)))
         },
         "scapy_ether" => |args| {
-            let dst = args.get(0).and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None }).unwrap_or_else(|| "ff:ff:ff:ff:ff:ff".into());
+            let dst = args.first().and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None }).unwrap_or_else(|| "ff:ff:ff:ff:ff:ff".into());
             let src = args.get(1).and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None }).unwrap_or_else(|| "00:00:00:00:00:00".into());
             let etype: u16 = match args.get(2) {
                 Some(Value::String(s)) if s == "IP" || s == "ipv4" => 0x0800,
@@ -16267,7 +16335,7 @@ fn native_for(name: &str) -> NativeFunc {
                     break;
                 }
             }
-            Ok(Value::List(Arc::new(result.into_iter().map(|s| Value::String(s)).collect::<Vec<Value>>())))
+            Ok(Value::List(Arc::new(result.into_iter().map(Value::String).collect::<Vec<Value>>())))
         },
         "crunch_pattern" => |args| {
             let template = arg_string(&args, 0)?;
@@ -16736,7 +16804,7 @@ fn native_for(name: &str) -> NativeFunc {
                 out.insert("total".into(), Value::Number(total));
                 out.insert("used".into(), Value::Number(used));
                 out.insert("free".into(), Value::Number(free));
-                return Ok(Value::Dict(Arc::new(out)));
+                Ok(Value::Dict(Arc::new(out)))
             }
             #[cfg(not(unix))]
             {
@@ -16873,6 +16941,7 @@ fn native_for(name: &str) -> NativeFunc {
             let now = SystemTime::now();
             match fs::OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .write(true)
                 .open(&path)
                 .and_then(|f| f.set_modified(now))
@@ -17307,13 +17376,13 @@ fn format_unhandled(
     ));
 
     // ── Source context ───────────────────────────────────────────────────────
-    out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+    out.push_str("  \x1b[1;34m|\x1b[0m\n");
     if line > 0 && !lines.is_empty() {
         out.push_str(&render_context(&lines, line, col, 2));
     }
 
     // ── Annotation footer ────────────────────────────────────────────────────
-    out.push_str(&format!("  \x1b[1;34m|\x1b[0m\n"));
+    out.push_str("  \x1b[1;34m|\x1b[0m\n");
 
     // Suggestion for common error patterns
     let lower_msg = msg.to_lowercase();
@@ -17336,45 +17405,31 @@ fn format_unhandled(
 
     // Type mismatch suggestions
     if lower_msg.contains("cannot") && (lower_msg.contains("add") || lower_msg.contains("multiply") || lower_msg.contains("compare")) {
-        out.push_str(&format!(
-            "  \x1b[1;33m= help:\x1b[0m try converting the operands to a common type first\n"
-        ));
-        out.push_str(&format!(
-            "  \x1b[1;34m|       \x1b[0m e.g.  str(num) + \" items\"  or  int(str_val)\n"
-        ));
+        out.push_str("  \x1b[1;33m= help:\x1b[0m try converting the operands to a common type first\n");
+        out.push_str("  \x1b[1;34m|       \x1b[0m e.g.  str(num) + \" items\"  or  int(str_val)\n");
     }
 
     // Index/key error suggestions
     if lower_msg.contains("index") || lower_msg.contains("key") {
-        out.push_str(&format!(
-            "  \x1b[1;33m= note:\x1b[0m  list indices start at 0, not 1\n"
-        ));
+        out.push_str("  \x1b[1;33m= note:\x1b[0m  list indices start at 0, not 1\n");
         if lower_msg.contains("out of range") {
-            out.push_str(&format!(
-                "  \x1b[1;33m= help:\x1b[0m check the length with len(collection) before indexing\n"
-            ));
+            out.push_str("  \x1b[1;33m= help:\x1b[0m check the length with len(collection) before indexing\n");
         }
     }
 
     // Null/None dereference
     if lower_msg.contains("null") || lower_msg.contains("none") {
-        out.push_str(&format!(
-            "  \x1b[1;33m= note:\x1b[0m  the value is null — check if a function returned null unexpectedly\n"
-        ));
+        out.push_str("  \x1b[1;33m= note:\x1b[0m  the value is null — check if a function returned null unexpectedly\n");
     }
 
     // Division by zero
     if lower_msg.contains("divide") || lower_msg.contains("division") || lower_msg.contains("zero") {
-        out.push_str(&format!(
-            "  \x1b[1;33m= help:\x1b[0m check that the divisor is not zero before dividing\n"
-        ));
+        out.push_str("  \x1b[1;33m= help:\x1b[0m check that the divisor is not zero before dividing\n");
     }
 
     // Type error for missing method
     if lower_msg.contains("has no method") || lower_msg.contains("no attribute") {
-        out.push_str(&format!(
-            "  \x1b[1;33m= help:\x1b[0m verify the type with typeof(value) before calling methods\n"
-        ));
+        out.push_str("  \x1b[1;33m= help:\x1b[0m verify the type with typeof(value) before calling methods\n");
     }
 
     out.push_str(&format!(
@@ -17410,30 +17465,26 @@ impl Repl {
         // Try as a statement first; fall back to expression-print if it's
         // just an expression (e.g. `5 + 5`).
         match lex(line) {
-            Err(e) => return Err(e),
+            Err(e) => Err(e),
             Ok(tokens) => {
                 let program = match Parser::new(tokens).program() {
                     Ok(p) => p,
                     Err(_) => {
                         // Fall back to evaluating as a bare expression and printing.
-                        match self.vm.eval_expr_source(line) {
-                            Ok(value) => {
-                                println!("{}", value.to_string());
-                                return Ok(());
-                            }
-                            Err(expr_err) => return Err(expr_err),
+                        {
+                            let value = self.vm.eval_expr_source(line)?;
+                            println!("{}", value);
+                            return Ok(());
                         }
                     }
                 };
                 // A single expression statement evaluates to a value we should print.
                 if program.len() == 1 {
                     if let StmtKind::Expr(e) = &program[0].kind {
-                        match self.vm.eval(e) {
-                            Ok(value) => {
-                                println!("{}", value.to_string());
-                                return Ok(());
-                            }
-                            Err(err) => return Err(err),
+                        {
+                            let value = self.vm.eval(e)?;
+                            println!("{}", value);
+                            return Ok(());
                         }
                     }
                 }
@@ -19324,7 +19375,7 @@ pub fn help_builtin(name: &str) -> Option<String> {
                  Use parentheses: (42).{name}()\n\n\
                  Available: floor, ceil, round, abs, toInt, toFixed(n),\n\
                  toString, sqrt, pow(n), isNaN, isFinite, isInfinite, isInteger"
-            ).into(),
+            ),
         ),
 
         // List methods (generic fallback)
@@ -19339,7 +19390,7 @@ pub fn help_builtin(name: &str) -> Option<String> {
                 "{name}()  — list method (call on a list value)\n\
                  Call it on a list: mylist.{name}(args)\n\n\
                  Example: [1, 2, 3].{name}(args)"
-            ).into(),
+            ),
         ),
         // Dict methods (generic fallback)
         "dict.get" | "dict.set" | "dict.has_key" | "dict.delete" | "dict.update"
@@ -19349,7 +19400,7 @@ pub fn help_builtin(name: &str) -> Option<String> {
                 "{name}()  — dict method (call on a dict value)\n\
                  Call it on a dict: mydict.{name}(args)\n\n\
                  Example: {{a: 1}}.{name}(args)"
-            ).into(),
+            ),
         ),
 
         // Global convenience functions
@@ -19375,7 +19426,7 @@ pub fn help_builtin(name: &str) -> Option<String> {
                  Extracts data from a dict argument.\n\
                  Also available as dict methods: d.{name}()\n\n\
                  Example: {name}({{a: 1, b: 2}})"
-            ).into(),
+            ),
         ),
         "slice" => Some(
             "slice(collection, start, end?)  — extract a sub-list or sub-string\n\
@@ -19459,8 +19510,8 @@ fn levenshtein(a: &str, b: &str) -> usize {
     let a_len = a.len();
     let b_len = b.len();
     let mut matrix = vec![vec![0usize; b_len + 1]; a_len + 1];
-    for i in 0..=a_len { matrix[i][0] = i; }
-    for j in 0..=b_len { matrix[0][j] = j; }
+    for (i, row) in matrix.iter_mut().enumerate() { row[0] = i; }
+    for (j, cell) in matrix[0].iter_mut().enumerate() { *cell = j; }
     let a_bytes = a.as_bytes();
     let b_bytes = b.as_bytes();
     for i in 1..=a_len {
@@ -20125,7 +20176,7 @@ impl LintReport {
                 self.walk_expr(y);
                 self.walk_expr(n);
             }
-            Expr::IfExpr(c, y, n) => {
+            Expr::IfExpression(c, y, n) => {
                 self.walk_expr(c);
                 self.walk_stmts(y);
                 self.walk_stmts(n);

@@ -428,7 +428,7 @@ fn execute(
         for (k, v) in d.iter() {
             parts.push(format!(
                 "{}={}",
-                percent_encode(&k),
+                percent_encode(k),
                 percent_encode(&to_str(v))
             ));
         }
@@ -494,6 +494,7 @@ fn execute(
     Ok(res)
 }
 
+#[allow(clippy::too_many_arguments)] // a struct of options would churn every call site for zero runtime gain
 fn run_loop(
     jar: &mut IndexMap<String, Vec<Cookie>>,
     method: &str,
@@ -610,7 +611,7 @@ fn run_loop(
             .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
             .unwrap_or_default();
         for sc in resp_headers.get_all("set-cookie").iter() {
-            if let Some(sc) = sc.to_str().ok() {
+            if let Ok(sc) = sc.to_str() {
                 if let Some(c) = parse_cookie(sc) {
                     if c.expires.map(|e| e < now_epoch()).unwrap_or(false) {
                         continue;
@@ -655,7 +656,7 @@ fn run_loop(
         }
 
         // Redirect handling.
-        if status >= 300 && status < 400 && allow_redirects && hops <= limit {
+        if (300..400).contains(&status) && allow_redirects && hops <= limit {
             let loc = header_map
                 .get("location")
                 .and_then(|v| v.first())
@@ -676,7 +677,7 @@ fn run_loop(
             }
         }
 
-        let next_url_val = if status >= 300 && status < 400 {
+        let next_url_val = if (300..400).contains(&status) {
             header_map
                 .get("location")
                 .and_then(|v| v.first())

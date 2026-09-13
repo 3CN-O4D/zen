@@ -86,14 +86,14 @@ fn module_at(code: &QrCode, x: usize, y: usize, border: usize) -> bool {
     is_dark(code, x - border, y - border)
 }
 
-pub fn qr_matrix(args: &Vec<Value>) -> Result<Value, String> {
+pub fn qr_matrix(args: &[Value]) -> Result<Value, String> {
     let data = string_arg(args, 0, "matrix")?;
     let min = int_arg(args, 1, 0, "matrix")?;
     let code = encode(&data, (min > 0).then_some(min.min(40) as u8))?;
     Ok(matrix_value(&code))
 }
 
-pub fn qr_render(args: &Vec<Value>) -> Result<Value, String> {
+pub fn qr_render(args: &[Value]) -> Result<Value, String> {
     let data = string_arg(args, 0, "render")?;
     let border = int_arg(args, 1, 2, "render")?;
     let bright = matches!(args.get(2), Some(Value::Bool(true)));
@@ -101,7 +101,7 @@ pub fn qr_render(args: &Vec<Value>) -> Result<Value, String> {
     Ok(Value::String(render_value(&code, border as usize, bright)))
 }
 
-pub fn qr_version(args: &Vec<Value>) -> Result<Value, String> {
+pub fn qr_version(args: &[Value]) -> Result<Value, String> {
     let data = string_arg(args, 0, "version")?;
     let code = encode(&data, None)?;
     Ok(Value::Number(match code.version() {
@@ -110,7 +110,7 @@ pub fn qr_version(args: &Vec<Value>) -> Result<Value, String> {
     }))
 }
 
-pub fn qr_dimension(args: &Vec<Value>) -> Result<Value, String> {
+pub fn qr_dimension(args: &[Value]) -> Result<Value, String> {
     let data = string_arg(args, 0, "dimension")?;
     let code = encode(&data, None)?;
     Ok(Value::Number(code.width() as f64))
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn deterministic_across_calls() {
-        assert_eq!(qr_matrix(&vec![Value::String("abc".into())]).unwrap(),
-                   qr_matrix(&vec![Value::String("abc".into())]).unwrap());
+        let args: &[Value] = &[Value::String("abc".into())];
+        assert_eq!(qr_matrix(args).unwrap(), qr_matrix(args).unwrap());
     }
 }

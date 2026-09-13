@@ -6,11 +6,11 @@ use base64::Engine;
 use std::sync::Arc;
 
 thread_local! {
-    static BROWSER: RefCell<Option<CdpBrowser>> = RefCell::new(None);
-    static SESSION: RefCell<Option<CdpSession>> = RefCell::new(None);
+    static BROWSER: RefCell<Option<CdpBrowser>> = const { RefCell::new(None) };
+    static SESSION: RefCell<Option<CdpSession>> = const { RefCell::new(None) };
 }
 
-pub fn browser_launch(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_launch(args: &[Value]) -> Result<Value, String> {
     let headless = match args.first() {
         Some(Value::Bool(b)) => *b,
         _ => true,
@@ -67,7 +67,7 @@ pub fn browser_connect() -> Result<Value, String> {
     Ok(Value::Bool(true))
 }
 
-pub fn browser_navigate(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_navigate(args: &[Value]) -> Result<Value, String> {
     let url = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("navigate expects a url string".into()),
@@ -91,7 +91,7 @@ pub fn browser_navigate(args: &Vec<Value>) -> Result<Value, String> {
     })
 }
 
-pub fn browser_evaluate(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_evaluate(args: &[Value]) -> Result<Value, String> {
     let expression = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("evaluate expects a js expression string".into()),
@@ -123,7 +123,7 @@ fn wrap_js_expression(code: &str) -> String {
     }
 }
 
-pub fn browser_screenshot(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_screenshot(args: &[Value]) -> Result<Value, String> {
     let path = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("screenshot expects a path string".into()),
@@ -158,7 +158,7 @@ pub fn browser_get_url() -> Result<Value, String> {
     })
 }
 
-pub fn browser_get_text(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_get_text(args: &[Value]) -> Result<Value, String> {
     let selector = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("get_text expects a selector string".into()),
@@ -170,7 +170,7 @@ pub fn browser_get_text(args: &Vec<Value>) -> Result<Value, String> {
     })
 }
 
-pub fn browser_click(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_click(args: &[Value]) -> Result<Value, String> {
     let selector = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("click expects a selector string".into()),
@@ -182,8 +182,8 @@ pub fn browser_click(args: &Vec<Value>) -> Result<Value, String> {
     })
 }
 
-pub fn browser_fill(args: &Vec<Value>) -> Result<Value, String> {
-    let (selector, value) = match args.as_slice() {
+pub fn browser_fill(args: &[Value]) -> Result<Value, String> {
+    let (selector, value) = match args {
         [Value::String(sel), Value::String(val)] => (sel, val),
         _ => return Err("fill expects (selector, value)".into()),
     };
@@ -194,7 +194,7 @@ pub fn browser_fill(args: &Vec<Value>) -> Result<Value, String> {
     })
 }
 
-pub fn browser_query(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_query(args: &[Value]) -> Result<Value, String> {
     let selector = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("query expects a selector string".into()),
@@ -206,7 +206,7 @@ pub fn browser_query(args: &Vec<Value>) -> Result<Value, String> {
     })
 }
 
-pub fn browser_wait_for(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_wait_for(args: &[Value]) -> Result<Value, String> {
     let selector = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("wait_for expects a selector string".into()),
@@ -230,7 +230,7 @@ pub fn browser_wait_for(args: &Vec<Value>) -> Result<Value, String> {
     })
 }
 
-pub fn browser_attr(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_attr(args: &[Value]) -> Result<Value, String> {
     let selector = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("attr expects a selector string as argument 1".into()),
@@ -257,7 +257,7 @@ pub fn browser_page_text() -> Result<Value, String> {
     })
 }
 
-pub fn browser_wait_for_ms(args: &Vec<Value>) -> Result<Value, String> {
+pub fn browser_wait_for_ms(args: &[Value]) -> Result<Value, String> {
     let selector = match args.first() {
         Some(Value::String(s)) => s,
         _ => return Err("wait_for_ms expects a selector string as argument 1".into()),

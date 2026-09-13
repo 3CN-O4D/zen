@@ -1133,7 +1133,7 @@ fn format_jid_simple(j: &Jid) -> String {
 
 /// `wa.connect(auth_dir, phone)` — open (and if needed pair) a native
 /// WhatsApp session. `auth_dir` also stores the device key file.
-pub fn wa_connect(args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_connect(args: &[Value]) -> Result<Value, String> {
     let auth_dir = match args.first() {
         Some(Value::String(s)) if !s.trim().is_empty() => expand_home(s),
         _ => dirs_home().join(".zen").join("wa_native"),
@@ -1167,25 +1167,25 @@ pub fn wa_connect(args: &Vec<Value>) -> Result<Value, String> {
     Ok(Value::Bool(true))
 }
 
-pub fn wa_state(_args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_state(_args: &[Value]) -> Result<Value, String> {
     Ok(match current_session() {
         Some(s) => Value::String(s.state.lock().unwrap().clone()),
         None => Value::String("idle".into()),
     })
 }
 
-pub fn wa_qr(_args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_qr(_args: &[Value]) -> Result<Value, String> {
     Ok(match current_session().and_then(|s| s.qr.lock().unwrap().clone()) {
         Some(q) => Value::String(q),
         None => Value::Null,
     })
 }
 
-pub fn wa_pairing_code(_args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_pairing_code(_args: &[Value]) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-pub fn wa_last_error(_args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_last_error(_args: &[Value]) -> Result<Value, String> {
     Ok(match current_session().and_then(|s| s.last_error.lock().unwrap().clone()) {
         Some(e) => Value::String(e),
         None => Value::Null,
@@ -1193,7 +1193,7 @@ pub fn wa_last_error(_args: &Vec<Value>) -> Result<Value, String> {
 }
 
 /// `wa.poll(timeout_ms)` — drain pending events, waiting up to `timeout_ms`.
-pub fn wa_poll(args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_poll(args: &[Value]) -> Result<Value, String> {
     let timeout_ms = match args.first() {
         Some(Value::Number(n)) => (*n).max(0.0) as u64,
         _ => 0,
@@ -1217,7 +1217,7 @@ pub fn wa_poll(args: &Vec<Value>) -> Result<Value, String> {
 
 /// `wa.sendText(jid, text)` — queue the message on the worker thread, which
 /// owns the socket and the Signal session store, then wait for its outcome.
-pub fn wa_send_text(args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_send_text(args: &[Value]) -> Result<Value, String> {
     let to = match args.first() {
         Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
         _ => return Err("wa.sendText: missing recipient jid".into()),
@@ -1283,7 +1283,7 @@ fn payload_bytes(arg: &Value, opts: &indexmap::IndexMap<String, Value>) -> Resul
 ///
 /// Encrypts, uploads and pushes an attachment. `kind` is one of
 /// `image|video|audio|document|sticker`.
-pub fn wa_send_file(args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_send_file(args: &[Value]) -> Result<Value, String> {
     let to = match args.first() {
         Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
         _ => return Err("wa.sendFile: missing recipient jid".into()),
@@ -1369,7 +1369,7 @@ fn event_str(d: &indexmap::IndexMap<String, Value>, k: &str) -> String {
 /// Fetches + decrypts the attachment of a polled message event (or of a media
 /// dict with `directPath`/`mediaKey`/`fileEncSHA256`), returning the plaintext
 /// bytes as base64 — or the written file path when `toPath` is given.
-pub fn wa_download(args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_download(args: &[Value]) -> Result<Value, String> {
     let dict = match args.first() {
         Some(Value::Dict(d)) => (**d).clone(),
         _ => return Err("wa.download: expected a message/media dict from wa.poll()".into()),
@@ -1430,14 +1430,14 @@ media_type: media_type.to_string(),
     Ok(Value::String(base64_std(&bytes)))
 }
 
-pub fn wa_logout(_args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_logout(_args: &[Value]) -> Result<Value, String> {
     let sess = take_session().ok_or_else(|| String::from("wa: not connected"))?;
     sess.request_stop();
     set_state(&sess, "idle");
     Ok(Value::Bool(true))
 }
 
-pub fn wa_disconnect(_args: &Vec<Value>) -> Result<Value, String> {
+pub fn wa_disconnect(_args: &[Value]) -> Result<Value, String> {
     match take_session() {
         Some(sess) => {
             sess.request_stop();
