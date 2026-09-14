@@ -1,0 +1,50 @@
+// Pure-Zen reimplementation of the `collections` module.
+//
+// Declares ZEN_PURE so the .z tier wins over the Rust tier on import; the
+// native members stay reachable as `collections.native.*` and setting
+// ZEN_NATIVE_ONLY=collections restores the native tier.
+ZEN_PURE = true
+
+// Counter(items) -> dict of item -> count, in first-seen order.
+let Counter = fn(items) {
+    let counts = {}
+    for item in items {
+        let k = str(item)
+        counts[k] = counts.get(k, 0) + 1
+    }
+    return counts
+}
+
+// Native `chain(...)` is variadic; .z functions have fixed arity, so the pure
+// form takes a single list of iterables. `chain(native)(a, b, ...)` matches
+// `chain(list)([a, b, ...])`.
+let chain = fn(iterables) {
+    let out = []
+    for a in iterables {
+        if type(a) == "list" {
+            for x in a { out.push(x) }
+        } else {
+            out.push(a)
+        }
+    }
+    return out
+}
+
+// flatten(list) -> deep, recursive one-level-of-typing flattening.
+let flatten = fn(list) {
+    let out = []
+    let stack = [list]
+    let i = 0
+    while i < len(stack) {
+        let x = stack[i]
+        if type(x) == "list" {
+            let prefix = stack.slice(0, i)
+            let suffix = stack.slice(i + 1, len(stack))
+            stack = prefix + x + suffix
+        } else {
+            out.push(x)
+            i += 1
+        }
+    }
+    return out
+}

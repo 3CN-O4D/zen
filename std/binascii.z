@@ -1,0 +1,55 @@
+// Pure-Zen reimplementation of the `binascii` module.
+//
+// Declares ZEN_PURE so the .z tier wins over the Rust tier on import; the
+// native members stay reachable as `binascii.native.*` and setting
+// ZEN_NATIVE_ONLY=binascii restores the native tier.
+ZEN_PURE = true
+import bytes
+import base64
+let u8 = bytes.utf8_bytes
+let sfb = bytes.str_from_bytes
+let b64e = base64.encode
+let b64d = base64.decode
+
+let HEX = "0123456789abcdef"
+let HEXR = {"0":0,"1":1,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"a":10,"b":11,"c":12,"d":13,"e":14,"f":15}
+
+let hexlify = fn(data) {
+    let out = ""
+    for _c in list(data) {
+        for _b in u8(_c.ord()) {
+            out += HEX[_b >> 4] + HEX[_b & 15]
+        }
+    }
+    return out
+}
+
+let unhexlify = fn(hex) {
+    if len(hex) % 2 != 0 {
+        throw "binascii.unhexlify: odd-length string"
+    }
+    let bl = []
+    let _n = 0
+    while _n < len(hex) {
+        let hi = HEXR.get(hex[_n], -1)
+        let lo = HEXR.get(hex[_n + 1], -1)
+        if hi < 0 or lo < 0 {
+            throw "binascii.unhexlify: non-hex character"
+        }
+        bl.push(hi * 16 + lo)
+        _n += 2
+    }
+    return sfb(bl)
+}
+
+let b2a_base64 = fn(data) {
+    return b64e(data)
+}
+
+let a2b_base64 = fn(data) {
+    let s = data.trim()
+    if len(s) % 4 == 1 {
+        throw "binascii.a2b_base64: invalid padding"
+    }
+    return b64d(s)
+}

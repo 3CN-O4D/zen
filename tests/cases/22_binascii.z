@@ -1,0 +1,57 @@
+// 22_binascii: the pure-Zen binascii override — parity with the Rust tier,
+// the <mod>["native"] escape hatch, and ZEN_NATIVE_ONLY bypass.
+import binascii
+import os
+import sys
+
+let failed = 0
+let check = fn(cond, what) {
+    if not cond {
+        print "FAIL: " + what
+        failed += 1
+    }
+}
+
+// The pure tier is active and the native tier is reachable behind the escape
+// hatch (bracket access, since `.native` is a lexer keyword).
+check(binascii.get("ZEN_PURE", null) == null, "ZEN_PURE marker stripped")
+check(binascii["native"] != null, "native escape hatch present")
+
+let na = binascii["native"]
+check(binascii.hexlify("hello")        == na.hexlify("hello"),        "hexlify ascii")
+check(binascii.hexlify("héllo 🙃")     == na.hexlify("héllo 🙃"),     "hexlify utf8")
+check(binascii.hexlify("")             == na.hexlify(""),             "hexlify empty")
+check(binascii.unhexlify("68656c6c6f") == na.unhexlify("68656c6c6f"), "unhexlify ascii")
+check(binascii.unhexlify(na.hexlify("日本語")) == "日本語",              "hexlify/unhexlify round-trip utf8")
+check(binascii.unhexlify("")           == na.unhexlify(""),           "unhexlify empty")
+check(binascii.b2a_base64("hi")        == na.b2a_base64("hi"),        "b2a_base64")
+check(binascii.a2b_base64("aGVsbG8=")  == na.a2b_base64("aGVsbG8="),  "a2b_base64")
+check(binascii.a2b_base64("  aGVsbG8=\n") == na.a2b_base64("  aGVsbG8=\n"), "a2b_base64 trims whitespace")
+check(binascii.a2b_base64(binascii.b2a_base64("round trip")) == "round trip", "b2a/a2b round-trip")
+
+// ZEN_NATIVE_ONLY=binascii must bypass the pure tier: the "native" escape
+// hatch injected by the companion disappears when the env var is set.
+let zen_bin = "../../target/debug/zen"
+let check_native_probe = fn(expected_exit) {
+    let cpid = sys.fork()
+    if cpid == 0 {
+        if expected_exit == 0 {
+            os.setenv("ZEN_NATIVE_ONLY", "binascii")
+        }
+        sys.exec("/bin/sh", ["-c", zen_bin + " -e 'import binascii; import sys; if binascii.get(\"native\", 0) == 0 { sys.exit(0) } else { sys.exit(1) }'"])
+    }
+    let w = sys.waitpid(cpid, 0)
+    check(sys.wexitstatus(w[1]) == expected_exit,
+        expected_exit == 0 ? "ZEN_NATIVE_ONLY removes native sub-dict"
+                           : "default keeps native sub-dict")
+}
+
+check_native_probe(1)   // default: native present  → child exit 1
+check_native_probe(0)   // ZEN_NATIVE_ONLY: absent  → child exit 0
+
+if failed == 0 {
+    print "22_binascii: all ok"
+} else {
+    print "22_binascii: " + failed + " failures"
+    sys.exit(1)
+}

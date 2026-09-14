@@ -1,0 +1,64 @@
+// Pure-Zen shared byte helpers for the std library.
+//
+// Mirrors the Rust-side conversions Zen relies on:
+//   utf8_bytes(cp)      codepoint -> list of UTF-8 bytes
+//   is_cont(b)          continuation-byte predicate
+//   str_from_bytes(bs)  byte list -> string with String::from_utf8_lossy semantics
+
+let utf8_bytes = fn(cp) {
+    if cp < 128 {
+        return [cp]
+    }
+    if cp < 2048 {
+        return [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)]
+    }
+    if cp < 65536 {
+        return [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+    }
+    return [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
+}
+
+let is_cont = fn(b) { b >= 0x80 and b <= 0xBF }
+
+let str_from_bytes = fn(bl) {
+    let out = ""
+    let _i = 0
+    while _i < len(bl) {
+        let b = bl[_i]
+        if b < 0x80 {
+            out += chr(b)
+            _i += 1
+        } else if b < 0xC2 {
+            out += chr(0xFFFD)
+            _i += 1
+        } else if b < 0xE0 {
+            if _i + 1 < len(bl) and is_cont(bl[_i + 1]) {
+                out += chr(((b & 0x1F) << 6) | (bl[_i + 1] & 0x3F))
+                _i += 2
+            } else {
+                out += chr(0xFFFD)
+                _i += 1
+            }
+        } else if b < 0xF0 {
+            if _i + 2 < len(bl) and is_cont(bl[_i + 1]) and is_cont(bl[_i + 2]) {
+                out += chr(((b & 0x0F) << 12) | ((bl[_i + 1] & 0x3F) << 6) | (bl[_i + 2] & 0x3F))
+                _i += 3
+            } else {
+                out += chr(0xFFFD)
+                _i += 1
+            }
+        } else if b < 0xF5 {
+            if _i + 3 < len(bl) and is_cont(bl[_i + 1]) and is_cont(bl[_i + 2]) and is_cont(bl[_i + 3]) {
+                out += chr(((b & 0x07) << 18) | ((bl[_i + 1] & 0x3F) << 12) | ((bl[_i + 2] & 0x3F) << 6) | (bl[_i + 3] & 0x3F))
+                _i += 4
+            } else {
+                out += chr(0xFFFD)
+                _i += 1
+            }
+        } else {
+            out += chr(0xFFFD)
+            _i += 1
+        }
+    }
+    return out
+}

@@ -1,0 +1,55 @@
+// Pure-Zen reimplementation of the `tempfile` module.
+//
+// Declares ZEN_PURE so the .z tier wins over the Rust tier on import; the
+// native members stay reachable as `tempfile.native.*` and setting
+// ZEN_NATIVE_ONLY=tempfile restores the native tier.
+//
+// Reuses the os / fs / random primitives; the uniqueness loop mirrors the
+// native `prefix + u64` collision avoidance. The temp-dir resolution is
+// inlined in each helper rather than factored into a shared function: bare
+// calls between module functions only resolve when the module body contains
+// top-level executable statements, which this module avoids.
+ZEN_PURE = true
+import os
+import fs
+import random
+
+let dir = fn() {
+    let d = os.getenv("TMPDIR")
+    if d == null { d = os.getenv("TEMP") }
+    if d == null { d = os.getenv("TMP") }
+    if d == null { d = "/tmp" }
+    return d
+}
+
+let mkdtemp = fn(prefix = "zen") {
+    let base = os.getenv("TMPDIR")
+    if base == null { base = os.getenv("TEMP") }
+    if base == null { base = os.getenv("TMP") }
+    if base == null { base = "/tmp" }
+    let p = ""
+    while true {
+        p = fs.join(base, prefix + str(random.randint(0, 999999999)))
+        if not fs.exists(p) {
+            break
+        }
+    }
+    fs.mkdir(p)
+    return p
+}
+
+let mkstemp = fn(prefix = "zen") {
+    let base = os.getenv("TMPDIR")
+    if base == null { base = os.getenv("TEMP") }
+    if base == null { base = os.getenv("TMP") }
+    if base == null { base = "/tmp" }
+    let p = ""
+    while true {
+        p = fs.join(base, prefix + str(random.randint(0, 999999999)))
+        if not fs.exists(p) {
+            break
+        }
+    }
+    fs.write(p, "")
+    return p
+}

@@ -4,6 +4,9 @@
 // native members stay reachable as `base64.native.*` and setting
 // ZEN_NATIVE_ONLY=base64 restores the native tier.
 ZEN_PURE = true
+import bytes
+let u8 = bytes.utf8_bytes
+let sfb = bytes.str_from_bytes
 
 let ALPH = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 let INV = {}
@@ -13,27 +16,12 @@ while _i < len(ALPH) {
     _i += 1
 }
 
-let utf8_bytes = fn(cp) {
-    if cp < 128 {
-        return [cp]
-    }
-    if cp < 2048 {
-        return [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)]
-    }
-    if cp < 65536 {
-        return [0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
-    }
-    return [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
-}
-
-let is_cont = fn(b) { b >= 0x80 and b <= 0xBF }
-
 let encode = fn(data) {
     let out = ""
     let acc = 0
     let n = 0
     for _ch in list(data) {
-        for _b in utf8_bytes(_ch.ord()) {
+        for _b in u8(_ch.ord()) {
             acc = acc * 256 + _b
             n += 1
         }
@@ -57,7 +45,7 @@ let encode = fn(data) {
 }
 
 let decode = fn(data) {
-    let bytes = []
+    let bl = []
     let acc = 0
     let bits = 0
     for _ch in list(data) {
@@ -72,52 +60,11 @@ let decode = fn(data) {
         bits += 6
         if bits >= 8 {
             bits -= 8
-            bytes.push((acc >> bits) & 0xFF)
+            bl.push((acc >> bits) & 0xFF)
             acc = acc & ((1 << bits) - 1)
         }
     }
-    // Native tier renders the bytes with String::from_utf8_lossy; mirror it
-    // so valid UTF-8 round-trips and stray sequences become U+FFFD.
-    let out = ""
-    let _i = 0
-    while _i < len(bytes) {
-        let b = bytes[_i]
-        if b < 0x80 {
-            out += chr(b)
-            _i += 1
-        } else if b < 0xC2 {
-            out += chr(0xFFFD)
-            _i += 1
-        } else if b < 0xE0 {
-            if _i + 1 < len(bytes) and is_cont(bytes[_i + 1]) {
-                out += chr(((b & 0x1F) << 6) | (bytes[_i + 1] & 0x3F))
-                _i += 2
-            } else {
-                out += chr(0xFFFD)
-                _i += 1
-            }
-        } else if b < 0xF0 {
-            if _i + 2 < len(bytes) and is_cont(bytes[_i + 1]) and is_cont(bytes[_i + 2]) {
-                out += chr(((b & 0x0F) << 12) | ((bytes[_i + 1] & 0x3F) << 6) | (bytes[_i + 2] & 0x3F))
-                _i += 3
-            } else {
-                out += chr(0xFFFD)
-                _i += 1
-            }
-        } else if b < 0xF5 {
-            if _i + 3 < len(bytes) and is_cont(bytes[_i + 1]) and is_cont(bytes[_i + 2]) and is_cont(bytes[_i + 3]) {
-                out += chr(((b & 0x07) << 18) | ((bytes[_i + 1] & 0x3F) << 12) | ((bytes[_i + 2] & 0x3F) << 6) | (bytes[_i + 3] & 0x3F))
-                _i += 4
-            } else {
-                out += chr(0xFFFD)
-                _i += 1
-            }
-        } else {
-            out += chr(0xFFFD)
-            _i += 1
-        }
-    }
-    return out
+    return sfb(bl)
 }
 
 let url_encode = fn(data) {
