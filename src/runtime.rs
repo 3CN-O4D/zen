@@ -1004,6 +1004,21 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     col = ci;
                 }
             }
+            // Reject a second fraction with no separating operator: `1.2.3`
+            // lexes `1.2` + `0.3`, and at statement level the trailing `0.3`
+            // was silently dropped. Member access (`1.2.method`) is unaffected
+            // because there the byte after the dot is not a digit.
+            if i < bytes.len()
+                && bytes[i] == b'.'
+                && bytes
+                    .get(i + 1)
+                    .is_some_and(|x| (*x as char).is_ascii_digit())
+            {
+                return Err(format!(
+                    "{}:{}: invalid number literal (unexpected '.' after number)",
+                    start.0, start.1
+                ));
+            }
             let n = source[begin..i]
                 .parse()
                 .map_err(|_| format!("{}:{}: invalid number", start.0, start.1))?;
@@ -6892,6 +6907,11 @@ Expr::Index(obj, idx) => {
                 self.foreign_classes.insert(ns_key);
                 self.foreign_classes.insert(cname.clone());
             }
+            // Transitive dependency sweep: exports (and everything they reach
+            // through captures/cells) may point at functions defined by nested
+            // imports. Those live in the module's own VM, so re-register any
+            // name this caller lacks from the shared registry.
+            self.reregister_missing_exports(&art.exports);
             return Ok(art.exports.clone());
         }
         // Circular import guard on canonical paths.
@@ -6975,8 +6995,8 @@ Expr::Index(obj, idx) => {
         for value in module_vm.vars.values_mut() {
             qualify(value);
         }
-        for (_, function) in module_vm.functions.iter_mut() {
-            for (_, v) in function.captured.iter_mut() {
+        for function in module_vm.functions.values_mut() {
+            for v in function.captured.values_mut() {
                 qualify(v);
             }
             for (_, v) in function.effective_captured.iter_mut() {
@@ -7062,6 +7082,12 @@ Expr::Index(obj, idx) => {
             self.foreign_classes.insert(ns_key);
             self.foreign_classes.insert(plain);
         }
+        // Transitive dependency sweep: exported values may carry function
+        // pointers that belong to nested imports, and those are registered in
+        // the module's own VM — not in this caller. Pull any reachable name
+        // the caller lacks from the shared registry so `module.fn` calls keep
+        // resolving from the importer regardless of import order.
+        self.reregister_missing_exports(&exports);
         loaded_modules().lock().unwrap().insert(
             canon_str,
             ModuleArtifact {
@@ -7077,6 +7103,52 @@ Expr::Index(obj, idx) => {
             }
         }
         Ok(exports)
+    }
+
+    /// Worklist sweep over a module's exports (recursing into captures, cells,
+    /// dicts and lists) that re-registers any reachable qualified function
+    /// name this VM does not already know. Nested imports register their
+    /// functions inside the importing module's own VM, so exported closures
+    /// that reference them would otherwise fail to resolve when the importer
+    /// invokes them from its own VM.
+    fn reregister_missing_exports(&mut self, exports: &HashMap<String, Value>) {
+        let mut pending: Vec<Value> = exports.values().cloned().collect();
+        let mut visited: ahash::AHashSet<String> = ahash::AHashSet::new();
+        let registry = function_registry();
+        while let Some(v) = pending.pop() {
+            match v {
+                Value::Function(name) => {
+                    if visited.insert(name.clone()) && !self.functions.contains_key(&name) {
+                        if let Ok(lock) = registry.lock() {
+                            if let Some(f) = lock.get(&name).cloned() {
+                                drop(lock);
+                                self.register_function(name, f.clone());
+                                for c in f.captured.values() {
+                                    pending.push(c.clone());
+                                }
+                                for (_, c) in &f.effective_captured {
+                                    pending.push(c.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                Value::Cell(arc) => {
+                    if let Ok(inner) = arc.lock() {
+                        pending.push(inner.clone());
+                    }
+                }
+                Value::Dict(d) => {
+                    for v in d.values() {
+                        pending.push(v.clone());
+                    }
+                }
+                Value::List(l) => {
+                    pending.extend(l.iter().cloned());
+                }
+                _ => {}
+            }
+        }
     }
 
     fn resolve_module(&self, name: &str) -> Result<String, String> {
