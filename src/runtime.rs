@@ -3376,6 +3376,9 @@ pub struct Vm {
     native_functions: HashMap<String, NativeFunc>,
     classes: HashMap<String, ZenClass>,
     imported_modules: HashMap<String, HashMap<String, Value>>,
+    /// Names bound to module dicts (imported or baked-in). Used to emit
+    /// module-flavored missing-member errors instead of generic dict ones.
+    module_names: std::collections::HashSet<String>,
     /// Canonical paths of modules currently being executed up the import
     /// chain (cycle detection).
     loading: Vec<String>,
@@ -3479,6 +3482,7 @@ impl Vm {
             native_functions: HashMap::new(),
             classes: HashMap::new(),
             imported_modules: HashMap::new(),
+            module_names: std::collections::HashSet::new(),
             loading: Vec::new(),
             foreign_fns: ahash::AHashSet::new(),
             reg_log: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -4915,6 +4919,14 @@ impl Vm {
         for name in NATIVES {
             self.native_functions.insert(name.to_string(), native_for(name));
         }
+        // Every dict bound at VM startup is a module; record the names so
+        // member lookup misses can say "module `x` has no member" instead of
+        // the generic dict message.
+        for (name, value) in &self.vars {
+            if matches!(value, Value::Dict(_)) {
+                self.module_names.insert(name.clone());
+            }
+        }
         // Lock all builtin names so scripts cannot shadow the standard library.
         let builtin_names: Vec<String> = self
             .vars
@@ -5644,7 +5656,24 @@ Expr::Index(obj, idx) => {
                                 String::new()
                             }
                         });
-                    format!("dictionary has no member: `{}`{}", name, hint)
+                    // If this exact dict is a registered module bound in vars
+                    // under its module name, report a module-flavored error
+                    // instead of a generic dictionary one (`sys.argv` typo ->
+                    // "module `sys` has no member"). Requiring both Arc
+                    // identity and a registered module name avoids false
+                    // positives from ordinary user dicts at top level.
+                    let owner = self.module_names.iter().find(|k| {
+                        self.vars.get(*k).is_some_and(|v| {
+                            matches!(v, Value::Dict(m) if Arc::as_ptr(m) == Arc::as_ptr(&values))
+                        })
+                    });
+                    match owner {
+                        Some(m) => format!(
+                            "module `{m}` has no member or function: `{name}`{}",
+                            hint
+                        ),
+                        None => format!("dictionary has no member: `{name}`{}", hint),
+                    }
                 }),
             Value::List(values) if name == "len" || name == "count" || name == "length" => {
                 Ok(Value::Number(values.len() as f64))
@@ -6714,7 +6743,8 @@ Expr::Index(obj, idx) => {
             if let Some(map) = self.merge_builtin_module(&module, &name) {
                 self.imported_modules.insert(name.clone(), map.clone());
                 let btree: indexmap::IndexMap<String, Value> = map.into_iter().collect();
-                self.vars.insert(name, Value::Dict(Arc::new(btree)));
+                self.vars.insert(name.clone(), Value::Dict(Arc::new(btree)));
+                self.module_names.insert(name.clone());
                 continue;
             }
             // Check if it's a dotted submodule (e.g. pkg.sub -> parent.sub)
@@ -6746,7 +6776,8 @@ Expr::Index(obj, idx) => {
                     }
                     self.imported_modules.insert(name.clone(), map);
                 }
-                self.vars.insert(name, mod_val);
+                self.vars.insert(name.clone(), mod_val);
+                self.module_names.insert(name.clone());
                 continue;
             }
             // Resolve as file
@@ -6786,10 +6817,12 @@ Expr::Index(obj, idx) => {
                         self.vars.insert(root.to_string(), acc);
                     }
                 }
+                self.module_names.insert(root.to_string());
                 if let Some(a) = &alias {
                     let dict: indexmap::IndexMap<String, Value> =
                         vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     self.vars.insert(a.clone(), Value::Dict(Arc::new(dict)));
+                    self.module_names.insert(a.clone());
                 }
             } else if alias.is_some() {
                 // Bind the loaded module under the alias so direct
@@ -6797,6 +6830,7 @@ Expr::Index(obj, idx) => {
                 let dict: indexmap::IndexMap<String, Value> =
                     vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 self.vars.insert(name.clone(), Value::Dict(Arc::new(dict)));
+                self.module_names.insert(name.clone());
             }
             self.imported_modules.insert(name, vars);
         }
