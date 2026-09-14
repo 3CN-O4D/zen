@@ -175,7 +175,10 @@ impl Instruction {
 #[derive(Clone, Debug)]
 pub struct CompiledFunction {
     pub name: String,
-    pub params: Vec<String>,
+    /// Parameter names with optional default-parameter expressions. Default
+    /// values are evaluated by the runtime at definition time and applied at
+    /// call time; the VM fills missing args from `default_values`.
+    pub params: Vec<(String, Option<crate::runtime::Expr>)>,
     pub param_count: u16,
     /// Captured variable names, in slot order (slots param_count..param_count+captured_count)
     pub captured_names: Vec<String>,
@@ -216,7 +219,7 @@ struct FunctionCompiler {
 /// tree-walk interpretation for the whole function.
 pub fn compile_function(
     name: &str,
-    params: &[String],
+    params: &[(String, Option<crate::runtime::Expr>)],
     captured_names: &[String],
     body: &[Stmt],
 ) -> Result<Arc<CompiledFunction>, String> {
@@ -232,13 +235,13 @@ pub fn compile_function(
 #[allow(dead_code)]
 pub fn compile_method(
     name: &str,
-    params: &[String],
+    params: &[(String, Option<crate::runtime::Expr>)],
     body: &[Stmt],
 ) -> Result<Arc<CompiledFunction>, String> {
     let mut c = FunctionCompiler::new(&[], &[], false);
     c.slots.insert("self".to_string(), 0);
     for (i, p) in params.iter().enumerate() {
-        c.slots.insert(p.clone(), (i + 1) as u16);
+        c.slots.insert(p.0.clone(), (i + 1) as u16);
     }
     c.next_slot = (params.len() + 1) as u16;
     c.param_count = (params.len() + 1) as u16;
@@ -265,10 +268,10 @@ pub fn compile_program(stmts: &[Stmt]) -> Result<Vec<Arc<CompiledFunction>>, Str
 }
 
 impl FunctionCompiler {
-    fn new(params: &[String], captured_names: &[String], allow_defs: bool) -> Self {
+    fn new(params: &[(String, Option<crate::runtime::Expr>)], captured_names: &[String], allow_defs: bool) -> Self {
         let mut slots = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            slots.insert(p.clone(), i as u16);
+            slots.insert(p.0.clone(), i as u16);
         }        let base = params.len() as u16;
         for (i, c) in captured_names.iter().enumerate() {
             slots.insert(c.clone(), base + i as u16);
@@ -287,7 +290,7 @@ impl FunctionCompiler {
         }
     }
 
-    fn finish(&mut self, name: &str, params: &[String], captured_names: &[String]) -> CompiledFunction {
+    fn finish(&mut self, name: &str, params: &[(String, Option<crate::runtime::Expr>)], captured_names: &[String]) -> CompiledFunction {
         CompiledFunction {
             name: name.to_string(),
             params: params.to_vec(),
@@ -783,15 +786,12 @@ impl FunctionCompiler {
                 if !self.allow_defs {
                     return Err("nested function definitions are not supported in bytecode".into());
                 }
-                // Default parameters are handled by the tree-walk runtime, so a
-                // module containing them falls back to interpretation.
-                if params.iter().any(|(_, d)| d.is_some()) {
-                    return Err("default parameters are not supported in bytecode".into());
-                }
-                let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+                // Default parameters are handled by the runtime and applied via
+                // `FunctionInfo::default_values` at frame push time, so defaulted
+                // params compile like any others.
                 // Module-level functions reference module globals by name at call
                 // time (LoadGlobal), so no captured slots are needed here.
-                let cf = compile_function(name, &names, &[], body)?;
+                let cf = compile_function(name, params, &[], body)?;
                 let idx = self.nested.len() + 1; // main is index 0 in the final table
                 self.nested.push((*cf).clone());
                 let ci = self.const_str(name);
@@ -1151,13 +1151,9 @@ fn local_opcode(&self, op: &Kind) -> Result<Opcode, String> {
                 if !self.allow_defs {
                     return Err("lambdas are not supported in bytecode".into());
                 }
-                if params.iter().any(|(_, d)| d.is_some()) {
-                    return Err("default parameters are not supported in bytecode".into());
-                }
                 let fname = format!("__lambda_{}", self.nested.len());
-                let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
                 // Module-level lambdas reference globals by name, no capture slots.
-                let cf = compile_function(&fname, &names, &[], body)?;
+                let cf = compile_function(&fname, params, &[], body)?;
                 let idx = self.nested.len() + 1;
                 self.nested.push((*cf).clone());
                 self.emit(Opcode::Closure, idx as u16, 0, 0);

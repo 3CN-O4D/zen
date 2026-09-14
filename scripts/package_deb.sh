@@ -16,5 +16,5 @@ dpkg -c target/debian/*.deb | grep -v '/\.$'
 
 echo ""
 echo "To install locally:"
-echo "  sudo dpkg -i target/debian/zen_2.1.0-1_amd64.deb"
+echo "  sudo dpkg -i target/debian/zen_2.2.0-1_amd64.deb"
 echo "  sudo apt-get -f install   # resolve any missing deps"

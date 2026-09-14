@@ -1,0 +1,97 @@
+for i in 0..5 { print(i); }
+s = 0
+for i in 1..101 { s += i; }
+print(s)
+idx = 0
+while idx < 3 { print("w" + idx); idx += 1; }
+n = 0
+while true {
+  n += 1
+  if n == 3 { break; }
+}
+print(n)
+for i in 0..10 {
+  if i % 2 == 0 { continue }
+  print(i)
+}
+count = 0
+for i in 0..10 {
+  for j in 0..10 {
+    count += 1
+    if count > 5 { break }
+  }
+}
+print(count)
+i = 0
+while i < 3 {
+  i += 1
+  j = 0
+  while j < 3 {
+    j += 1
+    print(i * 10 + j)
+  }
+}
+switch 2 {
+  case 1: print("one")
+  case 2: print("two")
+  default: print("other")
+}
+switch 5 {
+  case 1:
+  case 2:
+    print("small")
+  default:
+    print("large")
+}
+switch "hi" {
+  case "hi": print("greeting")
+  default: print("unknown")
+}
+for item in ["x", "y"] { print(item); }
+letters = []
+for c in range(3) { letters.append(c) }
+print(letters)
+for c in "abcdef".toList() { if c == "c" { break } print(c); }
+m = 0
+for i in 0..100 {
+  if i == 50 { continue }
+  m += i
+}
+print(m)
+rng = 0..3
+print(rng)
+labels = []
+for i in 0..3 {
+  inner = []
+  for j in 0..3 {
+    inner.push(i * j)
+  }
+  labels.push(inner)
+}
+print(labels)
+n = 0
+while n < 6 {
+  n += 1
+  if n == 2 { continue }
+  if n == 4 { break }
+  print(n)
+}
+print("after", n)
+total = 0
+for x in [1, 2, 3, 4] { total += x; }
+print(total)
+print(list(range(5)))
+for byte in range(0, 10, 2) { print(byte); }
+desc = 0
+for k in range(5, 0, -1) { desc += k; }
+print(desc)
+counter = 0
+for i in 0..3 {
+  switch i {
+    case 0: counter += 10
+    case 1: counter += 20
+    case 2: counter += 30
+  }
+}
+print(counter)
+print("end")

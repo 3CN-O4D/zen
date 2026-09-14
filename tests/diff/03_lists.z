@@ -1,0 +1,94 @@
+l = [3, 1, 2]
+l.sort()
+print(l)
+l = [5, 2, 8, 1]
+print(l.sorted())
+print(l)
+print(l.map((x) => x * 2))
+print(l.filter((x) => x > 2))
+print(l.reduce((acc, x) => acc + x, 0))
+print(l.sum())
+print(min(l), max(l))
+print(l.first(), l.last())
+print(l.take(2), l.skip(2), l.take(0), l.skip(100))
+print(l.chunk(2))
+print(l.chunk(3))
+print(l.slice(1, 3))
+r = [1,2,3]
+r.push(4)
+print(r)
+print(r.pop())
+print(r)
+print(r.shift())
+print(r)
+r.unshift(0)
+print(r)
+print([1,2,3].push(4))
+print([1,2,3].length)
+print([[1,2],[3,[4]]].flat())
+print([1,2,2,3,3,3].uniq())
+print([1,2,2,3,3,3].unique())
+print([1,2,3].zip([4,5,6]))
+print([1,2,3].zip([4,5]))
+print([1,2,3].zip([4,5,6,7]))
+print([1,2,3][0])
+print([1,2,3][-1])
+print([1,2,3][0:2])
+print([1,2,3].copy())
+print([1,2,3].concat([4,5]))
+print([1,2,3].append(4))
+print([1,2,3].includes(2), [1,2,3].includes(9))
+print([1,2,3].contains(2))
+print([1,2,3].indexOf(2), [1,2,3].indexOf(9))
+print([10,20,30].reduce((acc,x) => acc + x, 0))
+print([1,2,3].map((x) => x).length)
+print([1,2,3].map((x) => x * 10)[1])
+total = [1,2,3].sum()
+print(total)
+print([true,false,true].some((x) => x))
+print([true,true].every((x) => x))
+print([1,2,3].some((x) => x > 2))
+print([1,2,3].every((x) => x > 0))
+print([1,-2,3].filter((x) => x > 0))
+print([1,2,3,4,5].take(3).sum())
+print([1,2,3,4,5].skip(2).sum())
+print([].length, [].sum())
+print([[]].flat().length)
+print([1,2,3].reverse() == [3,2,1])
+x = [1,2,3]
+x[0] = 100
+print(x)
+x[1] += 10
+print(x)
+y = x.copy()
+y[0] = 0
+print(x, y)
+z = [1,2,3]
+q = z
+q[0] = 99
+print(z, q)
+nested = [[1],[2]]
+nested[0].push(5)
+print(nested)
+sw = [1,2,3,4,5]
+temp = sw[0]
+sw[0] = sw[4]
+sw[4] = temp
+print(sw)
+big = []
+for i in 0..5 { big.push(i * i) }
+print(big)
+print([1,2,3].filter((x) => x > 1).map((x) => x * 10))
+print([1,2,3].shuffle().sorted())
+s = [1,2,3].sample(2)
+print(s >= 1 and s <= 3)
+print([1,2,3,4].sum())
+
+
+print([1,2,3].isEmpty(), [].isEmpty())
+print([1,2,3].join("-"))
+print([1,2,3].find((x) => x == 2))
+print([1,2,3].find((x) => x == 99))
+print([1,2,3].includes(1))
+print([1,2,3].indexOf(3))
+print("end")

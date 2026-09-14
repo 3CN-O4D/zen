@@ -42,6 +42,8 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 native-tls = "0.2"
 qrcode = "0.14.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+libloading = "0.8"
+libffi = "3.2"
 
 [profile.release]
 opt-level = 3
@@ -55,7 +57,7 @@ copyright = "2025 zen-lang contributors"
 extended-description = "Zen is a fast, expression-oriented programming language with an ergonomic syntax, native Rust runtime, and powerful built-ins (http, crypto, socket, mqtt, hydra, wa, and more)."
 section = "devel"
 priority = "optional"
-depends = ["libc6", "libssl3 | libssl1.1 | libssl1.0"]
+depends = ["libc6", "libssl3 | libssl1.1 | libssl1.0", "libffi8"]
 recommends = ["nodejs"]
 assets = [
     ["target/release/zen", "usr/bin/zen", "755"],

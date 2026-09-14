@@ -1,0 +1,112 @@
+class Animal {
+  function init(name, sound = "?") {
+    self.name = name
+    self.sound = sound
+  }
+  function speak() { return self.name + " says " + self.sound; }
+  function describe() { return "I am " + self.name; }
+}
+a = new Animal("dog", "woof")
+print(a.speak())
+print(a.describe())
+print(a.name)
+a.name = "cat"
+print(a.speak())
+class Dog extends Animal {
+  function init(name) { super(name, "bark"); }
+  function fetch() { return self.name + " fetches!"; }
+  function speak() { return super() + " loudly"; }
+}
+d = new Dog("rex")
+print(d.speak(), d.fetch())
+b = new Animal("pig")
+print(b.speak())
+class Counter {
+  var count = 0
+  function inc() { self.count += 1; return self.count; }
+}
+cc = new Counter()
+print(cc.count)
+print(cc.inc(), cc.inc(), cc.inc())
+class Shape {
+  function area() { return 0; }
+  function describe() { return "area=" + self.area(); }
+}
+class Square extends Shape {
+  function init(side) { self.side = side; }
+  function area() { return self.side * self.side; }
+}
+sq = new Square(4)
+print(sq.area())
+print(sq.describe())
+class Named {
+  function init(n) { self.n = n; }
+}
+print(new Named("zen").n)
+class A {
+  function init() { self.x = 1; }
+  function getX() { return self.x; }
+}
+class B extends A {
+  function init() { super(); self.x = 2; }
+}
+print(new B().getX())
+class WithClassVar {
+  var shared = 10
+}
+w1 = new WithClassVar()
+w1.shared = 99
+w2 = new WithClassVar()
+print(w2.shared)
+class GetSet {
+  var value = 5
+  function get() { return self.value }
+  function setV(v) { self.value = v }
+}
+gs = new GetSet()
+print(gs.get())
+gs.setV(50)
+print(gs.get())
+class Chain {
+  function init() { self.steps = 0 }
+  function step() { self.steps += 1; return self }
+  function total() { return self.steps }
+}
+ch = new Chain()
+print(ch.step().step().step().total())
+class Mixin1 {
+  function f() { return "m1" }
+}
+class Neither extends Mixin1 {}
+print(new Neither().f())
+class Point {
+  function init(x, y) {
+    self.x = x
+    self.y = y
+  }
+  function distSq() { return self.x * self.x + self.y * self.y; }
+}
+p = new Point(3, 4)
+print(p.x, p.y, p.distSq())
+print(p.distSq() == 25)
+class Greeter {
+  function init(name = "world") { self.name = name }
+  function greet() { return "hello " + self.name }
+}
+print(new Greeter().greet())
+print(new Greeter("zen").greet())
+class Math1 {
+  function double(v) { return v * 2 }
+}
+mp = new Math1()
+print(mp.double(21))
+class Over {
+  function f() { return "base" }
+}
+class OverChild extends Over {
+  function f() { return "child" }
+}
+print(new Over().f(), new OverChild().f())
+class NoFields {}
+nf = new NoFields()
+print("end")

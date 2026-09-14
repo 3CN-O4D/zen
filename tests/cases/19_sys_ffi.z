@@ -1,0 +1,138 @@
+# sys/ffi modules — raw system calls and arbitrary C library calls.
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import sys
+import ffi
+
+# --- process / identity info
+check(sys.getpid() > 0, "getpid")
+check(sys.getppid() > 0, "getppid")
+check(sys.getuid() >= 0, "getuid")
+check(sys.geteuid() >= 0, "geteuid")
+check(sys.getgid() >= 0, "getgid")
+check(sys.getegid() >= 0, "getegid")
+
+# --- system info
+let u = sys.uname()
+check(typeof(u) == "dict" and u.has("machine") and len(u.machine) > 0, "uname")
+check(len(sys.gethostname()) > 0, "gethostname")
+check(typeof(sys.times()) == "dict", "times")
+check(sys.sysconf(sys.SC_CLK_TCK) > 0, "sysconf SC_CLK_TCK")
+check(sys.sysconf(sys.SC_PAGESIZE) > 0, "sysconf SC_PAGESIZE")
+let clk = sys.clock_gettime(sys.CLOCK_MONOTONIC)
+check(clk > 0, "clock_gettime")
+sys.nanosleep(0.001)
+
+# --- errno / strerror
+try { sys.close(123456789) } catch as e { }
+check(sys.errno() != 0, "errno set by bad close")
+let em = sys.strerror(sys.errno())
+check(typeof(em) == "string" and len(em) > 0, "strerror")
+
+# --- pipes
+let p = sys.pipe()
+check(typeof(p) == "list" and len(p) == 2, "pipe")
+check(sys.write(p[1], "hi") == 2, "pipe write count")
+check(sys.read_str(p[0], 8) == "hi", "pipe read_str roundtrip")
+sys.close(p[0])
+sys.close(p[1])
+
+# --- raw fd file ops
+let f = "/tmp/zen_test/case19.dat"
+let fd = sys.open(f, sys.O_CREAT + sys.O_TRUNC + sys.O_RDWR, 420)
+check(fd > 0, "open creat")
+check(sys.write(fd, "zenrawfd!") == 9, "write count to file")
+check(sys.lseek(fd, 0, sys.SEEK_SET) == 0, "lseek rewind")
+check(sys.read_str(fd, 9) == "zenrawfd!", "read_str from file")
+check(sys.lseek(fd, 0, sys.SEEK_END) == 9, "lseek SEEK_END")
+let st = sys.fstat(fd)
+check(typeof(st) == "dict" and st.size == 9, "fstat size")
+sys.close(fd)
+let st2 = sys.stat(f)
+check(st2.size == 9, "stat size")
+check(sys.access(f, sys.R_OK + sys.W_OK), "access R_OK+W_OK")
+check(sys.unlink(f), "unlink")
+
+# --- dup / dup2 / fcntl
+let fl = sys.fcntl(1, sys.F_GETFL)
+check(fl >= 0, "fcntl F_GETFL")
+let dupfd = sys.dup(1)
+check(dupfd > 0, "dup")
+check(sys.dup2(dupfd, 55) == 55, "dup2")
+sys.close(dupfd)
+sys.close(55)
+
+# --- mmap + peek/poke + mem_read/write
+let mem = sys.mmap(4096, sys.PROT_READ + sys.PROT_WRITE, sys.MAP_ANONYMOUS + sys.MAP_PRIVATE, -1, 0)
+check(mem > 0, "mmap")
+sys.poke64(mem, 1234)
+check(sys.peek64(mem) == 1234, "poke/peek64")
+sys.poke32(mem, 0x11223344)
+check(sys.peek32(mem) == 0x11223344, "poke/peek32")
+sys.poke16(mem + 2, 0xABCD)
+check(sys.peek16(mem + 2) == 0xABCD, "poke/peek16")
+sys.poke8(mem, 0x7F)
+check(sys.peek8(mem) == 0x7F, "poke/peek8")
+sys.mem_write(mem, "68656c6c6f")
+check(sys.mem_read(mem, 5) == "68656c6c6f", "mem_write/mem_read hex")
+check(sys.munmap(mem, 4096), "munmap")
+
+# --- syscall() raw
+let pid1 = sys.getpid()
+check(sys.syscall(39) == pid1, "raw syscall getpid matches sys.getpid")
+
+# --- ffi: dlopen + call
+let h = ffi.load("libc.so.6")
+check(h > 0, "ffi.load libc")
+check(ffi.call(h, "strlen", ["hello world"], "int") == 11, "ffi.call strlen")
+check(ffi.call(h, "abs", [-42], "int") == 42, "ffi.call abs neg int")
+check(ffi.call(h, "getenv", ["USER"], "str") != null, "ffi.call getenv str")
+let raddr = ffi.symbol(h, "strlen")
+check(raddr > 0, "ffi.symbol strlen")
+check(ffi.call_at(raddr, ["zendraw"], "int") == 7, "ffi.call_at strlen")
+check(ffi.call(h, "write", [1, {"buf": "686900"}, 2], "int") == 2, "ffi.call write buf")
+
+let m = ffi.load("libm.so.6")
+check(m > 0, "ffi.load libm")
+check(ffi.call(m, "ceil", [{"type": "double", "value": 1.2}], "double") == 2, "ffi.call ceil double")
+check(ffi.call(m, "floor", [{"type": "double", "value": -1.7}], "double") == -2, "ffi.call floor double")
+let p2 = ffi.call(m, "pow", [{"type": "double", "value": 2.0}, {"type": "double", "value": 10.0}], "double")
+check(abs(p2 - 1024.0) < 0.0001, "ffi.call pow two doubles")
+
+# --- ffi: typed ints
+check(ffi.call(h, "abs", [{"type": "int", "value": -999}], "int") == 999, "ffi.call typed int")
+
+# --- ffi: memory helpers
+let buf = ffi.malloc(64)
+check(buf > 0, "ffi.malloc")
+let re = ffi.realloc(buf, 128)
+check(re > 0, "ffi.realloc")
+ffi.set(buf, 65, 3)
+check(ffi.read(buf, 3) == "414141", "ffi.set memset")
+ffi.write(buf, "5772697474656e0a")
+check(ffi.read(buf, 8) == "5772697474656e0a", "ffi.read after write")
+ffi.free(buf)
+let tmp = ffi.malloc(8)
+ffi.free(tmp)
+check(true, "ffi.free both allocs")
+
+check(ffi.strerror(0) != "", "ffi.strerror")
+check(ffi.sizeof("long") == 8, "ffi.sizeof long")
+check(ffi.sizeof("int") == 4, "ffi.sizeof int")
+check(ffi.sizeof("ptr") == 8, "ffi.sizeof ptr")
+check(ffi.alignof("double") == 8, "ffi.alignof double")
+check(ffi.errno() != null, "ffi.errno accessible")
+
+check(ffi.close(h), "ffi.close")
+check(ffi.close(m), "ffi.close libm")
+
+if fails == 0 {
+    print("19_sys_ffi: all ok")
+}
+exit(if fails > 0 { 1 } else { 0 })

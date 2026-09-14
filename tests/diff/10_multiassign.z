@@ -1,0 +1,46 @@
+let [a, b] = [1, 2]
+print(a, b)
+let [c, d] = [1, 2]
+print(c, d)
+let [m, n] = [1, 2]
+let [first, second] = [m, n]
+print(first, second)
+let [p, q, r] = [10, 20, 30]
+print(p, q, r)
+x1 = 5
+x2 = x1
+print(x1, x2)
+s1 = "multi"
+s2 = s1
+s3 = s2
+print(s1, s2, s3)
+list1 = [1, 2]
+let [i1, i2] = list1
+print(i1, i2)
+d1 = {"k": 1}
+d1["k"] += 2
+print(d1["k"])
+l1 = [1, 2, 3]
+t0 = l1[0]
+l1[0] = l1[1]
+l1[1] = t0
+print(l1)
+num1 = 10
+num2 = 20
+num1 = num2
+print(num1, num2)
+u = 0
+v = 0
+u += 1
+v += 2
+print(u, v)
+let [a2, b2] = [5, 6]
+print(a2 + b2)
+let [single] = [99]
+print(single)
+let [x3, y3] = [10, 20, 30]
+print(x3, y3)
+arr = [1, 2, 3]
+arr[2] = arr[0]
+print(arr)
+print("end")

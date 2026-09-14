@@ -1,0 +1,53 @@
+d = {"a": 1, "b": 2}
+print(d["a"], d["b"])
+print(d.get("a"), d.get("z"), d.get("z", 99))
+print(d.keys(), d.values(), d.length(), d.len)
+d["c"] = 3
+print(d)
+print(d.contains("a"), d.contains("z"))
+print(d.has("b"))
+print("a" in d, "z" in d)
+d2 = {"x": 1, "y": 2}
+d2["x"] += 5
+print(d2)
+print(d2.items())
+print(d2.omit("x"))
+print(d2.pick("a", "b"))
+d3 = {}
+print(d3.len)
+print({"a": 1}.keys()[0])
+print({"a": {"b": {"c": 42}}}.get("a").get("b").get("c"))
+print({"a": 1, "b": 2}.get("a") * 10)
+print({"1": 100}["1"])
+print({"a":1}.merge({"b":2}))
+print({"a":1}.update({"b":2}))
+print({"a": 1, "b": 2, "c": 3}.keys().length)
+fi = {"a": 1}
+print(fi.has("a"))
+print(fi.has("z"))
+x = {"a": 1}
+x["b"] = 2
+x["c"] = 3
+print(x.length())
+print(x.delete("b"))
+print(x)
+print("x" in x)
+y = {"a": 1}
+y.delete("z")
+print(y)
+print({"a": 1, "b": 2}.items().length)
+nested = {}
+nested["x"] = {"y": [1, 2, 3]}
+print(nested["x"]["y"][1])
+for k in {"a":1,"b":2}.keys() { print(k); }
+for v in {"a":1,"b":2}.values() { print(v); }
+for it in {"a":1,"b":2}.items() { print(it); }
+empty = {}
+print(empty.get("missing"), empty.get("missing", 42))
+big = {"k1": 1, "k2": 2, "k3": 3}
+print(big.keys().sort())
+print(big.values().sort())
+print(big.has("k2"), big.has("nope"))
+merged = {"a": 1}.merge({"a": 100, "b": 2})
+print(merged["a"], merged["b"])
+print("end")

@@ -1,0 +1,101 @@
+try {
+  throw "boom"
+} catch e {
+  print("caught: " + e)
+}
+try {
+  print([1,2][0])
+  print("index ok")
+} catch e {
+  print("err")
+}
+def mightFail(n) {
+  if n < 0 { throw "negative!" }
+  return n
+}
+try {
+  mightFail(-1)
+} catch e {
+  print("typed: " + e)
+}
+try {
+  throw 42
+} catch e {
+  print(e)
+}
+try {
+  try {
+    throw "inner"
+  } finally {
+    print("finally ran")
+  }
+} catch e {
+  print("outer caught: " + e)
+}
+k = 0
+try {
+  try {
+    k = 1
+    throw "x"
+  } catch e {
+    k = 2
+  }
+} finally {
+  k = 3
+}
+print(k)
+result = null
+try {
+  result = "worked"
+} catch e {
+  result = "failed"
+}
+print(result)
+def wrap() {
+  try {
+    return "ret"
+  } finally {
+    print("from finally")
+  }
+}
+print(wrap())
+try {
+  [][0]
+} catch e {
+  print("oob caught")
+}
+errs = []
+for i in 0..3 {
+  try {
+    if i == 1 { throw "mid" }
+    errs.push("ok" + i)
+  } catch e {
+    errs.push(e)
+  }
+}
+print(errs)
+try {
+  throw null
+} catch e {
+  print("null throw caught")
+}
+def deepThrow(n) {
+  if n == 0 { throw "deep" }
+  return deepThrow(n - 1)
+}
+try {
+  deepThrow(50)
+} catch e {
+  print("deep: " + e)
+}
+try {
+  throw {"type": "Custom", "message": "rich"}
+} catch Custom as e {
+  print("custom: " + e)
+}
+try {
+  undefinedFunction()
+} catch e {
+  print("uf: " + e)
+}
+print("reached end")

@@ -386,10 +386,15 @@ fn read_value(r: &mut Reader, depth: usize) -> Option<Value> {
 // ─── compiled function codec ─────────────────────────────────────────────
 
 fn write_cf(w: &mut Writer, cf: &CompiledFunction) -> bool {
+    // Default-parameter expressions are AST (not serializable); a cache entry
+    // would silently lose them, so never cache functions with defaults.
+    if cf.params.iter().any(|(_, d)| d.is_some()) {
+        return false;
+    }
     w.str(&cf.name);
     w.u32(cf.params.len() as u32);
     for p in &cf.params {
-        w.str(p);
+        w.str(&p.0);
     }
     w.u16(cf.param_count);
     w.u32(cf.captured_names.len() as u32);
@@ -418,7 +423,7 @@ fn read_cf(r: &mut Reader) -> Option<CompiledFunction> {
     let pn = r.u32()? as usize;
     let mut params = Vec::with_capacity(pn.min(4096));
     for _ in 0..pn {
-        params.push(r.str()?);
+        params.push((r.str()?, None));
     }
     let param_count = r.u16()?;
     let cn = r.u32()? as usize;

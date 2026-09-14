@@ -1,0 +1,57 @@
+print(true and false)
+print(true or false)
+print(not true, not false)
+print(0 and 1, 1 and 2)
+print(0 or 1, 1 or 2)
+print(null and "x", null or "x")
+print("" and "y", "" or "y")
+x = null
+y = x or "default"
+print(y)
+print(5 and 0)
+print(3 > 2 and 5 < 10)
+print(3 > 2 or 5 < 10)
+if 5 > 3 { print("big") }
+if "hello" { print("str truthy") }
+if 0 { print("zero truthy") } else { print("zero falsy") }
+if "" { print("empty truthy") } else { print("empty falsy") }
+if [] { print("empty list truthy") }
+if 0.0 { print("0.0 truthy") } else { print("0.0 falsy") }
+if null { print("null truthy") } else { print("null falsy") }
+print(!!5, !!0, !!null)
+big = 100
+small = 1
+z = big > small ? "biger" : "smaller"
+print(z)
+print(true == 1)
+print(false == 0)
+print(null == null)
+print("5" == 5)
+print(1 == 1.0)
+print("a" != "b")
+if 1000 { print("large truthy") }
+if -0.1 { print("neg truthy") }
+print(3 in [1,3,5])
+print(2 in [1,3,5])
+print("b" in {"b": 2})
+print("z" not in {"a": 1})
+print(5 > 3 ? "yes" : "no")
+c = true ? 1 : 2
+print(c)
+print(false ? 1 : 2)
+print(null ?? "fallback")
+print(3 ?? "fallback")
+print(0 ?? "fallback")
+q = "x"
+print(q ?? "y")
+if {} { print("dict truthy") }
+print("" == "", "a" == "a", 5 == 5, 5 == 5.0)
+print("a" < "b", "b" < "a", "a" <= "b", "a" >= "a")
+print(1 < 2, 2 <= 2, 3 > 2, 3 >= 4)
+print(1 == "1" or true)
+print(not null)
+r = 4 > 2 ? "gt" : "lt"
+print(r)
+word = "hello"
+print(word == "hello" and 1 < 2)
+print("end")

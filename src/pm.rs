@@ -33,7 +33,7 @@ fn finish_hex(digest: sha2::digest::Output<Sha256>) -> String {
 /// contents. Used to verify local-directory installs against their source.
 fn dir_sha256(dir: &Path) -> Result<String, String> {
     let mut files: Vec<PathBuf> = Vec::new();
-    collect_files(dir, dir, &mut files)?;
+    collect_files(dir, &mut files)?;
     files.sort();
     let mut hasher = Sha256::new();
     for file in &files {
@@ -63,8 +63,8 @@ pub fn http_get(url: &str) -> Result<Vec<u8>, String> {
 /// Resolve an install spec into a fetchable source + a human label.
 /// Accepts: `owner/repo[@tag]`, `http(s)://...`, `file:///path`, or a plain path.
 fn resolve_source(spec: &str) -> (String, String) {
-    if spec.starts_with("file://") {
-        let rest = spec[7..].to_string();
+    if let Some(rest_str) = spec.strip_prefix("file://") {
+        let rest = rest_str.to_string();
         let abs = std::fs::canonicalize(&rest)
             .unwrap_or_else(|_| Path::new(&rest).to_path_buf())
             .to_string_lossy()
@@ -600,7 +600,7 @@ pub fn pack(dir: &str) -> Result<String, String> {
     let enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     let mut builder = tar::Builder::new(enc);
     let mut files: Vec<PathBuf> = Vec::new();
-    collect_files(dir_path, dir_path, &mut files)?;
+    collect_files(dir_path, &mut files)?;
     for path in &files {
         let rel = path.strip_prefix(dir_path).map_err(|e| e.to_string())?;
         let content = fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
@@ -624,7 +624,7 @@ pub fn pack(dir: &str) -> Result<String, String> {
     Ok(out_name)
 }
 
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     for entry in fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -635,7 +635,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), 
         }
         let path = entry.path();
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            collect_files(root, &path, out)?;
+            collect_files(&path, out)?;
         } else {
             out.push(path);
         }

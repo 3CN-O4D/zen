@@ -270,7 +270,7 @@ impl PartialEq for Value {
 }
 
 impl Value {
-    fn type_name(&self) -> &'static str {
+    pub(crate) fn type_name(&self) -> &'static str {
         match self {
             Self::Null => "null",
             Self::Bool(_) => "bool",
@@ -1007,53 +1007,63 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 col += 1;
             }
             let word = &source[begin..i];
-            let kind = match word {
-                "let" => Kind::Let,
-                "const" => Kind::Const,
-                "var" | "global" => Kind::Var,
-                "print" => Kind::Print,
-                "if" => Kind::If,
-                "elif" => Kind::Elif,
-                "else" => Kind::Else,
-                "while" => Kind::While,
-                "for" => Kind::For,
-                "in" => Kind::In,
-                "break" => Kind::Break,
-                "continue" => Kind::Continue,
-                "function" | "func" | "fn" | "procedure" | "proc" => Kind::Function,
-                "def" => Kind::Def,
-                "return" => Kind::Return,
-                "class" => Kind::Class,
-                "new" => Kind::New,
-                "extends" => Kind::Extends,
-                "inherit" => Kind::Extends,
-                "import" => Kind::Import,
-                "from" => Kind::From,
-                "include" => Kind::Include,
-                "load" => Kind::Load,
-                "as" => Kind::As,
-                "native" => Kind::Native,
-                "try" => Kind::Try,
-                "catch" | "except" => Kind::Catch,
-                "finally" => Kind::Finally,
-                "throw" | "raise" => Kind::Throw,
-                "super" => Kind::Super,
-                "typeof" => Kind::Typeof,
-                "is" => Kind::Is,
-                "switch" => Kind::Switch,
-                "case" => Kind::Case,
-                "default" => Kind::Default,
-                "match" => Kind::Match,
-                "when" => Kind::When,
-                "lambda" => Kind::Lambda,
-                "with" => Kind::With,
-                "and" => Kind::And,
-                "or" => Kind::Or,
-                "not" => Kind::Not,
-                "true" => Kind::True,
-                "false" => Kind::False,
-                "null" => Kind::Null,
-                _ => Kind::Ident(word.into()),
+            // After a dot, a word is always a member name — even if it
+            // is also a keyword (e.g. ffi.load, obj.default, dict.null).
+            let after_dot = matches!(
+                out.last().map(|t| &t.kind),
+                Some(Kind::Dot) | Some(Kind::SafeDot)
+            );
+            let kind = if after_dot {
+                Kind::Ident(word.into())
+            } else {
+                match word {
+                    "let" => Kind::Let,
+                    "const" => Kind::Const,
+                    "var" | "global" => Kind::Var,
+                    "print" => Kind::Print,
+                    "if" => Kind::If,
+                    "elif" => Kind::Elif,
+                    "else" => Kind::Else,
+                    "while" => Kind::While,
+                    "for" => Kind::For,
+                    "in" => Kind::In,
+                    "break" => Kind::Break,
+                    "continue" => Kind::Continue,
+                    "function" | "func" | "fn" | "procedure" | "proc" => Kind::Function,
+                    "def" => Kind::Def,
+                    "return" => Kind::Return,
+                    "class" => Kind::Class,
+                    "new" => Kind::New,
+                    "extends" => Kind::Extends,
+                    "inherit" => Kind::Extends,
+                    "import" => Kind::Import,
+                    "from" => Kind::From,
+                    "include" => Kind::Include,
+                    "load" => Kind::Load,
+                    "as" => Kind::As,
+                    "native" => Kind::Native,
+                    "try" => Kind::Try,
+                    "catch" | "except" => Kind::Catch,
+                    "finally" => Kind::Finally,
+                    "throw" | "raise" => Kind::Throw,
+                    "super" => Kind::Super,
+                    "typeof" => Kind::Typeof,
+                    "is" => Kind::Is,
+                    "switch" => Kind::Switch,
+                    "case" => Kind::Case,
+                    "default" => Kind::Default,
+                    "match" => Kind::Match,
+                    "when" => Kind::When,
+                    "lambda" => Kind::Lambda,
+                    "with" => Kind::With,
+                    "and" => Kind::And,
+                    "or" => Kind::Or,
+                    "not" => Kind::Not,
+                    "true" => Kind::True,
+                    "false" => Kind::False,
+                    "null" => Kind::Null,
+                    _ => Kind::Ident(word.into()),
+                }
             };
             out.push(Token {
                 kind,
@@ -3390,6 +3400,16 @@ enum Flow {
     Throw(Value),
 }
 
+/// Outcome of a dynamic function-value call inside `run_bytecode`.
+enum CallPath {
+    /// The callee had compiled bytecode and a VM frame was pushed; the
+    /// interpreter loop should `continue` without going through the tree-walk.
+    FramePushed,
+    /// No compiled body was available; it ran through the tree-walk `call`
+    /// machinery and produced a `Flow`.
+    Executed(Flow),
+}
+
 fn bind_list_pattern(
     vars: &mut indexmap::IndexMap<String, Value>,
     patterns: &[PatternItem],
@@ -4267,8 +4287,14 @@ impl Vm {
         // binascii module
         crate::binascii::init_binascii_module(self);
 
+        // sys module (raw system calls / low-level OS access)
+        crate::sys::init_sys_module(self);
+
+        // ffi module (raw dynamic-library calls via libffi)
+        crate::ffi::init_ffi_module(self);
+
         // Register all core native functions eagerly
-            const NATIVES: [&str; 470] = [
+            const NATIVES: [&str; 577] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -4739,6 +4765,113 @@ impl Vm {
             "binascii_unhexlify",
             "binascii_a2b_base64",
             "binascii_b2a_base64",
+            "sys_syscall",
+            "sys_open",
+            "sys_close",
+            "sys_read",
+            "sys_read_str",
+            "sys_write",
+            "sys_write_bytes",
+            "sys_lseek",
+            "sys_dup",
+            "sys_dup2",
+            "sys_pipe",
+            "sys_fork",
+            "sys_exec",
+            "sys_kill",
+            "sys_getpid",
+            "sys_getppid",
+            "sys_getuid",
+            "sys_geteuid",
+            "sys_getgid",
+            "sys_getegid",
+            "sys_umask",
+            "sys_stat",
+            "sys_lstat",
+            "sys_fstat",
+            "sys_access",
+            "sys_chmod",
+            "sys_chown",
+            "sys_fchown",
+            "sys_symlink",
+            "sys_readlink",
+            "sys_link",
+            "sys_truncate",
+            "sys_ftruncate",
+            "sys_fsync",
+            "sys_fdatasync",
+            "sys_unlink",
+            "sys_rmdir",
+            "sys_mkfifo",
+            "sys_mknod",
+            "sys_waitpid",
+            "sys_wifexited",
+            "sys_wifsignaled",
+            "sys_wifstopped",
+            "sys_wexitstatus",
+            "sys_wtermsig",
+            "sys_nanosleep",
+            "sys_mmap",
+            "sys_munmap",
+            "sys_mprotect",
+            "sys_mremap",
+            "sys_mlock",
+            "sys_munlock",
+            "sys_peek8",
+            "sys_peek16",
+            "sys_peek32",
+            "sys_peek64",
+            "sys_poke8",
+            "sys_poke16",
+            "sys_poke32",
+            "sys_poke64",
+            "sys_mem_read",
+            "sys_mem_write",
+            "sys_ioctl",
+            "sys_fcntl",
+            "sys_poll",
+            "sys_socket",
+            "sys_socketpair",
+            "sys_bind",
+            "sys_listen",
+            "sys_accept",
+            "sys_accept4",
+            "sys_connect",
+            "sys_getsockname",
+            "sys_getpeername",
+            "sys_send",
+            "sys_sendto",
+            "sys_recv",
+            "sys_recvfrom",
+            "sys_shutdown",
+            "sys_setsockopt",
+            "sys_getsockopt",
+            "sys_gethostname",
+            "sys_uname",
+            "sys_clock_gettime",
+            "sys_getrlimit",
+            "sys_setrlimit",
+            "sys_sysconf",
+            "sys_times",
+            "sys_strerror",
+            "sys_errno",
+            "ffi_load",
+            "ffi_close",
+            "ffi_symbol",
+            "ffi_call",
+            "ffi_call_at",
+            "ffi_malloc",
+            "ffi_realloc",
+            "ffi_free",
+            "ffi_read",
+            "ffi_write",
+            "ffi_str",
+            "ffi_set",
+            "ffi_copy",
+            "ffi_errno",
+            "ffi_strerror",
+            "ffi_sizeof",
+            "ffi_alignof",
         ];
         for name in NATIVES {
             self.native_functions.insert(name.to_string(), native_for(name));
@@ -5209,13 +5342,11 @@ Expr::Index(obj, idx) => {
                     .cloned()
                     .collect();
                 captured_names.sort();
-                let has_defaults = params.iter().any(|(_, d)| d.is_some());
+                let _has_defaults = params.iter().any(|(_, d)| d.is_some());
                 let default_values = self.eval_default_values(params)?;
-                let bytecode = if has_defaults {
-                    None
-                } else {
+                let bytecode = {
                     std::env::set_var("ZEN_DBG_FN", format!("eval:{fname}"));
-                    let bc = crate::bytecode::compile_function(&fname, &names, &captured_names, body).ok();
+                    let bc = crate::bytecode::compile_function(&fname, params, &captured_names, body).ok();
                     std::env::remove_var("ZEN_DBG_FN");
                     bc
                 };
@@ -5373,7 +5504,7 @@ Expr::Index(obj, idx) => {
                     _ => {
                         // General callee: any expression evaluating to a
                         // callable (function value, native, or lambda).
-                        let target = self.eval(callee)?;
+                        let target = crate::runtime::deref_cell(&self.eval(callee)?);
                         let name = match &target {
                             Value::Function(n) | Value::NativeFunction(n) => n.clone(),
                             other => {
@@ -6449,6 +6580,78 @@ Expr::Index(obj, idx) => {
             _ => Err("unsupported operator".into()),
         }
     }
+    /// `ZEN_NATIVE_ONLY=mod1,mod2` bypasses `ZEN_PURE` overrides for the
+    /// listed modules, falling back to the native (Rust) tier.
+    fn native_only_disables(module: &str) -> bool {
+        use std::sync::OnceLock;
+        static ON: OnceLock<Vec<String>> = OnceLock::new();
+        let list = ON.get_or_init(|| {
+            std::env::var("ZEN_NATIVE_ONLY")
+                .unwrap_or_default()
+                .split([',', ' ', ';'])
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        });
+        list.iter().any(|s| s == module)
+    }
+
+    /// Merge a builtin (Rust) module dict with its `std/<name>.z` companion.
+    /// Returns the merged member map, or `None` when `module` is not a
+    /// native dict in `vars`.
+    ///
+    /// A companion that exports the control member `ZEN_PURE = true` takes
+    /// precedence over the native tier (a user-space file always does too);
+    /// native members remain reachable through the injected `native`
+    /// sub-dict so `.z` implementations can delegate hot paths. Without the
+    /// marker the native tier wins and a companion only fills gaps.
+    fn merge_builtin_module(
+        &mut self,
+        module: &str,
+        namespace: &str,
+    ) -> Option<HashMap<String, Value>> {
+        let existing = match self.vars.get(module).cloned()? {
+            Value::Dict(d) => d,
+            _ => return None,
+        };
+        let resolved = self.resolve_module(module).ok();
+        let user_space = resolved
+            .as_ref()
+            .map(|p| !std::path::Path::new(p).is_absolute())
+            .unwrap_or(false);
+        let mut map: HashMap<String, Value> = HashMap::new();
+        if let Some(path) = &resolved {
+            if let Ok(module_vars) = self.run_module(path, namespace) {
+                for (k, v) in module_vars {
+                    map.insert(k, v);
+                }
+            }
+        }
+        let pure = !Self::native_only_disables(module)
+            && map
+                .get("ZEN_PURE")
+                .map(|v| {
+                    matches!(v, Value::Bool(true)) || matches!(v, Value::Number(n) if *n != 0.0)
+                })
+                .unwrap_or(false);
+        let mut map = map;
+        if pure {
+            map.remove("ZEN_PURE");
+        }
+        let native_super = existing.clone();
+        for (k, v) in Arc::unwrap_or_clone(existing) {
+            if pure || user_space {
+                map.entry(k).or_insert(v);
+            } else {
+                map.insert(k, v);
+            }
+        }
+        if pure {
+            map.insert("native".into(), Value::Dict(native_super));
+        }
+        Some(map)
+    }
+
     /// Shared import machinery used by both tree-walk execution and the
     /// bytecode `Import` opcode.
     fn do_import(&mut self, imports: Vec<(String, Option<String>)>) -> Result<Flow, String> {
@@ -6463,31 +6666,7 @@ Expr::Index(obj, idx) => {
             // Check if the module is already loaded as a dict in
             // vars under its REAL name (`import string as st`
             // must find vars["string"], not vars["st"]).
-            if let Some(Value::Dict(existing)) = self.vars.get(module.as_str()).cloned() {
-                // Resolve the .zen companion file (if any) BEFORE merging.
-                // A user-space file (relative to the current directory)
-                // overrides the builtin's entries so scripts can extend or
-                // stub native modules; PM/std sources only fill gaps.
-                let resolved = self.resolve_module(&module).ok();
-                let user_space = resolved
-                    .as_ref()
-                    .map(|p| !std::path::Path::new(p).is_absolute())
-                    .unwrap_or(false);
-                let mut map: HashMap<String, Value> = HashMap::new();
-                if let Some(path) = &resolved {
-                    if let Ok(module_vars) = self.run_module(path, &name) {
-                        for (k, v) in module_vars {
-                            map.insert(k, v);
-                        }
-                    }
-                }
-                for (k, v) in Arc::unwrap_or_clone(existing) {
-                    if user_space {
-                        map.entry(k).or_insert(v);
-                    } else {
-                        map.insert(k, v);
-                    }
-                }
+            if let Some(map) = self.merge_builtin_module(&module, &name) {
                 self.imported_modules.insert(name.clone(), map.clone());
                 let btree: indexmap::IndexMap<String, Value> = map.into_iter().collect();
                 self.vars.insert(name, Value::Dict(Arc::new(btree)));
@@ -6584,8 +6763,8 @@ Expr::Index(obj, idx) => {
         module: &str,
         items: &[(String, Option<String>)],
     ) -> Result<Flow, String> {
-        let vars = if let Some(Value::Dict(existing)) = self.vars.get(module).cloned() {
-            Arc::unwrap_or_clone(existing).into_iter().collect()
+        let vars = if let Some(map) = self.merge_builtin_module(module, module) {
+            map.into_iter().collect()
         } else if let Some(map) = self.imported_modules.get(module).cloned() {
             map.into_iter().collect()
         } else if let Some(factory) = self.stdlib_factories.get(module).cloned() {
@@ -6628,9 +6807,8 @@ Expr::Index(obj, idx) => {
         Ok(Flow::Normal)
     }
     fn do_star_import(&mut self, module: &str) -> Result<Flow, String> {
-                    let vars = if let Some(Value::Dict(existing)) = self.vars.get(module).cloned()
-                    {
-                        Arc::unwrap_or_clone(existing).into_iter().collect()
+                    let vars = if let Some(map) = self.merge_builtin_module(module, module) {
+                        map.into_iter().collect()
                     } else if let Some(map) = self.imported_modules.get(module).cloned() {
                         map.into_iter().collect()
                     } else if let Some(factory) = self.stdlib_factories.get(module).cloned() {
@@ -6739,6 +6917,42 @@ Expr::Index(obj, idx) => {
             format!("\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n \x1b[1;34m-->\x1b[0m {}:1\n  \x1b[1;34m|\x1b[0m\n  \x1b[1;31m= {}\x1b[0m", e, path, e)
         };
         module_vm.exec_source_cached(path, &source, &parse_err)?;
+        // Qualify bare `__lambda_N` names that still reference THIS module's
+        // functions. The compiler names freshly-defined lambdas from a single
+        // global counter, and the importing program's own lambdas use the same
+        // counter: after `import`, a later `let f = fn...` in the caller can
+        // OVERWRITE `functions["__lambda_0"]` and silently redirect any module
+        // helper whose captured value still points at the bare name. Rewrite
+        // to `{namespace}::__lambda_N` so sibling module calls always resolve
+        // to the namespaced registration kept inside this module's own space.
+        let qualify = |v: &mut Value| match v {
+            Value::Function(name) => {
+                if name.starts_with("__lambda") && !name.contains("::") {
+                    *name = format!("{namespace}::{name}");
+                }
+            }
+            Value::Cell(arc) => {
+                if let Ok(mut inner) = arc.lock() {
+                    if let Value::Function(name) = &mut *inner {
+                        if name.starts_with("__lambda") && !name.contains("::") {
+                            *name = format!("{namespace}::{name}");
+                        }
+                    }
+                }
+            }
+            _ => {}
+        };
+        for value in module_vm.vars.values_mut() {
+            qualify(value);
+        }
+        for (_, function) in module_vm.functions.iter_mut() {
+            for (_, v) in function.captured.iter_mut() {
+                qualify(v);
+            }
+            for (_, v) in function.effective_captured.iter_mut() {
+                qualify(v);
+            }
+        }
         // Register the module's functions under a namespaced key in the caller so
         // `module.func(...)` calls resolve through self.functions.
         let mut art_functions: Vec<(String, Function)> = Vec::new();
@@ -7367,6 +7581,85 @@ Expr::Index(obj, idx) => {
 
 Err(format!("undefined function: `{name}`"))
     }
+    /// Push an iterative VM frame for a dynamic function-value call instead of
+    /// recursing through the tree-walk `call` machinery. Falls back to
+    /// tree-walk execution when the callee was never compiled.
+    #[allow(clippy::too_many_arguments)]
+    fn call_or_push_frame(
+        &mut self,
+        fname: &str,
+        argc: usize,
+        start: usize,
+        callee_on_stack: bool,
+        cur: &mut Arc<crate::bytecode::CompiledFunction>,
+        ip: &mut usize,
+        base: &mut usize,
+        locals: &mut Vec<Value>,
+        stack: &mut Vec<Value>,
+        frames: &mut Vec<(Arc<crate::bytecode::CompiledFunction>, usize, usize, usize, usize)>,
+    ) -> Result<CallPath, String> {
+        if let Some(function) = self.functions.get(fname).cloned() {
+            let total = function.params.len();
+            if argc > total || argc < function.required_count() {
+                return Err(format!(
+                    "{fname} expects {} arguments, got {}",
+                    total, argc
+                ));
+            }
+            if let Some(cbc) = &function.bytecode {
+                let cbc = Arc::clone(cbc);
+                let captured = if function.captured.is_empty() {
+                    HashMap::new()
+                } else {
+                    function.captured.clone()
+                };
+                self.call_cache = Some(CallCache {
+                    name: fname.to_string(),
+                    bc: Arc::clone(&cbc),
+                    param_count: total,
+                    captured: captured.clone(),
+                    generation: self.fn_generation,
+                });
+                let new_base = locals.len();
+                let ret_at = if callee_on_stack {
+                    start.saturating_sub(1)
+                } else {
+                    start
+                };
+                frames.push((Arc::clone(cur), *ip, *base, new_base, ret_at));
+                for i in 0..argc {
+                    locals.push(stack[start + i].clone());
+                }
+                for i in argc..total {
+                    locals.push(function.default_values[i].clone().unwrap_or(Value::Null));
+                }
+                stack.truncate(ret_at);
+                locals.resize(new_base + cbc.local_count as usize, Value::Null);
+                for (i, cn) in cbc.captured_names.iter().enumerate() {
+                    if let Some(v) = captured.get(cn) {
+                        locals[new_base + cbc.param_count as usize + i] = v.clone();
+                    }
+                }
+                *cur = cbc;
+                *ip = 0;
+                *base = new_base;
+                return Ok(CallPath::FramePushed);
+            }
+        }
+        let mut vals = Vec::with_capacity(argc);
+        for i in 0..argc {
+            vals.push(stack[start + i].clone());
+        }
+        let ret_at = if callee_on_stack {
+            start.saturating_sub(1)
+        } else {
+            start
+        };
+        stack.truncate(ret_at);
+        let flow = self.call(fname, vals)?;
+        Ok(CallPath::Executed(flow))
+    }
+
     /// Execute a compiled function body. Returns a Flow like `exec` does so
     /// `Flow::Throw` propagates to tree-walk try/catch callers.
     fn run_bytecode(
@@ -7697,7 +7990,12 @@ Err(format!("undefined function: `{name}`"))
                     let b = stack.pop().unwrap_or(Value::Null);
                     let a = stack.pop().unwrap_or(Value::Null);
                     let v = match (a, b) {
-                        (Value::Number(x), Value::Number(y)) => Value::Number(x / y),
+                        (Value::Number(x), Value::Number(y)) => {
+                            if y == 0.0 {
+                                Err("cannot divide by zero\n  \x1b[1;33m= help:\x1b[0m check whether the divisor is zero before dividing".to_string())?
+                            }
+                            Value::Number(x / y)
+                        }
                         (a, b) => self.binary(a, &Kind::Slash, b)?,
                     };
                     stack.push(v);
@@ -7706,7 +8004,12 @@ Err(format!("undefined function: `{name}`"))
                     let b = stack.pop().unwrap_or(Value::Null);
                     let a = stack.pop().unwrap_or(Value::Null);
                     let v = match (a, b) {
-                        (Value::Number(x), Value::Number(y)) => Value::Number(x % y),
+                        (Value::Number(x), Value::Number(y)) => {
+                            if y == 0.0 {
+                                Err("cannot compute modulo by zero\n  \x1b[1;33m= help:\x1b[0m check whether the divisor is zero before computing modulo".to_string())?
+                            }
+                            Value::Number(x % y)
+                        }
                         (a, b) => self.binary(a, &Kind::Percent, b)?,
                     };
                     stack.push(v);
@@ -8100,20 +8403,19 @@ Err(format!("undefined function: `{name}`"))
                                     continue;
                                 }
                             }
-                            Value::Function(fname) => {
-                                let fname = fname.clone();
-                                let mut vals = Vec::with_capacity(argc);
-                                for i in 0..argc {
-                                    vals.push(stack[start + i].clone());
+Value::Function(fname) => {
+                            let fname = fname.clone();
+                            match self.call_or_push_frame(&fname, argc, start, false, &mut cur, &mut ip, &mut base, &mut locals, &mut stack, &mut frames)? {
+                                CallPath::FramePushed => continue,
+                                    CallPath::Executed(flow) => {
+                                        match flow {
+                                            Flow::Return(v) => stack.push(v),
+                                            Flow::Throw(v) => return Ok(Flow::Throw(v)),
+                                            _ => stack.push(Value::Null),
+                                        }
+                                        continue;
+                                    }
                                 }
-                                stack.truncate(start);
-                                let flow = self.call(&fname, vals)?;
-                                match flow {
-                                    Flow::Return(v) => stack.push(v),
-                                    Flow::Throw(v) => return Ok(Flow::Throw(v)),
-                                    _ => stack.push(Value::Null),
-                                }
-                                continue;
                             }
                             _ => {}
                         }
@@ -8134,18 +8436,17 @@ Err(format!("undefined function: `{name}`"))
                                 }
                             }
                             Value::Function(fname) => {
-                                let mut vals = Vec::with_capacity(argc);
-                                for i in 0..argc {
-                                    vals.push(stack[start + i].clone());
+                                match self.call_or_push_frame(&fname, argc, start, false, &mut cur, &mut ip, &mut base, &mut locals, &mut stack, &mut frames)? {
+                                    CallPath::FramePushed => continue,
+                                    CallPath::Executed(flow) => {
+                                        match flow {
+                                            Flow::Return(v) => stack.push(v),
+                                            Flow::Throw(v) => return Ok(Flow::Throw(v)),
+                                            _ => stack.push(Value::Null),
+                                        }
+                                        continue;
+                                    }
                                 }
-                                stack.truncate(start);
-                                let flow = self.call(&fname, vals)?;
-                                match flow {
-                                    Flow::Return(v) => stack.push(v),
-                                    Flow::Throw(v) => return Ok(Flow::Throw(v)),
-                                    _ => stack.push(Value::Null),
-                                }
-                                continue;
                             }
                             _ => {}
                         }
@@ -8158,14 +8459,14 @@ Err(format!("undefined function: `{name}`"))
                     if start == 0 {
                         return Err("call: missing callee".into());
                     }
-                    let callee = stack[start - 1].clone();
-                    let mut vals = Vec::with_capacity(argc);
-                    for i in 0..argc {
-                        vals.push(stack[start + i].clone());
-                    }
-                    stack.truncate(start.saturating_sub(1));
+                    let callee = crate::runtime::deref_cell(&stack[start - 1]);
                     match callee {
                         Value::NativeFunction(n) => {
+                            let mut vals = Vec::with_capacity(argc);
+                            for i in 0..argc {
+                                vals.push(stack[start + i].clone());
+                            }
+                            stack.truncate(start.saturating_sub(1));
                             match self.native_functions.get(n.as_str()) {
                                 Some(&native_fn) => {
                                     stack.push(native_fn(vals)?);
@@ -8174,11 +8475,15 @@ Err(format!("undefined function: `{name}`"))
                             }
                         }
                         Value::Function(fname) => {
-                            let flow = self.call(&fname, vals)?;
-                            match flow {
-                                Flow::Return(v) => stack.push(v),
-                                Flow::Throw(v) => return Ok(Flow::Throw(v)),
-                                _ => stack.push(Value::Null),
+                            match self.call_or_push_frame(&fname, argc, start, true, &mut cur, &mut ip, &mut base, &mut locals, &mut stack, &mut frames)? {
+                                CallPath::FramePushed => continue,
+                                CallPath::Executed(flow) => {
+                                    match flow {
+                                        Flow::Return(v) => stack.push(v),
+                                        Flow::Throw(v) => return Ok(Flow::Throw(v)),
+                                        _ => stack.push(Value::Null),
+                                    }
+                                }
                             }
                         }
                         other => {
@@ -8540,9 +8845,11 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
+                    let params = cf.params.clone();
+                    let default_values = self.eval_default_values(&params)?;
                     let function = Function {
-                        params: cf.params.iter().cloned().map(|n| (n, None)).collect(),
-                        default_values: Vec::new(),
+                        params,
+                        default_values,
                         body: Arc::new(Vec::new()),
                         captured: captured_map,
                         effective_captured,
@@ -9492,22 +9799,27 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                 _ => unreachable!(),
             },
             Value::Dict(dict) => {
-                if let Some(Value::NativeFunction(native_name)) = dict.get(method) {
-                    if let Some(native_fn) = self.native_functions.get(native_name).cloned() {
-                        let mut call_args = values;
-                        // Native methods prefixed with __ receive the dict as `self`.
-                        if native_name.starts_with("__") {
-                            call_args.insert(0, Value::Dict(dict.clone()));
+                if let Some(member) = dict.get(method).map(deref_cell) {
+                    match member {
+                        Value::NativeFunction(native_name) => {
+                            if let Some(native_fn) = self.native_functions.get(&native_name).cloned() {
+                                let mut call_args = values;
+                                // Native methods prefixed with __ receive the dict as `self`.
+                                if native_name.starts_with("__") {
+                                    call_args.insert(0, Value::Dict(dict.clone()));
+                                }
+                                return native_fn(call_args);
+                            }
                         }
-                        return native_fn(call_args);
+                        Value::Function(fname) => {
+                            return match self.call(&fname, values)? {
+                                Flow::Return(v) => Ok(v),
+                                Flow::Throw(v) => Err(self.escape_throw(v)),
+                                _ => unreachable!(),
+                            };
+                        }
+                        _ => {}
                     }
-                }
-                if let Some(Value::Function(fname)) = dict.get(method) {
-                    return match self.call(fname, values)? {
-                        Flow::Return(v) => Ok(v),
-                        Flow::Throw(v) => Err(self.escape_throw(v)),
-                        _ => unreachable!(),
-                    };
                 }
                 match method {
                     "length" | "len" => return Ok(Value::Number(dict.len() as f64)),
@@ -9725,7 +10037,13 @@ let function = self
     }
     fn exec_module(&mut self, stmts: &[Stmt]) -> Result<Flow, String> {
         // Try to compile and run the module via the bytecode VM. Falls back to
-        // tree-walk if any construct is unsupported.
+        // tree-walk if any construct is unsupported. `ZEN_NO_BC=1` forces the
+        // tree-walk path for differential testing.
+        if std::env::var("ZEN_NO_BC").is_ok() {
+            let result = self.exec(stmts);
+            self.drain_pending_error_classes();
+            return result;
+        }
         match crate::bytecode::compile_program(stmts) {
             Ok(funcs) => self.exec_compiled(funcs),
             Err(_) => {
@@ -9790,6 +10108,17 @@ let function = self
                 result
             }
         }
+    }
+    /// Tree-walk staging for differential runs: exec the module without
+    /// compiling to bytecode (used by `ZEN_NO_BC` on the file-exec path).
+    fn exec_source_tree(&mut self, source: &str, fmt_parse_err: &dyn Fn(&str) -> String) -> Result<Flow, String> {
+        let tokens = lex(source).map_err(|e| fmt_parse_err(&e.to_string()))?;
+        let program = Parser::new(tokens)
+            .program()
+            .map_err(|e| fmt_parse_err(&e.to_string()))?;
+        let result = self.exec(&program);
+        self.drain_pending_error_classes();
+        result
     }
     fn drain_pending_error_classes(&mut self) {
         let pending = if let Ok(mut lock) = pending_error_classes().lock() {
@@ -10090,13 +10419,11 @@ let function = self
                         .cloned()
                         .collect();
                     captured_names.sort();
-                    let has_defaults = params.iter().any(|(_, d)| d.is_some());
+                    let _has_defaults = params.iter().any(|(_, d)| d.is_some());
                     let default_values = self.eval_default_values(params)?;
-                    let bytecode = if has_defaults {
-                        None
-                    } else {
+                    let bytecode = {
                         std::env::set_var("ZEN_DBG_FN", format!("stmt:{name}"));
-                        crate::bytecode::compile_function(name, &names, &captured_names, body).ok()
+                        crate::bytecode::compile_function(name, params, &captured_names, body).ok()
                     };
                     let function = Function {
                         params: params.clone(),
@@ -10819,7 +11146,7 @@ fn key_data(args: Vec<Value>, err: &'static str) -> Result<(String, String), Str
     }
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -10903,7 +11230,7 @@ fn aes_decrypt(key: &str, data: &str, iv: Option<&str>) -> Result<String, String
     Ok(String::from_utf8_lossy(pt).into_owned())
 }
 
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
     if !s.len().is_multiple_of(2) {
         return None;
@@ -17270,6 +17597,113 @@ fn native_for(name: &str) -> NativeFunc {
             let encoded = base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
             Ok(Value::String(encoded))
         },
+        "sys_syscall" => |args| crate::sys::sys_syscall(args),
+        "sys_open" => |args| crate::sys::sys_open(args),
+        "sys_close" => |args| crate::sys::sys_close(args),
+        "sys_read" => |args| crate::sys::sys_read(args),
+        "sys_read_str" => |args| crate::sys::sys_read_str(args),
+        "sys_write" => |args| crate::sys::sys_write(args),
+        "sys_write_bytes" => |args| crate::sys::sys_write_bytes(args),
+        "sys_lseek" => |args| crate::sys::sys_lseek(args),
+        "sys_dup" => |args| crate::sys::sys_dup(args),
+        "sys_dup2" => |args| crate::sys::sys_dup2(args),
+        "sys_pipe" => |args| crate::sys::sys_pipe(args),
+        "sys_fork" => |args| crate::sys::sys_fork(args),
+        "sys_exec" => |args| crate::sys::sys_exec(args),
+        "sys_kill" => |args| crate::sys::sys_kill(args),
+        "sys_getpid" => |args| crate::sys::sys_getpid(args),
+        "sys_getppid" => |args| crate::sys::sys_getppid(args),
+        "sys_getuid" => |args| crate::sys::sys_getuid(args),
+        "sys_geteuid" => |args| crate::sys::sys_geteuid(args),
+        "sys_getgid" => |args| crate::sys::sys_getgid(args),
+        "sys_getegid" => |args| crate::sys::sys_getegid(args),
+        "sys_umask" => |args| crate::sys::sys_umask(args),
+        "sys_stat" => |args| crate::sys::sys_stat(args),
+        "sys_lstat" => |args| crate::sys::sys_lstat(args),
+        "sys_fstat" => |args| crate::sys::sys_fstat(args),
+        "sys_access" => |args| crate::sys::sys_access(args),
+        "sys_chmod" => |args| crate::sys::sys_chmod(args),
+        "sys_chown" => |args| crate::sys::sys_chown(args),
+        "sys_fchown" => |args| crate::sys::sys_fchown(args),
+        "sys_symlink" => |args| crate::sys::sys_symlink(args),
+        "sys_readlink" => |args| crate::sys::sys_readlink(args),
+        "sys_link" => |args| crate::sys::sys_link(args),
+        "sys_truncate" => |args| crate::sys::sys_truncate(args),
+        "sys_ftruncate" => |args| crate::sys::sys_ftruncate(args),
+        "sys_fsync" => |args| crate::sys::sys_fsync(args),
+        "sys_fdatasync" => |args| crate::sys::sys_fdatasync(args),
+        "sys_unlink" => |args| crate::sys::sys_unlink(args),
+        "sys_rmdir" => |args| crate::sys::sys_rmdir(args),
+        "sys_mkfifo" => |args| crate::sys::sys_mkfifo(args),
+        "sys_mknod" => |args| crate::sys::sys_mknod(args),
+        "sys_waitpid" => |args| crate::sys::sys_waitpid(args),
+        "sys_wifexited" => |args| crate::sys::sys_wifexited(args),
+        "sys_wifsignaled" => |args| crate::sys::sys_wifsignaled(args),
+        "sys_wifstopped" => |args| crate::sys::sys_wifstopped(args),
+        "sys_wexitstatus" => |args| crate::sys::sys_wexitstatus(args),
+        "sys_wtermsig" => |args| crate::sys::sys_wtermsig(args),
+        "sys_nanosleep" => |args| crate::sys::sys_nanosleep(args),
+        "sys_mmap" => |args| crate::sys::sys_mmap(args),
+        "sys_munmap" => |args| crate::sys::sys_munmap(args),
+        "sys_mprotect" => |args| crate::sys::sys_mprotect(args),
+        "sys_mremap" => |args| crate::sys::sys_mremap(args),
+        "sys_mlock" => |args| crate::sys::sys_mlock(args),
+        "sys_munlock" => |args| crate::sys::sys_munlock(args),
+        "sys_peek8" => |args| crate::sys::sys_peek8(args),
+        "sys_peek16" => |args| crate::sys::sys_peek16(args),
+        "sys_peek32" => |args| crate::sys::sys_peek32(args),
+        "sys_peek64" => |args| crate::sys::sys_peek64(args),
+        "sys_poke8" => |args| crate::sys::sys_poke8(args),
+        "sys_poke16" => |args| crate::sys::sys_poke16(args),
+        "sys_poke32" => |args| crate::sys::sys_poke32(args),
+        "sys_poke64" => |args| crate::sys::sys_poke64(args),
+        "sys_mem_read" => |args| crate::sys::sys_mem_read(args),
+        "sys_mem_write" => |args| crate::sys::sys_mem_write(args),
+        "sys_ioctl" => |args| crate::sys::sys_ioctl(args),
+        "sys_fcntl" => |args| crate::sys::sys_fcntl(args),
+        "sys_poll" => |args| crate::sys::sys_poll(args),
+        "sys_socket" => |args| crate::sys::sys_socket(args),
+        "sys_socketpair" => |args| crate::sys::sys_socketpair(args),
+        "sys_bind" => |args| crate::sys::sys_bind(args),
+        "sys_listen" => |args| crate::sys::sys_listen(args),
+        "sys_accept" => |args| crate::sys::sys_accept(args),
+        "sys_accept4" => |args| crate::sys::sys_accept4(args),
+        "sys_connect" => |args| crate::sys::sys_connect(args),
+        "sys_getsockname" => |args| crate::sys::sys_getsockname(args),
+        "sys_getpeername" => |args| crate::sys::sys_getpeername(args),
+        "sys_send" => |args| crate::sys::sys_send(args),
+        "sys_sendto" => |args| crate::sys::sys_sendto(args),
+        "sys_recv" => |args| crate::sys::sys_recv(args),
+        "sys_recvfrom" => |args| crate::sys::sys_recvfrom(args),
+        "sys_shutdown" => |args| crate::sys::sys_shutdown(args),
+        "sys_setsockopt" => |args| crate::sys::sys_setsockopt(args),
+        "sys_getsockopt" => |args| crate::sys::sys_getsockopt(args),
+        "sys_gethostname" => |args| crate::sys::sys_gethostname(args),
+        "sys_uname" => |args| crate::sys::sys_uname(args),
+        "sys_clock_gettime" => |args| crate::sys::sys_clock_gettime(args),
+        "sys_getrlimit" => |args| crate::sys::sys_getrlimit(args),
+        "sys_setrlimit" => |args| crate::sys::sys_setrlimit(args),
+        "sys_sysconf" => |args| crate::sys::sys_sysconf(args),
+        "sys_times" => |args| crate::sys::sys_times(args),
+        "sys_strerror" => |args| crate::sys::sys_strerror(args),
+        "sys_errno" => |args| crate::sys::sys_errno(args),
+        "ffi_load" => |args| crate::ffi::ffi_load(args),
+        "ffi_close" => |args| crate::ffi::ffi_close(args),
+        "ffi_symbol" => |args| crate::ffi::ffi_symbol(args),
+        "ffi_call" => |args| crate::ffi::ffi_call(args),
+        "ffi_call_at" => |args| crate::ffi::ffi_call_at(args),
+        "ffi_malloc" => |args| crate::ffi::ffi_malloc(args),
+        "ffi_realloc" => |args| crate::ffi::ffi_realloc(args),
+        "ffi_free" => |args| crate::ffi::ffi_free(args),
+        "ffi_read" => |args| crate::ffi::ffi_read(args),
+        "ffi_write" => |args| crate::ffi::ffi_write(args),
+        "ffi_str" => |args| crate::ffi::ffi_str(args),
+        "ffi_set" => |args| crate::ffi::ffi_set(args),
+        "ffi_copy" => |args| crate::ffi::ffi_copy(args),
+        "ffi_errno" => |args| crate::ffi::ffi_errno(args),
+        "ffi_strerror" => |args| crate::ffi::ffi_strerror(args),
+        "ffi_sizeof" => |args| crate::ffi::ffi_sizeof(args),
+        "ffi_alignof" => |args| crate::ffi::ffi_alignof(args),
         _ => |_| Ok(Value::String("Native Call".into())),
     }
 }
@@ -17298,7 +17732,11 @@ pub fn run_named(source: &str, file: &str) -> Result<(), String> {
         if let Ok(canon) = std::fs::canonicalize(file) {
             vm.loading.push(canon.to_string_lossy().into_owned());
         }
-        vm.exec_source_cached(file, source, &|e| e.to_string())?
+        if std::env::var("ZEN_NO_BC").is_ok() {
+            vm.exec_source_tree(source, &|e| e.to_string())?
+        } else {
+            vm.exec_source_cached(file, source, &|e| e.to_string())?
+        }
     };
     match flow {
         Flow::Normal => Ok(()),
@@ -17577,6 +18015,8 @@ pub fn list_modules() -> String {
         ("itertools", "Iterators (enumerate, zip, range, product, combinations, etc.)"),
         ("tempfile", "Temporary files/dirs (dir, mkdtemp, mkstemp)"),
         ("binascii", "Binary/ASCII encoding (hexlify, unhexlify, base64)"),
+        ("sys", "Raw system calls (syscall, fd, mmap, ioctl, stat, rlimit, ...)"),
+        ("ffi", "Call any C function via dlopen + libffi (load, call, call_at, malloc)"),
         ("ftp", "Pure-Rust FTP client (connect, login, list, retr, stor, etc.)"),
         ("smtp", "Pure-Rust SMTP client (connect, login, sendmail, message)"),
         ("pop3", "Pure-Rust POP3 client (connect, stat, list, retr, dele)"),
@@ -18024,6 +18464,98 @@ pub fn module_help(name: &str) -> Option<String> {
              binascii.a2b_base64(data)        base64 string to bytes\n\n\
              Example: binascii.hexlify(\"hello\")  =>  \"68656c6c6f\"\n\
              Example: binascii.unhexlify(\"68656c6c6f\")  =>  \"hello\""
+                .into(),
+        ),
+        "sys" => Some(
+            "sys — Raw system calls (Linux/POSIX)\n\n\
+             Calls the libc functions directly; pointers are plain numbers.\n\n\
+             Process:\n\
+             sys.syscall(n, args...)  raw syscall(2)\n\
+             sys.getpid() getppid() getuid() geteuid() getgid() getegid()\n\
+             sys.fork() exec(path, argv?) kill(pid, sig) waitpid(pid, opts?)\n\
+             (exec uses execv; argv excludes argv[0] and is optional)\n\
+             sys.wifexited(s) wifsignaled(s) wifstopped(s)\n\
+             sys.wexitstatus(s) wtermsig(s) umask(mask?)\n\n\
+             File descriptors:\n\
+             sys.open(path, flags, mode?) open(2)\n\
+             sys.read(fd, len)      read bytes as list\n\
+             sys.read_str(fd, len)  read bytes as string\n\
+             sys.write(fd, str)     write string\n\
+             sys.write_bytes(fd, hex) write raw bytes\n\
+             sys.close(fd) lseek(fd, off, whence) dup(fd) dup2(a, b)\n\
+             sys.pipe() -> [read_fd, write_fd]\n\
+             sys.fsync(fd) fdatasync(fd)\n\
+             sys.ioctl(fd, req, arg)  sys.fcntl(fd, cmd, arg?)  sys.poll(pollfds, timeout?)\n\n\
+             Files/Dirs:\n\
+             sys.stat(path) lstat(path) fstat(fd)  -> dict (mode, size, mtime, ...)\n\
+             sys.access(path, mode) chmod(path, mode) chown(path, uid, gid)\n\
+             sys.symlink(target, link) readlink(path) link(old, new)\n\
+             sys.truncate(path, len) ftruncate(fd, len)\n\
+             sys.mkfifo(path, mode?) mknod(path, mode, dev) unlink(path) rmdir(path)\n\n\
+             Memory:\n\
+             sys.mmap(len, prot, flags, fd, offset)  -> address\n\
+             sys.munmap(addr, len) mprotect(addr, len, prot)\n\
+             sys.mremap(addr, old, new, flags) mlock(addr, len) munlock(addr, len)\n\
+             sys.peek8/16/32/64(addr)   read typed value at address\n\
+             sys.poke8/16/32/64(addr, v) write typed value at address\n\
+             sys.mem_read(addr, len) -> hex    sys.mem_write(addr, hex)\n\n\
+             Misc:\n\
+             sys.nanosleep(secs) uname() gethostname()\n\
+             sys.clock_gettime(clock_id?) -> [secs, nsecs]\n\
+             sys.getrlimit(resource) -> [soft, hard]\n\
+             sys.setrlimit(resource, soft, hard)\n\
+             sys.sysconf(name) times() -> dict\n\
+             sys.errno() strerror(errno)\n\n\
+             Constants: sys.PROT_*, sys.MAP_*, sys.O_*, sys.SEEK_*,\n\
+             sys.F_OK/R_OK/W_OK/X_OK, sys.WNOHANG, sys.WUNTRACED,\n\
+             sys.WCONTINUED, sys.POLLIN/POLLOUT/POLLERR, sys.CLOCK_*,\n\
+             sys.RLIMIT_*, sys.F_*, sys.SIG*, sys.SC_*\n\n\
+             Example:\n\
+             let fd = sys.open(\"/tmp/x\", sys.O_CREAT + sys.O_WRONLY, 420)\n\
+             sys.write(fd, \"hello\")\n\
+             sys.close(fd)\n\
+             let mem = sys.mmap(4096, sys.PROT_READ + sys.PROT_WRITE, sys.MAP_ANONYMOUS + sys.MAP_PRIVATE, -1, 0)\n\
+             sys.poke64(mem, 1234)\n\
+             print sys.peek64(mem)\n\
+             sys.munmap(mem, 4096)"
+                .into(),
+        ),
+        "ffi" => Some(
+            "ffi — Call arbitrary C functions from shared libraries\n\n\
+             Load a library, resolve a symbol, and call it with the true C ABI.\n\
+             Pointers are plain numbers (f64 can hold any x86-64 userland address).\n\n\
+             ffi.load(path)              dlopen, returns integer handle\n\
+             ffi.symbol(handle, name)    dlsym, returns function address\n\
+             ffi.call(handle, name, args?, ret?)           call by name\n\
+             ffi.call_at(addr, args?, ret?)               call by address\n\
+             ffi.close(handle)           dlclose\n\n\
+             Arguments:\n\
+             plain number        -> int (native signed width)\n\
+             string              -> NUL-terminated C string (kept alive for the call)\n\
+             null                -> NULL pointer\n\
+             {\"ptr\": n}          -> pointer value n\n\
+             {\"buf\": hex}        -> pointer to raw bytes\n\
+             {\"text\": str}       -> pointer to UTF-8 bytes (no NUL)\n\
+             {\"type\": ...
+
+int\", \"value\": n}` etc.     typed integer (i8..u64, long, size_t, ...)\n\
+             {\"type\": \"double\", \"value\": 1.5}   double\n\
+             {\"type\": \"float\", \"value\": 1.5}    float\n\n\
+             Returns (default int):\n\
+             \"void\" -> null    \"double\"/\"float\" -> number    \"str\" -> string\n\
+             {\"type\": \"bytes\", \"len\": n} read n bytes from returned pointer -> hex\n\n\
+             Memory:\n\
+             ffi.malloc(size) ffi.realloc(ptr, size) ffi.free(ptr)\n\
+             ffi.read(ptr, len) -> hex   ffi.write(ptr, hex)\n\
+             ffi.str(ptr) -> string      ffi.copy(dst, src, len)\n\
+             ffi.set(ptr, byte, count)   memset\n\
+             ffi.errno() ffi.strerror(errno)\n\
+             ffi.sizeof(tag) ffi.alignof(tag)\n\n\
+             Example:\n\
+             let h = ffi.load(\"libm.so.6\")\n\
+             print ffi.call(h, \"ceil\", [{\"type\": \"double\", \"value\": 1.2}], \"double\")  -> 2\n\
+             let h2 = ffi.load(\"libc.so.6\")\n\
+             print ffi.call(h2, \"strlen\", [\"hello world\"], \"int\")  -> 11"
                 .into(),
         ),
         "ftp" => Some(
