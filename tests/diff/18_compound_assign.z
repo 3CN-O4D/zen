@@ -1,0 +1,23 @@
+let a = 10
+a += 5
+a *= 2
+a -= 3
+a /= 3
+print(a)
+let s = "ab"
+s += "cd"
+print(s)
+print(s * 3)
+let dict = {"n": 1}
+dict.n += 10
+dict["n"] += 5
+print(dict.n)
+let lis = [1, 2, 3]
+lis[1] += 100
+print(lis)
+let counter = 0
+def bump() {
+    counter += 1
+    return counter
+}
+print(bump(), bump(), bump())

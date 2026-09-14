@@ -1,0 +1,26 @@
+def maybe(x) {
+    if x < 0 { return "neg" }
+    return "pos"
+}
+print(maybe(-1), maybe(3))
+let out = []
+for i in range(5) {
+    try {
+        if i == 2 { throw "two" }
+        out.push("k" + i)
+    } catch e {
+        out.push("e:" + e)
+    } finally {
+        out.push("f" + i)
+    }
+}
+print(out)
+def attempt(n) {
+    try {
+        if n > 10 { return "big" }
+        return "small"
+    } finally {
+        out.push("fin-" + n)
+    }
+}
+print(attempt(3), attempt(99), out)

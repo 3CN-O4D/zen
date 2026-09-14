@@ -203,6 +203,8 @@ pub enum Value {
 /// Dereference any chain of `Value::Cell` boxes, returning the inner value.
 pub(crate) fn deref_cells(v: &Value) -> Value {
     let mut cur = v.clone();
+    let mut hops = 0u32;
+    let mut trail: Vec<usize> = Vec::new();
     loop {
         let next = if let Value::Cell(c) = &cur {
             let g = c.lock().unwrap_or_else(|p| p.into_inner());
@@ -211,7 +213,21 @@ pub(crate) fn deref_cells(v: &Value) -> Value {
             None
         };
         match next {
-            Some(inner) => cur = inner,
+            Some(inner) => {
+                hops += 1;
+                let addr = if let Value::Cell(ref cc) = cur {
+                    Arc::as_ptr(cc) as usize
+                } else {
+                    0
+                };
+                trail.push(addr);
+                if trail.len() > 1 && addr == trail[0] {
+                    panic!(
+                        "deref_cells: cyclic cell chain (hop {hops}, first_repeat_addr {addr:#x}) while dereferencing {cur:?}"
+                    );
+                }
+                cur = inner;
+            }
             None => break,
         }
     }
@@ -1811,6 +1827,14 @@ impl Parser {
                 Ok(mk(StmtKind::Continue))
             }
             Kind::Function | Kind::Def => {
+                // Anonymous `fn (...)` used directly as an expression statement
+                // (e.g. the final expression of a nested function body).
+                if matches!(self.current().kind, Kind::Function)
+                    && self.pos + 1 < self.tokens.len()
+                    && matches!(self.tokens[self.pos + 1].kind, Kind::LParen)
+                {
+                    return Ok(mk(StmtKind::Expr(self.expr()?)));
+                }
                 self.advance();
                 let name = match self.advance() {
                     Kind::Ident(name) => name,
@@ -3971,7 +3995,7 @@ impl Vm {
                             names.push(k.clone());
                         }
                     }
-                    Value::List(_) => push(&mut names, "push pop shift unshift splice insert append add join contains includes indexOf index_of first last reverse sort sorted map filter each reduce flat flatten compact uniq unique shuffle sample slice take skip drop chunk zip sum length len copy concat clear to_string toString iterations pairs"),
+                    Value::List(_) => push(&mut names, "push pop shift unshift splice insert append add join contains includes indexOf index_of first last reverse sort sorted map filter each reduce flat flatten compact uniq unique shuffle sample slice take skip drop chunk zip sum length len copy concat clear to_string toString"),
                     Value::String(_) => push(&mut names, "toNum to_num toNumber to_number split contains includes startsWith startswith starts_with endsWith endswith ends_with find indexOf index_of charAt char char_at ord trim strip trimEnd trimRight trim_right trimStart trimLeft trim_left lower toLower toLowerCase to_lower upper toUpper toUpperCase to_upper title capitalize capfirst center zfill reverse repeat length len concat substring substr slice toList to_list lstrip ltrim rstrip rtrim replace replace_all format"),
                     Value::Number(_) => push(&mut names, "to_string toString toInt to_float floor ceil round abs sqrt"),
                     Value::Bool(_) => push(&mut names, "toString to_string"),
@@ -5441,16 +5465,17 @@ Expr::Index(obj, idx) => {
                         // Mutating list methods on a bare variable (push/append/pop) update the var in place
                         if let Expr::Var(name) = &**object {
                             if matches!(method.as_str(), "push" | "append" | "pop") {
-                                // The target may be a global or a function-local.
+                                // The target may be a global or a function-local,
+                                // and the binding may be a shared closure Cell.
                                 let local_idx = self.locals.iter().rposition(|(n, _)| n == name);
                                 let current = match local_idx {
-                                    Some(i) => match &self.locals[i].1 {
-                                        Value::List(_) => Some(self.locals[i].1.clone()),
-                                        _ => None,
+                                    Some(i) => deref_cell(&self.locals[i].1),
+                                    None => match self.vars.get(name) {
+                                        Some(v) => deref_cell(v),
+                                        None => Value::Null,
                                     },
-                                    None => self.vars.get(name).cloned(),
                                 };
-                                if let Some(Value::List(mut list)) = current {
+                                if let Value::List(mut list) = current {
                                     // Drop the binding's own Arc reference so
                                     // make_mut mutates in place instead of
                                     // cloning the whole list on every push/pop.
@@ -5479,7 +5504,12 @@ Expr::Index(obj, idx) => {
                                             }
                                         }
                                         None => {
-                                            self.vars.insert(name.clone(), updated);
+                                            // Preserve shared closure cells.
+                                            if let Some(Value::Cell(c)) = self.vars.get(name) {
+                                                cell_set(&Value::Cell(Arc::clone(c)), updated);
+                                            } else {
+                                                self.vars.insert(name.clone(), updated);
+                                            }
                                         }
                                     }
                                     return Ok(result);
@@ -9401,7 +9431,14 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                 None => return Ok(None),
             },
         };
-        let result = self.nested_mutate_inplace(&mut root_val, steps, method, values.to_vec(), Some(current_list))?;
+        let result = match self.nested_mutate_inplace(&mut root_val, steps, method, values.to_vec(), Some(current_list))? {
+            Some(v) => v,
+            // Not a nested chain (e.g. a bare variable root like `out.push(x)`):
+            // no write-back. Writing the untouched root binding back here would
+            // store the Cell itself inside itself when the root is a captured
+            // closure cell, producing an infinite cell chain.
+            None => return Ok(None),
+        };
         // Write the (possibly nested) root container back into the binding.
         match local_idx {
             Some(i) => {
@@ -9415,7 +9452,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                 self.vars.insert(root, root_val);
             }
         }
-        Ok(result)
+        Ok(Some(result))
     }
 
     /// Shared in-place mutation for a variable-rooted member/index chain.

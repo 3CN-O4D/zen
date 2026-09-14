@@ -1,0 +1,14 @@
+let a = 0x0f
+let b = 0x34
+print(a & b, a | b, a ^ b, a << 2, b >> 2, ~a)
+print(1 << 8 | 0x7f, 0)
+let hi = (0x1234 >> 8) & 255
+let lo = 0x1234 & 255
+print(hi, lo, hi * 256 + lo)
+let m = fn(n) { (n >> 4) & 15 }
+print(m(0xab), m(0x0f), m(0xff))
+let acc = 0
+for i in [1, 2, 3, 4] {
+    acc = acc | (1 << i)
+}
+print(acc)

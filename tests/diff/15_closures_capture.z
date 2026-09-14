@@ -1,0 +1,16 @@
+let base = 100
+let mk = fn(step) { return fn(x) { return x * 2 + base + step } }
+let f2 = mk(5)
+print(f2(1), f2(2), f2(f2(1)))
+let counters = []
+for i in range(3) {
+    counters.push(fn() { return i })
+}
+print(counters[0](), counters[1](), counters[2]())
+let x = 1
+let g = fn() { return x }
+x = 2
+print(g(), x)
+let make = fn(a) { return lambda(b) { return a + b } }
+let h = make(10)
+print(h(5), h(6))

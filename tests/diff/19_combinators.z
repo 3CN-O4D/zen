@@ -1,0 +1,13 @@
+let xs = [1, 2, 3, 4, 5, 6]
+print(xs.filter(fn(x) { x % 2 == 0 }))
+print(xs.map(fn(x) { x * x }))
+print(xs.reduce(fn(acc, x) { acc + x }, 0))
+print(xs.sum(), xs.length(), xs.len)
+print(xs.chunk(2))
+print(xs.take(3), xs.drop(3), xs.slice(1, 4))
+print(range(10).filter(fn(x) { x > 7 }))
+let nested = [1, [2, 3], [[4]]]
+print(nested.flatten())
+print(xs.join("-"))
+print(xs.zip(["a", "b", "c", "d", "e", "f"]))
+print([1,2,3,1,2,1].uniq())

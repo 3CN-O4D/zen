@@ -1,0 +1,13 @@
+class Counter {
+    var count = 0
+    func init(n = 0) { self.count = n }
+    func inc() { self.count += 1; return self.count }
+    func get() { return self.count }
+    func brand() { return "C-" + self.count }
+}
+let c = Counter(5)
+print(c.inc(), c.inc(), c.get(), c.brand())
+print(Counter(0).inc())
+let d = c
+d.inc()
+print(c.get(), d.get())

@@ -1,0 +1,7 @@
+// default args + value-call recursion (bytecode-defaults regression)
+let rc = lambda(n, a = 0) { if n <= 1 { return a + 1 } else { return rc(n - 1, a + 1) } }
+print(rc(50))
+let d = fn(x, y = 10, z = 20) { x + y + z }
+print(d(1), d(1, 2), d(1, 2, 3))
+let nest = fn(n, pad = "") { if n <= 0 { return pad } else { return nest(n - 1, pad + ".") } }
+print(nest(5))

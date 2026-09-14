@@ -1,0 +1,11 @@
+// nested value-call + string concat inside functions (callee-leak regression)
+let B2H = fn(n) { "0123456789abcdef"[n & 15] }
+let hex = fn(port) { "02" + B2H(port >> 8) + B2H(port) + "7f000001" }
+let srv = hex(0)
+print(srv, len(srv))
+let mk = fn(tag, n) { tag + hex(n) }
+print(mk("adr:", 305), mk("adr:", 305))
+let table = {"get": fn(k) { "v:" + k }}
+print(table.get(hex(1)))
+let recur = lambda(n) { if n <= 1 { return 1 } else { return n + recur(n - 1) } }
+print(recur(100))
