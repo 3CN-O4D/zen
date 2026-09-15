@@ -33,18 +33,15 @@ let chain = fn(iterables) {
 // flatten(list) -> deep, recursive one-level-of-typing flattening.
 let flatten = fn(list) {
     let out = []
-    let stack = [list]
-    let i = 0
-    while i < len(stack) {
-        let x = stack[i]
-        if type(x) == "list" {
-            let prefix = stack.slice(0, i)
-            let suffix = stack.slice(i + 1, len(stack))
-            stack = prefix + x + suffix
-        } else {
-            out.push(x)
-            i += 1
+    let walk = fn(xs) {
+        for x in xs {
+            if type(x) == "list" {
+                walk(x)
+            } else {
+                out.push(x)
+            }
         }
     }
+    walk(list)
     return out
 }

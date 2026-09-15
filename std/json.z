@@ -1,0 +1,296 @@
+// Pure-Zen reimplementation of the `json` module.
+//
+// Declares ZEN_PURE so the .z tier wins over the Rust tier on import; the
+// native members stay reachable as `json.native.*` and setting
+// ZEN_NATIVE_ONLY=json restores the native tier.
+ZEN_PURE = true
+import bytes
+import fs
+
+let _sfb = bytes.str_from_bytes
+
+let _s = ""
+let _i = 0
+let _n = 0
+
+let _hexval = fn(c) {
+    let o = c.ord()
+    if o >= 48 && o <= 57 { return o - 48 }
+    if o >= 97 && o <= 102 { return o - 87 }
+    if o >= 65 && o <= 70 { return o - 55 }
+    return -1
+}
+
+let _char = fn(code) {
+    if code < 0x80 {
+        return _sfb([code])
+    }
+    if code < 0x800 {
+        return _sfb([0xC0 | (code >> 6), 0x80 | (code & 0x3F)])
+    }
+    return _sfb([0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)])
+}
+
+let _skip_ws = fn() {
+    while _i < _n {
+        let c = _s[_i]
+        if c == " " || c == "\t" || c == "\n" || c == "\r" {
+            _i += 1
+        } else {
+            break
+        }
+    }
+    return null
+}
+
+let _number = fn() {
+    let start = _i
+    let has_dot = false
+    while _i < _n {
+        let c = _s[_i]
+        let o = c.ord()
+        if c == "e" || c == "E" || c == "+" || c == "-" || c == "." || (o >= 48 && o <= 57) {
+            if c == "." { has_dot = true }
+            _i += 1
+        } else {
+            break
+        }
+    }
+    let text = _s[start:_i]
+    if has_dot {
+        try {
+            return float(text)
+        } catch e {
+            throw "invalid JSON number"
+        }
+    }
+    let _j = 0
+    while _j < len(text) {
+        let c = text[_j]
+        if c == "e" || c == "E" { throw "invalid JSON number" }
+        _j += 1
+    }
+    try {
+        return int(text)
+    } catch e {
+        throw "invalid JSON number"
+    }
+}
+
+let _string = fn() {
+    _i += 1
+    let out = ""
+    while true {
+        if _i >= _n { throw "unterminated JSON string" }
+        let c = _s[_i]
+        if c == "\"" {
+            _i += 1
+            return out
+        }
+        if c == "\\" {
+            _i += 1
+            if _i >= _n { throw "unterminated JSON string" }
+            let e = _s[_i]
+            if e == "n" { out += "\n"; _i += 1 }
+            elif e == "t" { out += "\t"; _i += 1 }
+            elif e == "r" { out += "\r"; _i += 1 }
+            elif e == "\\" { out += "\\"; _i += 1 }
+            elif e == "\"" { out += "\""; _i += 1 }
+            elif e == "/" { out += "/"; _i += 1 }
+            elif e == "u" {
+                _i += 1
+                if _i + 4 > _n { throw "invalid \\u escape" }
+                let h = 0
+                let _k = 0
+                while _k < 4 {
+                    let v = _hexval(_s[_i])
+                    if v < 0 { throw "invalid \\u escape" }
+                    h = h * 16 + v
+                    _i += 1
+                    _k += 1
+                }
+                if h >= 0xD800 && h <= 0xDFFF {
+                    out += "?"
+                } else {
+                    out += _char(h)
+                }
+            } else {
+                throw "invalid JSON escape"
+            }
+        } else {
+            out += c
+            _i += 1
+        }
+    }
+}
+
+let _array = fn() {
+    _i += 1
+    let items = []
+    _skip_ws()
+    if _i < _n && _s[_i] == "]" {
+        _i += 1
+        return items
+    }
+    while true {
+        items.push(_value())
+        _skip_ws()
+        if _i >= _n { throw "unterminated JSON array" }
+        let c = _s[_i]
+        if c == "," {
+            _i += 1
+        } elif c == "]" {
+            _i += 1
+            return items
+        } else {
+            throw "expected ',' or ']' in JSON"
+        }
+    }
+}
+
+let _object = fn() {
+    _i += 1
+    let m = {}
+    _skip_ws()
+    if _i < _n && _s[_i] == "}" {
+        _i += 1
+        return m
+    }
+    while true {
+        _skip_ws()
+        if _i >= _n || _s[_i] != "\"" { throw "expected string key in JSON" }
+        let k = _string()
+        _skip_ws()
+        if _i >= _n || _s[_i] != ":" { throw "expected ':' in JSON" }
+        _i += 1
+        let v = _value()
+        m[k] = v
+        _skip_ws()
+        if _i >= _n { throw "unterminated JSON object" }
+        let c = _s[_i]
+        if c == "," {
+            _i += 1
+        } elif c == "}" {
+            _i += 1
+            return m
+        } else {
+            throw "expected ',' or '}' in JSON"
+        }
+    }
+}
+
+let _value = fn() {
+    _skip_ws()
+    if _i >= _n { throw "invalid JSON value" }
+    let c = _s[_i]
+    if c == "{" { return _object() }
+    if c == "[" { return _array() }
+    if c == "\"" { return _string() }
+    if c == "t" {
+        if _i + 4 <= _n && _s[_i:_i + 4] == "true" { _i += 4; return true }
+        throw "expected 'true' in JSON"
+    }
+    if c == "f" {
+        if _i + 5 <= _n && _s[_i:_i + 5] == "false" { _i += 5; return false }
+        throw "expected 'false' in JSON"
+    }
+    if c == "n" {
+        if _i + 4 <= _n && _s[_i:_i + 4] == "null" { _i += 4; return null }
+        throw "expected 'null' in JSON"
+    }
+    let o = c.ord()
+    if c == "-" || (o >= 48 && o <= 57) { return _number() }
+    throw "invalid JSON value"
+}
+
+let parse = fn(s) {
+    _s = s
+    _i = 0
+    _n = len(s)
+    let v = _value()
+    _skip_ws()
+    if _i != _n { throw "trailing characters in JSON" }
+    return v
+}
+
+let _esc = fn(s) {
+    let out = ""
+    for _ch in list(s) {
+        if _ch == "\\" { out += "\\\\" }
+        elif _ch == "\"" { out += "\\\"" }
+        else { out += _ch }
+    }
+    return out
+}
+
+let _pad = fn(n) {
+    let out = ""
+    let _k = 0
+    while _k < n {
+        out += "  "
+        _k += 1
+    }
+    return out
+}
+
+let stringify = fn(v, indent = null) {
+    if type(indent) == "dict" {
+        if indent.get("pretty") == true { return pretty(v) }
+        return stringify(v, null)
+    }
+    if type(indent) == "int" || type(indent) == "float" {
+        if indent > 0 { return pretty(v) }
+        return stringify(v, null)
+    }
+    if type(v) == "null" { return "null" }
+    if type(v) == "bool" { if v { return "true" } return "false" }
+    if type(v) == "int" || type(v) == "float" { return "" + v }
+    if type(v) == "string" { return "\"" + _esc(v) + "\"" }
+    if type(v) == "list" {
+        let parts = []
+        for x in v { parts.push(stringify(x, null)) }
+        return "[" + parts.join(",") + "]"
+    }
+    if type(v) == "dict" {
+        let parts = []
+        for kv in list(v) {
+            parts.push("\"" + _esc(kv[0]) + "\":" + stringify(kv[1], null))
+        }
+        return "{" + parts.join(",") + "}"
+    }
+    return "\"<object>\""
+}
+
+let _pretty2 = fn(v, depth) {
+    if type(v) == "list" {
+        if len(v) == 0 { return "[]" }
+        let parts = []
+        for x in v { parts.push(_pad(depth + 1) + _pretty2(x, depth + 1)) }
+        return "[\n" + parts.join(",\n") + "\n" + _pad(depth) + "]"
+    }
+    if type(v) == "dict" {
+        if len(v) == 0 { return "{}" }
+        let parts = []
+        for kv in list(v) {
+            parts.push(_pad(depth + 1) + "\"" + _esc(kv[0]) + "\": " + _pretty2(kv[1], depth + 1))
+        }
+        return "{\n" + parts.join(",\n") + "\n" + _pad(depth) + "}"
+    }
+    return stringify(v, null)
+}
+
+let pretty = fn(v) {
+    return _pretty2(v, 0)
+}
+
+let encode = fn(v) {
+    return stringify(v, null)
+}
+
+let _load = fn(path) {
+    return parse(fs.read(path))
+}
+
+let _save = fn(path, value) {
+    return fs.write(path, stringify(value, null))
+}

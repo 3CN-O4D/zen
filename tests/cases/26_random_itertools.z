@@ -1,0 +1,146 @@
+// 26_random_itertools: pure-Zen random + itertools overrides — parity with the
+// Rust tier, the <mod>["native"] escape hatch, and ZEN_NATIVE_ONLY bypass.
+import random
+import itertools
+import os
+import sys
+
+let failed = 0
+let check = fn(cond, what) {
+    if not cond {
+        print "FAIL: " + what
+        failed += 1
+    }
+}
+
+// ZEN_PURE markers stripped and the escape hatches present.
+check(random.get("ZEN_PURE", null) == null, "random ZEN_PURE stripped")
+check(random["native"] != null, "random native hatch present")
+check(itertools.get("ZEN_PURE", null) == null, "itertools ZEN_PURE stripped")
+check(itertools["native"] != null, "itertools native hatch present")
+
+// --- itertools: deterministic, so compare pure vs native member by member.
+let it = itertools
+let na = itertools["native"]
+let c1 = fn(f, a) {
+    let p = it[f](a)
+    let n = na[f](a)
+    if not (p == n) { print "FAIL: " + f + " -> " + str(p) + " vs " + str(n); failed += 1 }
+}
+let c2 = fn(f, a, b) {
+    let p = it[f](a, b)
+    let n = na[f](a, b)
+    if not (p == n) { print "FAIL: " + f + " -> " + str(p) + " vs " + str(n); failed += 1 }
+}
+let c3 = fn(f, a, b, c) {
+    let p = it[f](a, b, c)
+    let n = na[f](a, b, c)
+    if not (p == n) { print "FAIL: " + f + " -> " + str(p) + " vs " + str(n); failed += 1 }
+}
+
+c1("enumerate", ["a", "b", "c"])
+c2("zip", [1, 2, 3], ["x", "y"])
+c2("zip", [1], [9, 0])
+// chain is variadic natively (any number of list args); the pure form takes a
+// single list of lists, so compare chain([[a],[b],[c]]) vs chain([a],[b],[c]).
+let pchain = it.chain([[1, 2], [], [3, 4]])
+let nchain = na.chain([1, 2], [], [3, 4])
+check(pchain == nchain, "chain pure/native shapes")
+c2("repeat", "z", 4)
+c2("repeat", 7, 2)
+c2("product", [1, 2], [3, 4])
+c2("product", [], [1])
+c2("permutations", [1, 2, 3], 2)
+c2("permutations", [1, 2], 2)
+c1("permutations", [1, 2, 3])
+c2("combinations", [1, 2, 3, 4], 2)
+c2("combinations", [1, 2, 3], 3)
+c2("combinations", [1, 2, 3, 4], 0)
+c1("accumulate", [1, 2, 3, 4])
+c1("accumulate", [])
+c2("take", 2, [1, 2, 3])
+c2("take", 0, [1, 2, 3])
+c2("take", 5, [1, 2, 3])
+c2("drop", 2, [1, 2, 3])
+c2("drop", 0, [1, 2, 3])
+c2("drop", 5, [1, 2, 3])
+c1("range", 5)
+c2("range", 2, 7)
+c3("range", 2, 11, 3)
+c3("range", 10, 0, -2)
+c2("range", 9, 2)
+
+// --- random: non-deterministic, so verify bounds + shape and pure determinism.
+let rd = random
+let rn = random["native"]
+
+let n = 200
+let _i = 0
+while _i < n {
+    let v = rd.randint(1, 6)
+    check(v >= 1 && v <= 6 && v == int(v), "randint bound @" + str(_i))
+    let u = rd.uniform(-2, 5)
+    check(u >= -2 && u <= 5, "uniform bound @" + str(_i))
+    let f = rd.random()
+    check(f >= 0 && f < 1, "random unit interval @" + str(_i))
+    _i += 1
+}
+
+check(rd.randint(4, 4) == 4, "randint equal bounds")
+check(rd.randint(6, 3) >= 3 && rd.randint(6, 3) <= 6, "randint reversed bounds")
+check(rd.randrange(10) >= 0 && rd.randrange(10) <= 9, "randrange stop-only")
+check(rd.randrange(5, 9) >= 5 && rd.randrange(5, 9) <= 8, "randrange two-arg")
+check(rd.randrange(0, 20, 5) % 5 == 0, "randrange step multiples")
+
+check(rd.choice(["a", "b", "c", "d"]) != null, "choice returns element")
+let ch = rd.choices(["p", "q"], 5)
+check(len(ch) == 5, "choices length 5")
+let sm = rd.sample([1, 2, 3, 4, 5], 3)
+check(len(sm) == 3, "sample length")
+let st = {"1": 1, "2": 1, "3": 1, "4": 1, "5": 1}
+for x in list(sm) { st[str(x)] = 2 }
+check(st[str(sm[0])] == 2, "sample elements from pool")
+
+let shuffled = [1, 2, 3, 4, 5, 6, 7, 8]
+let rt = rd.shuffle(shuffled)
+check(len(rt) == 8, "shuffle keeps length")
+let _seen = {}
+for x in list(rt) { _seen[str(x)] = _seen.get(str(x), 0) + 1 }
+check(_seen["1"] == 1 && _seen["8"] == 1, "shuffle keeps elements")
+
+check(rd.hex(8).length() == 8, "hex length")
+check(rd.hex().length() == 16, "hex default length")
+check(str(rd.seed(42)) == "null", "seed returns null")
+
+// Pure tier is deterministic under a fixed seed (native seed is a no-op).
+rd.seed(1234)
+let s1 = [rd.random(), rd.random(), rd.random()]
+rd.seed(1234)
+let s2 = [rd.random(), rd.random(), rd.random()]
+check(s1[0] == s2[0] && s1[1] == s2[1] && s1[2] == s2[2], "seeded determinism")
+
+// ZEN_NATIVE_ONLY=random,itertools must bypass both pure tiers.
+let zen_bin = "../../target/debug/zen"
+let check_native_probe = fn(expected_exit) {
+    let cpid = sys.fork()
+    if cpid == 0 {
+        if expected_exit == 0 {
+            os.setenv("ZEN_NATIVE_ONLY", "random,itertools")
+        }
+        sys.exec("/bin/sh", ["-c", zen_bin + " -e 'import random; import itertools; import sys; if random.get(\"native\", 0) == 0 && itertools.get(\"native\", 0) == 0 { sys.exit(0) } else { sys.exit(1) }'"])
+    }
+    let w = sys.waitpid(cpid, 0)
+    check(sys.wexitstatus(w[1]) == expected_exit,
+        expected_exit == 0 ? "ZEN_NATIVE_ONLY removes native sub-dicts"
+                           : "default keeps native sub-dicts")
+}
+
+check_native_probe(1)   // default: native present  -> child exit 1
+check_native_probe(0)   // ZEN_NATIVE_ONLY: absent  -> child exit 0
+
+if failed == 0 {
+    print "26_random_itertools: all ok"
+} else {
+    print "26_random_itertools: " + failed + " failures"
+    sys.exit(1)
+}

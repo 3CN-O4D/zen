@@ -1,0 +1,128 @@
+// 27_json: parity between the pure-Zen `json` tier (std/json.z) and the
+// native Rust tier. The pure tier wins on import; `json["native"]` exposes
+// the native members for direct comparison.
+import json
+import fs
+import sys
+
+let failed = 0
+let check = fn(cond, what) {
+    if not cond {
+        print "FAIL: " + what
+        failed += 1
+    }
+}
+
+let n = json["native"]
+
+// --- parse parity ---------------------------------------------------------
+let texts = [
+    "null", "true", "false",
+    "0", "42", "-17", "3.14", "-2.5", "1e6", "2.5e-3",
+    "\"hello\"", "\"\"",
+    "[]", "{}",
+    "[1, 2, 3]",
+    "{\"a\": 1}",
+    "{\"a\": 1, \"b\": [true, null, \"x\"], \"c\": {\"d\": \"e\"}}",
+    "[{\"a\": [1.5, -2]}, [], {}]",
+    "\"esc \\\" quot \\\\ back \\n nl \\t tab \\r cr \\/ slash\"",
+    "\"uni \\u00e9 \\u4e2d \\u03bb\"",
+    "  { \"k\" : [ 1 , 2 ] }  ",
+]
+for t in list(texts) {
+    let perr = false
+    let rerr = false
+    let p = null
+    let r = null
+    try { p = json.parse(t) } catch e { perr = true }
+    try { r = n.parse(t) } catch e { rerr = true }
+    check(perr == rerr, "parse error parity for " + t)
+    if not perr {
+        check(str(p) == str(r), "parse parity for " + t)
+    }
+}
+
+// --- stringify parity -----------------------------------------------------
+let values = [
+    null,
+    true,
+    false,
+    0,
+    1,
+    3.14,
+    -2.5,
+    "hello",
+    "",
+    "q\"u\\ote",
+    [],
+    {},
+    [1, 2, 3],
+    {a: 1, b: [true, null], c: {d: "e"}},
+    ["x", {}],
+]
+for v in list(values) {
+    let p = json.stringify(v)
+    let r = n.stringify(v)
+    check(p == r, "stringify parity for " + str(v))
+    // round-trip through both tiers must agree
+    check(json.stringify(json.parse(n.stringify(v))) == n.stringify(json.parse(p)),
+        "cross round-trip parity for " + str(v))
+}
+
+// --- pretty parity --------------------------------------------------------
+for v in list(values) {
+    check(json.stringify(v, 2) == n.stringify(v, 2), "pretty parity for " + str(v))
+}
+
+// --- round-trip fidelity --------------------------------------------------
+let doc = "{\"name\": \"zen\", \"nums\": [1, 2.5, -3], \"ok\": true, \"nothing\": null, \"nested\": {\"deep\": [0, 1]}}"
+let d = json.parse(doc)
+check(json.stringify(d) == n.stringify(d), "round-trip keeps native output")
+check(d["name"] == "zen", "parsed string key")
+check(d["nums"][1] == 2.5, "parsed nested number")
+check(d["nums"][2] == -3, "parsed negative number")
+check(d["nothing"] == null, "null value preserved")
+check(json.stringify(d["nested"]["deep"][1]) == "1", "deep indexing")
+
+// --- parse errors ---------------------------------------------------------
+let bad = [
+    "{", "[1, 2", "tru", "{\"a\"}", "{\"a\": }", "{a: 1}",
+    "1.2.3", "\"unterminated", "nul", "nullx", "5x", "[1,]}",
+]
+for t in list(bad) {
+    let perr = false
+    try {
+        json.parse(t)
+    } catch e {
+        perr = true
+    }
+    check(perr, "parse rejects " + t)
+}
+
+// --- save/load round trip (file bridge) ----------------------------------
+let tmp = "/tmp/zen_test/json_27_tmp.json"
+fs.write(tmp, json.stringify({k: [1, 2, 3], s: "v"}))
+let back = json.load(tmp)
+check(back["s"] == "v", "load reads saved file")
+check(back["k"][2] == 3, "load nested array")
+let ok = false
+try {
+    json.load("/nonexistent/zen_27.json")
+} catch e {
+    ok = true
+}
+check(ok, "load errors on missing file")
+
+// --- pure helpers exposed ------------------------------------------------
+check(json._load(tmp)["k"][0] == 1, "pure _load helper works")
+check(json._save(tmp, {x: [1]}) == true, "save returns true")
+check(json.load(tmp)["x"][0] == 1, "load sees pure _save output")
+
+fs.remove(tmp)
+
+if failed == 0 {
+    print "27_json: all ok"
+} else {
+    print "27_json: " + failed + " failures"
+    sys.exit(1)
+}

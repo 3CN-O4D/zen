@@ -1,0 +1,172 @@
+// Pure-Zen reimplementation of the `itertools` module.
+//
+// Declares ZEN_PURE so the .z tier wins over the Rust tier on import; the
+// native members stay reachable as `itertools.native.*` and setting
+// ZEN_NATIVE_ONLY=itertools restores the native tier.
+//
+// Native `chain(...)` is variadic; .z functions have fixed arity, so the pure
+// form takes a single list of lists. `chain([a, b, c])` matches
+// `chain(a, b, c)`.
+ZEN_PURE = true
+
+// enumerate(list) -> [[0, item], [1, item], ...]
+let enumerate = fn(list) {
+    let out = []
+    let i = 0
+    for item in list {
+        out.push([i, item])
+        i += 1
+    }
+    return out
+}
+
+// zip(a, b) -> pairs up to the shorter length.
+let zip = fn(a, b) {
+    let out = []
+    let n = len(a) < len(b) ? len(a) : len(b)
+    let i = 0
+    while i < n {
+        out.push([a[i], b[i]])
+        i += 1
+    }
+    return out
+}
+
+// chain([a, b, c]) -> concatenated contents of each list.
+let chain = fn(iterables) {
+    let out = []
+    for x in iterables {
+        if type(x) == "list" {
+            for item in x { out.push(item) }
+        }
+    }
+    return out
+}
+
+let repeat = fn(value, n) {
+    let out = []
+    let _i = 0
+    while _i < n {
+        out.push(value)
+        _i += 1
+    }
+    return out
+}
+
+// product(a, b) -> [[x, y], ...] for x in a, y in b.
+let product = fn(a, b) {
+    let out = []
+    for x in a {
+        for y in b {
+            out.push([x, y])
+        }
+    }
+    return out
+}
+
+// permutations(list, r?) -> all r-length orderings (default r = len).
+let permutations = fn(list, r = null) {
+    if r == null { r = len(list) }
+    let n = len(list)
+    let out = []
+    let walk = fn(start, path, used) {
+        if start == r {
+            out.push(path)
+            return
+        }
+        let i = 0
+        while i < n {
+            let seen = 0
+            for u in used {
+                if u == i { seen = 1 }
+            }
+            if seen == 0 {
+                walk(start + 1, path + [list[i]], used + [i])
+            }
+            i += 1
+        }
+    }
+    walk(0, [], [])
+    return out
+}
+
+// combinations(list, r) -> all r-length combinations in index order.
+let combinations = fn(list, r) {
+    let n = len(list)
+    let out = []
+    let walk = fn(start, idxs) {
+        if len(idxs) == r {
+            let row = []
+            for idx in idxs { row.push(list[idx]) }
+            out.push(row)
+            return
+        }
+        let i = start
+        while i < n {
+            walk(i + 1, idxs + [i])
+            i += 1
+        }
+    }
+    walk(0, [])
+    return out
+}
+
+// accumulate(list) -> running sums (numeric items only, mirroring native).
+let accumulate = fn(list) {
+    let out = []
+    let acc = 0
+    for item in list {
+        if type(item) == "int" {
+            acc = acc + item
+        }
+        out.push(acc)
+    }
+    return out
+}
+
+// take(n, list) / drop(n, list).
+let take = fn(n, list) {
+    let out = []
+    let _i = 0
+    while _i < n && _i < len(list) {
+        out.push(list[_i])
+        _i += 1
+    }
+    return out
+}
+
+let drop = fn(n, list) {
+    let out = []
+    let _i = n
+    while _i < len(list) {
+        out.push(list[_i])
+        _i += 1
+    }
+    return out
+}
+
+// range(stop) / range(start, stop) / range(start, stop, step).
+let range = fn(start, stop = null, step = null) {
+    if stop == null {
+        stop = start
+        start = 0
+    }
+    if step == null { step = 1 }
+    if step == 0 {
+        throw "itertools.range: step cannot be 0"
+    }
+    let out = []
+    let i = start
+    if step > 0 {
+        while i < stop {
+            out.push(i)
+            i += step
+        }
+    } else {
+        while i > stop {
+            out.push(i)
+            i += step
+        }
+    }
+    return out
+}

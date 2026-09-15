@@ -1387,6 +1387,8 @@ pub(crate) enum PatternItem {
     Name(String),
     /// `...rest` collects the remaining elements.
     Rest(String),
+    /// Nested list pattern, e.g. `[i, [j, k]]`.
+    List(Vec<PatternItem>),
 }
 
 #[derive(Clone, Debug)]
@@ -1449,6 +1451,40 @@ impl Parser {
     fn current(&self) -> &Token {
         &self.tokens[self.pos]
     }
+    fn check(&self, kind: Kind) -> bool {
+        Self::same(&self.current().kind, &kind)
+    }
+    fn parse_list_pattern(&mut self, expect_bracket: bool) -> Result<Vec<PatternItem>, String> {
+        if expect_bracket {
+            self.expect(Kind::LBracket)?;
+        }
+        let mut patterns = Vec::new();
+        loop {
+            if self.take(Kind::RBracket) { break; }
+            match self.current().kind.clone() {
+                Kind::Ident(ref n) => {
+                    let name = n.clone();
+                    self.advance();
+                    patterns.push(PatternItem::Name(name));
+                }
+                Kind::LBracket => {
+                    patterns.push(PatternItem::List(self.parse_list_pattern(true)?));
+                }
+                _ => return Err("expected variable name or nested list pattern".into()),
+            }
+            if !self.take(Kind::Comma) {
+                if !self.check(Kind::RBracket) {
+                    return Err("expected ',' or ']' in list pattern".into());
+                }
+                break;
+            }
+        }
+        if expect_bracket {
+            self.expect(Kind::RBracket)?;
+        }
+        Ok(patterns)
+    }
+
     /// The most recently consumed token (the one that failed a parse).
     fn previous(&self) -> &Token {
         &self.tokens[self.prev]
@@ -1646,13 +1682,20 @@ impl Parser {
                     if !self.take(Kind::RBracket) {
                         loop {
                             let spread = self.take(Kind::Ellipsis);
-                            match self.advance() {
-                                Kind::Ident(name) => names.push(if spread {
-                                    PatternItem::Rest(name)
-                                } else {
-                                    PatternItem::Name(name)
-                                }),
-                                _ => return Err("expected variable name in list pattern".into()),
+                            match self.current().kind {
+                                Kind::Ident(_) => {
+                                    if let Kind::Ident(name) = self.advance() {
+                                        names.push(if spread {
+                                            PatternItem::Rest(name)
+                                        } else {
+                                            PatternItem::Name(name)
+                                        });
+                                    }
+                                }
+                                Kind::LBracket => {
+                                    names.push(PatternItem::List(self.parse_list_pattern(true)?));
+                                }
+                                _ => return Err("expected variable name or nested list in list pattern".into()),
                             }
                             if self.take(Kind::Comma) {
                                 if self.take(Kind::RBracket) {
@@ -3272,13 +3315,15 @@ fn collect_declared_names(kind: &StmtKind, scoped: &mut std::collections::HashSe
                 scoped.insert(n.clone());
             }
             LetTarget::List(ps) => {
-                for p in ps {
+                fn collect_from_pattern(p: &PatternItem, scoped: &mut std::collections::HashSet<String>) {
                     match p {
-                        PatternItem::Name(n) | PatternItem::Rest(n) => {
-                            scoped.insert(n.clone());
+                        PatternItem::Name(n) | PatternItem::Rest(n) => { scoped.insert(n.clone()); },
+                        PatternItem::List(ps) => {
+                            for p in ps { collect_from_pattern(p, scoped); }
                         }
                     }
                 }
+                for p in ps { collect_from_pattern(p, scoped); }
             }
             LetTarget::Dict(ns) => {
                 for n in ns {
@@ -3479,6 +3524,11 @@ fn bind_list_pattern(
                     name.clone(),
                     Value::List(Arc::new(items.get(i..).unwrap_or(&[]).to_vec())),
                 );
+            }
+            PatternItem::List(sub_patterns) => {
+                if let Some(Value::List(sub_items)) = items.get(i) {
+                    bind_list_pattern(vars, sub_patterns, sub_items);
+                }
             }
         }
     }
