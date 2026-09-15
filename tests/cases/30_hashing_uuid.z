@@ -1,0 +1,91 @@
+// Test 30: hashlib + uuid pure modules
+let fail = 0
+let check = fn(cond, label) {
+    if not cond {
+        fail += 1
+        print "FAIL: " + label
+    }
+}
+
+import hashlib
+import uuid
+
+// ---- hashlib basic constructors ----
+let h1 = hashlib.md5("abc")
+check(h1.hexdigest() == "900150983cd24fb0d6963f7d28e17f72", "md5 hex abc")
+let h2 = hashlib.sha1("abc")
+check(h2.hexdigest() == "a9993e364706816aba3e25717850c26c9cd0d89d", "sha1 hex abc")
+let h3 = hashlib.sha256("abc")
+check(h3.hexdigest() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256 hex abc")
+let h38 = hashlib.sha384("abc")
+check(h38.hexdigest() == "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7", "sha384 hex abc")
+let h5 = hashlib.sha512("abc")
+check(h5.hexdigest() == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", "sha512 hex abc")
+let h22 = hashlib.sha224("abc")
+check(h22.hexdigest() == "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7", "sha224 hex abc")
+let h3256 = hashlib.sha3_256("abc")
+check(h3256.hexdigest() == "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532", "sha3_256 hex abc")
+let h3512 = hashlib.sha3_512("abc")
+check(h3512.hexdigest() == "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0", "sha3_512 hex abc")
+let hb2b = hashlib.blake2b("abc")
+check(hb2b.hexdigest() == "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923", "blake2b hex abc")
+let hb2s = hashlib.blake2s("abc")
+check(hb2s.hexdigest() == "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982", "blake2s hex abc")
+
+// ---- hashlib update accumulation ----
+let hu = hashlib.sha256("a")
+hu.update("bc")
+check(hu.hexdigest() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256 update accum")
+
+// ---- hashlib copy ----
+let hc = hu.copy()
+check(hc.hexdigest() == hu.hexdigest(), "copy equals")
+check(typeof(hc) == "dict", "copy returns object")
+
+// ---- hashlib digest_size and digest length ----
+check(h3.digest_size == 32, "sha256 digest_size")
+check(len(h3.digest()) == 32, "sha256 digest bytes len")
+
+// ---- hashlib pbkdf2_hmac ----
+let dk = hashlib.pbkdf2_hmac("sha256", "password", "salt", 100000, 20)
+check(len(dk) == 20, "pbkdf2 len 20 bytes")
+check(typeof(dk) == "string", "pbkdf2 is string")
+
+// ---- hashlib new_ constructor ----
+let hn = hashlib.new_("sha256")
+hn.update("test")
+check(hn.hexdigest() == hashlib.sha256("test").hexdigest(), "new_ sha256 match")
+
+// ---- uuid4 ----
+let u4 = uuid.uuid4()
+check(u4["version"] == 4, "uuid4 version")
+check(u4["variant"] == "rfc4122", "uuid4 variant")
+check(len(u4["hex"]) == 32, "uuid4 hex len 32")
+check(len(u4["str"]) == 36, "uuid4 str len 36")
+
+// ---- uuid1 ----
+let u1 = uuid.uuid1()
+check(u1["version"] == 1, "uuid1 version")
+check(len(u1["hex"]) == 32, "uuid1 hex len 32")
+check(u1["variant"] == "rfc4122", "uuid1 variant")
+
+// ---- uuid NAMESPACE constants ----
+check(typeof(uuid.NAMESPACE_DNS) == "string", "NAMESPACE_DNS is string")
+check(len(uuid.NAMESPACE_DNS) == 36, "NAMESPACE_DNS len 36")
+check(len(uuid.NAMESPACE_URL) == 36, "NAMESPACE_URL len 36")
+
+// ---- uuid UUID() constructor ----
+let ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+check(ns["hex"] == "6ba7b8109dad11d180b400c04fd430c8", "UUID parse hex")
+check(ns["version"] == 1, "UUID parse version")
+
+// ---- uuid3/uuid5 byte-exact for ASCII namespaces ----
+let ascii_ns = "00000000000000000000000000000000"
+let u3 = uuid.uuid3(ascii_ns, "python.org")
+check(u3["str"] == "0421fac3-a9c6-3ea3-aee8-8f20aff3f278", "uuid3 ascii ns")
+let u5 = uuid.uuid5(ascii_ns, "python.org")
+check(u5["str"] == "93128362-2d8d-548e-84ff-e93cd1378be5", "uuid5 ascii ns")
+check(u3["version"] == 3, "uuid3 version")
+check(u5["version"] == 5, "uuid5 version")
+
+print "test30 hashlib uuid done"

@@ -1,0 +1,124 @@
+// Pure-Zen port of Python's `operator` module.
+//
+// Low-level helper module (no native tier) intended to be imported by other
+// `.z` modules. Mirrors the Python `operator` module's function surface for
+// the operations Zen supports.
+//
+// Notes:
+//   - No variadic calls in Zen, so `itemgetter`/`attrgetter` accept a single
+//     key (Python's multi-key tuple form is unavailable).
+//   - `delitem` is omitted (no delete-key primitive in the pure tier).
+//     `setitem` mutates the target and returns `null`.
+
+let _floordiv_py = fn(a, b) {
+    let q = a / b
+    if q < 0 {
+        if q == int(q) { return q }
+        return int(q) - 1
+    }
+    return int(q)
+}
+
+let _mod_py = fn(a, b) {
+    let q = _floordiv_py(a, b)
+    return a - b * q
+}
+
+let add = fn(a, b) { return a + b }
+let sub = fn(a, b) { return a - b }
+let mul = fn(a, b) { return a * b }
+let truediv = fn(a, b) { return a / b }
+let floordiv = fn(a, b) { return _floordiv_py(a, b) }
+let mod = fn(a, b) { return _mod_py(a, b) }
+let divmod = fn(a, b) {
+    return [_floordiv_py(a, b), _mod_py(a, b)]
+}
+let pow = fn(a, b) { return a ** b }
+
+let neg = fn(a) { return -a }
+let pos = fn(a) { return a }
+let abs = fn(a) {
+    if a < 0 { return -a }
+    return a
+}
+let inv = fn(a) { return -a }
+let invert = fn(a) { return -a }
+
+let lshift = fn(a, b) { return a << b }
+let rshift = fn(a, b) { return a >> b }
+let and_ = fn(a, b) { return a and b }
+let or_ = fn(a, b) { return a or b }
+let xor = fn(a, b) {
+    return a != b
+}
+let not_ = fn(a) { return not a }
+let truth = fn(a) { return not not a }
+
+let is_ = fn(a, b) { return a == b }
+let is_not = fn(a, b) { return a != b }
+let eq = fn(a, b) { return a == b }
+let ne = fn(a, b) { return a != b }
+let lt = fn(a, b) { return a < b }
+let le = fn(a, b) { return a <= b }
+let gt = fn(a, b) { return a > b }
+let ge = fn(a, b) { return a >= b }
+
+let contains = fn(a, b) { return a.contains(b) }
+let countOf = fn(a, x) {
+    let it = list(a)
+    let out = 0
+    for v in it {
+        if v == x { out += 1 }
+    }
+    return out
+}
+let indexOf = fn(a, x) {
+    let it = list(a)
+    let i = 0
+    while i < len(it) {
+        if it[i] == x { return i }
+        i += 1
+    }
+    return -1
+}
+let length_hint = fn(a, fd = 0) {
+    let out = len(list(a))
+    if out == 0 { return fd }
+    return out
+}
+
+let getitem = fn(a, b) { return a[b] }
+let setitem = fn(a, b, c) {
+    a[b] = c
+    return null
+}
+let getslice = fn(a, start, stop) { return a.substring(start, stop) }
+let concat = fn(a, b) { return a + b }
+let repeat = fn(a, n) { return a.repeat(n) }
+
+let itemgetter = fn(i) {
+    return fn(obj) { return obj[i] }
+}
+let attrgetter = fn(name) {
+    return fn(obj) { return obj[name] }
+}
+let methodcaller = fn(name) {
+    return fn(obj) {
+        let row = obj[name]
+        if row == null { throw "operator.methodcaller: no member named " + name }
+        return row
+    }
+}
+
+let iadd = fn(a, b) { return a + b }
+let isub = fn(a, b) { return a - b }
+let imul = fn(a, b) { return a * b }
+let itruediv = fn(a, b) { return a / b }
+let ifloordiv = fn(a, b) { return _floordiv_py(a, b) }
+let imod = fn(a, b) { return _mod_py(a, b) }
+let ipow = fn(a, b) { return a ** b }
+let ilshift = fn(a, b) { return a << b }
+let irshift = fn(a, b) { return a >> b }
+let iand = fn(a, b) { return a and b }
+let ior = fn(a, b) { return a or b }
+let ixor = fn(a, b) { return a != b }

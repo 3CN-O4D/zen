@@ -1,0 +1,74 @@
+// Pure-Zen reimplementation of the `shutil` module.
+//
+// High-level file operations built on the native `fs`/`os` APIs.
+// Mirrors Python's `shutil` for the subset that makes sense here.
+//
+// Notes:
+//   - `copy2` cannot preserve full metadata (no stat/utime API); it behaves
+//     like `copy`.  `disk_usage` is intentionally omitted (no native support).
+ZEN_PURE = true
+
+import fs
+import os
+
+let copy = fn(src, dst) {
+    fs.copy(src, dst)
+    return dst
+}
+
+let copy2 = fn(src, dst) {
+    fs.copy(src, dst)
+    return dst
+}
+
+let copyfile = fn(src, dst) {
+    fs.copy(src, dst)
+    return dst
+}
+
+let copytree = fn(src, dst, dirs_exist_ok = false) {
+    if not fs.exists(src) { throw "shutil.copytree: no such directory: " + src }
+    fs.mkdirs(dst)
+    let names = fs.list(src)
+    for name in names {
+        if name == "." or name == ".." { continue }
+        let s = fs.join(src, name)
+        let d = fs.join(dst, name)
+        if fs.is_dir(s) {
+            copytree(s, d, dirs_exist_ok)
+        } else {
+            fs.copy(s, d)
+        }
+    }
+    return dst
+}
+
+let move = fn(src, dst) {
+    let target = dst
+    if fs.is_dir(dst) {
+        target = fs.join(dst, fs.basename(src))
+    }
+    fs.move(src, target)
+    return target
+}
+
+let rmtree = fn(path) {
+    fs.rmtree(path)
+    return null
+}
+
+let which = fn(cmd, path = null) {
+    let dirs = path
+    if dirs == null {
+        dirs = os.getenv("PATH", "")
+    }
+    let parts = list(dirs.split(":"))
+    for dirname in parts {
+        if dirname == "" { continue }
+        let candidate = fs.join(dirname, cmd)
+        if fs.exists(candidate) and fs.is_file(candidate) {
+            return candidate
+        }
+    }
+    return null
+}

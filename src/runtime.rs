@@ -1461,13 +1461,21 @@ impl Parser {
         let mut patterns = Vec::new();
         loop {
             if self.take(Kind::RBracket) { break; }
+            let spread = self.take(Kind::Ellipsis);
             match self.current().kind.clone() {
                 Kind::Ident(ref n) => {
                     let name = n.clone();
                     self.advance();
-                    patterns.push(PatternItem::Name(name));
+                    patterns.push(if spread {
+                        PatternItem::Rest(name)
+                    } else {
+                        PatternItem::Name(name)
+                    });
                 }
                 Kind::LBracket => {
+                    if spread {
+                        return Err("nested list pattern cannot be a rest (`...`) target".into());
+                    }
                     patterns.push(PatternItem::List(self.parse_list_pattern(true)?));
                 }
                 _ => return Err("expected variable name or nested list pattern".into()),
@@ -3530,6 +3538,26 @@ fn bind_list_pattern(
                     bind_list_pattern(vars, sub_patterns, sub_items);
                 }
             }
+        }
+    }
+}
+
+/// Collect every name bound by a list pattern, descending into nested list
+/// patterns, e.g. `[a, [b, c], ...rest]` -> a, b, c, rest.
+fn collect_pattern_names<'a>(patterns: &'a [PatternItem], out: &mut Vec<&'a String>) {
+    for p in patterns {
+        match p {
+            PatternItem::Name(n) | PatternItem::Rest(n) => out.push(n),
+            PatternItem::List(inner) => collect_pattern_names(inner, out),
+        }
+    }
+}
+
+fn collect_pattern_names_owned(patterns: &[PatternItem], out: &mut Vec<String>) {
+    for p in patterns {
+        match p {
+            PatternItem::Name(n) | PatternItem::Rest(n) => out.push(n.clone()),
+            PatternItem::List(inner) => collect_pattern_names_owned(inner, out),
         }
     }
 }
@@ -9525,6 +9553,50 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
         }
         self.global_cache = None;
     }
+
+    /// Bind a list/tuple destructuring pattern to a value list, recursing into
+    /// nested list patterns like `let [a, [b, c], ...rest] = ..`. Missing slots
+    /// bind to Null (consistent with the top-level `let [a, b] = [1]` behavior).
+    fn destructure_list(
+        &mut self,
+        patterns: &[PatternItem],
+        items: &[Value],
+        is_const: bool,
+        names: &mut Vec<String>,
+    ) -> Result<(), String> {
+        for (i, item) in patterns.iter().enumerate() {
+            match item {
+                PatternItem::Name(name) => {
+                    if is_const && self.locked.contains(name) {
+                        return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
+                    }
+                    let value = items.get(i).cloned().unwrap_or(Value::Null);
+                    self.bind_let(name, value);
+                    names.push(name.clone());
+                }
+                PatternItem::Rest(name) => {
+                    if is_const && self.locked.contains(name) {
+                        return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
+                    }
+                    let value = Value::List(Arc::new(items.get(i..).unwrap_or(&[]).to_vec()));
+                    self.bind_let(name, value);
+                    names.push(name.clone());
+                }
+                PatternItem::List(sub_patterns) => match items.get(i) {
+                    Some(Value::List(sub_items)) => {
+                        self.destructure_list(sub_patterns, sub_items, is_const, names)?;
+                    }
+                    _ => {
+                        // Missing or non-list nested slot: bind its leaves as Null,
+                        // mirroring the top-level missing-slot behavior.
+                        self.destructure_list(sub_patterns, &[], is_const, names)?;
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+
     fn self_field_get(&mut self, name: &str) -> Option<Value> {
         let inst = {
             let mut found = None;
@@ -10680,25 +10752,7 @@ self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone
                         }
                         LetTarget::List(patterns) => match v {
                             Value::List(items) => {
-                                for (i, item) in patterns.iter().enumerate() {
-                                    let (name, value) = match item {
-                                        PatternItem::Name(name) => (
-                                            name.clone(),
-                                            items.get(i).cloned().unwrap_or(Value::Null),
-                                        ),
-                                        PatternItem::Rest(name) => (
-                                            name.clone(),
-                                            Value::List(Arc::new(
-                                                items.get(i..).unwrap_or(&[]).to_vec(),
-                                            )),
-                                        ),
-                                    };
-                                    if *is_const && self.locked.contains(&name) {
-                                        return Err(format!("cannot redefine constant: {name}\n  \x1b[1;33m= note:\x1b[0m  `{name}` was declared with `const` and cannot be changed\n  \x1b[1;33m= help:\x1b[0m use `let {name} = ...` if you need a mutable variable"));
-                                    }
-                                    self.bind_let(&name, value);
-                                    names.push(name);
-                                }
+                                self.destructure_list(patterns, &items, *is_const, &mut names)?;
                             }
                             other => return Err(format!("cannot destructure {other} as a list")),
                         },
@@ -20818,12 +20872,11 @@ impl LintReport {
     fn declare_target(&mut self, target: &LetTarget, is_const: bool, line: usize) {
         let names: Vec<&String> = match target {
             LetTarget::Var(name) => vec![name],
-            LetTarget::List(patterns) => patterns
-                .iter()
-                .map(|p| match p {
-                    PatternItem::Name(n) | PatternItem::Rest(n) => n,
-                })
-                .collect(),
+            LetTarget::List(patterns) => {
+                let mut out = Vec::new();
+                collect_pattern_names(patterns, &mut out);
+                out
+            }
             LetTarget::Dict(names) => names.iter().collect(),
         };
         for name in names {
@@ -20843,12 +20896,11 @@ impl LintReport {
                 StmtKind::Let(target, init, is_const) => {
                     let bound: Vec<String> = match target {
                         LetTarget::Var(n) => vec![n.clone()],
-                        LetTarget::List(patterns) => patterns
-                            .iter()
-                            .map(|p| match p {
-                                PatternItem::Name(n) | PatternItem::Rest(n) => n.clone(),
-                            })
-                            .collect(),
+                        LetTarget::List(patterns) => {
+                            let mut out = Vec::new();
+                            collect_pattern_names_owned(patterns, &mut out);
+                            out
+                        }
                         LetTarget::Dict(names) => names.clone(),
                     };
                     for name in &bound {

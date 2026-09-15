@@ -1,0 +1,148 @@
+// Pure-Zen reimplementation of the `hashlib` module.
+//
+// Mirrors Python's hashing API: hash objects with `update`, `digest`,
+// `hexdigest`, `copy` and `digest_size`/`block_size`.  Hashing itself is
+// delegated to the native `crypto` module (low-level kernel API).
+//
+// Notes:
+//   - Zen dicts are copied across closure capture, so mutable hash state is
+//     kept as a captured list of chunks (lists are reference-typed) rather
+//     than a dict field.
+//   - `digest()` returns a binary string assembled from the hex result.
+//   - `new` (module factory) is unavailable: `new` is a Zen keyword, so the
+//     constructor is exported as `new_`.  Direct constructors (`md5`, `sha1`,
+//     ...) cover the same ground.
+//   - `pbkdf2_hmac` delegates to `crypto.pbkdf2` (SHA-256 based).
+ZEN_PURE = true
+
+import crypto
+
+let _digest_size = {
+    "md5": 16,
+    "sha1": 20,
+    "sha224": 28,
+    "sha256": 32,
+    "sha384": 48,
+    "sha512": 64,
+    "sha3_256": 32,
+    "sha3_512": 64,
+    "blake2b": 64,
+    "blake2s": 32,
+}
+let _block_size = {
+    "md5": 64,
+    "sha1": 64,
+    "sha224": 64,
+    "sha256": 64,
+    "sha384": 128,
+    "sha512": 128,
+    "sha3_256": 136,
+    "sha3_512": 72,
+    "blake2b": 128,
+    "blake2s": 64,
+}
+
+let algorithms_guaranteed = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "blake2b", "blake2s"]
+let algorithms_available = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3_256", "sha3_512", "blake2b", "blake2s"]
+
+let _hexint = fn(c) {
+    if c >= "0" and c <= "9" { return c.ord() - 48 }
+    if c >= "a" and c <= "f" { return c.ord() - 87 }
+    if c >= "A" and c <= "F" { return c.ord() - 55 }
+    return 0
+}
+
+let _unhex = fn(hx) {
+    let out = ""
+    let i = 0
+    while i + 1 < len(hx) {
+        let hi = _hexint(hx[i])
+        let lo = _hexint(hx[i + 1])
+        out += chr(hi * 16 + lo)
+        i += 2
+    }
+    return out
+}
+
+let _join = fn(parts) {
+    let out = ""
+    for p in parts {
+        out += p
+    }
+    return out
+}
+
+let _norm = fn(name) {
+    let s = str(name).lower()
+    let out = ""
+    for c in list(s) {
+        if c == "-" or c == "_" or c == " " { continue }
+        out += c
+    }
+    return out
+}
+
+let _agofn = fn(algo) {
+    if algo == "md5" { return crypto.md5 }
+    if algo == "sha1" { return crypto.sha1 }
+    if algo == "sha224" { return crypto.sha224 }
+    if algo == "sha256" { return crypto.sha256 }
+    if algo == "sha384" { return crypto.sha384 }
+    if algo == "sha512" { return crypto.sha512 }
+    if algo == "sha3_256" { return crypto.sha3_256 }
+    if algo == "sha3_512" { return crypto.sha3_512 }
+    if algo == "blake2b" { return crypto.blake2b }
+    if algo == "blake2s" { return crypto.blake2s }
+    return null
+}
+
+let _make = fn(algo, data) {
+    let dg = _digest_size.get(algo, 32)
+    let bl = _block_size.get(algo, 64)
+    let parts = []
+    if data != "" { parts.push(data) }
+    let h = {}
+    h["name"] = algo
+    h["digest_size"] = dg
+    h["block_size"] = bl
+    h["_algo"] = algo
+    h["_parts"] = parts
+    h["update"] = fn(more) {
+        parts.push(more)
+        return null
+    }
+    h["digest"] = fn() {
+        return _unhex(_agofn(algo)(_join(parts)))
+    }
+    h["hexdigest"] = fn() {
+        return _agofn(algo)(_join(parts))
+    }
+    h["copy"] = fn() {
+        return _make(algo, _join(parts))
+    }
+    return h
+}
+
+let new_ = fn(name, data = "") {
+    let algo = _norm(name)
+    if _agofn(algo) == null {
+        throw "hashlib.new: unsupported hash algorithm: " + str(name)
+    }
+    return _make(algo, data)
+}
+
+let md5 = fn(data = "") { return _make("md5", data) }
+let sha1 = fn(data = "") { return _make("sha1", data) }
+let sha224 = fn(data = "") { return _make("sha224", data) }
+let sha256 = fn(data = "") { return _make("sha256", data) }
+let sha384 = fn(data = "") { return _make("sha384", data) }
+let sha512 = fn(data = "") { return _make("sha512", data) }
+let sha3_256 = fn(data = "") { return _make("sha3_256", data) }
+let sha3_512 = fn(data = "") { return _make("sha3_512", data) }
+let blake2b = fn(data = "") { return _make("blake2b", data) }
+let blake2s = fn(data = "") { return _make("blake2s", data) }
+
+let pbkdf2_hmac = fn(hash_name, password, salt, iterations, dklen = null) {
+    let keylen = dklen == null ? 32 : dklen
+    return _unhex(crypto.pbkdf2(password, salt, iterations, keylen))
+}

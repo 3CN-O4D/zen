@@ -1,0 +1,114 @@
+// Test 32: glob + pathlib + shutil pure modules
+let fail = 0
+let check = fn(cond, label) {
+    if not cond {
+        fail += 1
+        print "FAIL: " + label
+    }
+}
+
+import glob
+import pathlib
+import shutil
+import fs
+
+// ---- set up a scratch directory ----
+let base = "/tmp/zen_test32"
+fs.mkdirs(base)
+fs.mkdirs(base + "/a/b")
+fs.mkdirs(base + "/a/c")
+fs.write(base + "/t1.txt", "hello")
+fs.write(base + "/a/b/t2.txt", "world")
+fs.write(base + "/a/b/u.md", "note")
+fs.write(base + "/a/c/t3.txt", "data")
+
+// ---- glob ----
+check(glob.has_magic("*.txt") == true, "has_magic star")
+check(glob.has_magic("abc") == false, "has_magic plain")
+check(glob.escape("/tmp/*.txt") == "/tmp/[*].txt", "escape star")
+
+let g1 = glob.glob(base + "/*.txt")
+check(len(g1) == 1, "glob *.txt count")
+check(g1[0].contains("t1.txt"), "glob *.txt t1")
+
+let g2 = glob.glob(base + "/**/*.txt", true)
+check(len(g2) == 3, "glob **/*.txt recursive count")
+
+let g3 = glob.glob(base + "/t?.txt")
+check(len(g3) == 1, "glob ?.txt count")
+check(g3[0].contains("t1.txt"), "glob ?.txt t1")
+
+let g4 = glob.glob(base + "/nope*")
+check(len(g4) == 0, "glob no match empty")
+
+// ---- pathlib ----
+let p1 = pathlib.Path(base + "/t1.txt")
+check(p1["name"] == "t1.txt", "pathlib name")
+check(p1["stem"] == "t1", "pathlib stem")
+check(p1["suffix"] == ".txt", "pathlib suffix")
+check(p1["is_abs"] == true, "pathlib is_abs")
+check(p1.exists() == true, "pathlib exists")
+check(p1.is_file() == true, "pathlib is_file")
+
+let p2 = pathlib.Path(base + "/a")
+check(p2.is_dir() == true, "pathlib is_dir")
+
+let p3 = pathlib.Path(base + "/x/y/z.tar.gz")
+check(p3["stem"] == "z.tar", "pathlib stem multi")
+check(p3["suffix"] == ".gz", "pathlib suffix multi")
+check(len(p3["suffixes"]) == 2, "pathlib suffixes count")
+
+let p4 = p3.with_suffix(".bz2")
+check(p4["name"] == "z.tar.bz2", "pathlib with_suffix")
+
+let p5 = p3.with_stem("other")
+check(p5["name"] == "other.gz", "pathlib with_stem")
+
+let gp = pathlib.Path(base + "/a")
+let rg = gp.rglob("*.txt")
+check(len(rg) == 2, "pathlib rglob count")
+
+let iteritems = gp.iterdir()
+check(len(iteritems) == 2, "pathlib iterdir count")
+
+let joined = gp.joinpath("b").joinpath("t2.txt")
+check(joined.exists(), "pathlib joinpath exists")
+check(joined["str"].contains("a/b/t2.txt"), "pathlib joinpath path")
+
+// ---- shutil ----
+let shsrc = base + "/t1.txt"
+let shdst = base + "/copy_t1.txt"
+shutil.copyfile(shsrc, shdst)
+check(fs.exists(shdst), "shutil copyfile exists")
+check(fs.read(shdst) == fs.read(shsrc), "shutil copyfile content")
+
+shutil.copy(shsrc, base + "/copy2_t1.txt")
+check(fs.exists(base + "/copy2_t1.txt"), "shutil copy exists")
+
+let tree_src = base + "/a"
+let tree_dst = base + "/copied_tree"
+shutil.copytree(tree_src, tree_dst)
+check(fs.is_dir(tree_dst), "shutil copytree dir")
+let cp_items = pathlib.Path(tree_dst).rglob("*.txt")
+check(len(cp_items) == 2, "shutil copytree files")
+
+shutil.move(base + "/copy2_t1.txt", base + "/moved_t1.txt")
+check(fs.exists(base + "/moved_t1.txt"), "shutil move exists")
+check(not fs.exists(base + "/copy2_t1.txt"), "shutil move src gone")
+
+shutil.rmtree(tree_dst)
+check(not fs.exists(tree_dst), "shutil rmtree")
+
+// ---- cleanup ----
+fs.remove(base + "/copy_t1.txt")
+fs.remove(base + "/moved_t1.txt")
+fs.remove(base + "/t1.txt")
+fs.remove(base + "/a/b/t2.txt")
+fs.remove(base + "/a/b/u.md")
+fs.remove(base + "/a/c/t3.txt")
+fs.rmdir(base + "/a/b")
+fs.rmdir(base + "/a/c")
+fs.rmdir(base + "/a")
+fs.rmdir(base)
+
+print "test32 glob pathlib shutil done"

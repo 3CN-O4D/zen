@@ -1,0 +1,95 @@
+// Test 29: operator + functools pure modules
+let fail = 0
+let check = fn(cond, label) {
+    if not cond {
+        fail += 1
+        print "FAIL: " + label
+    }
+}
+
+import operator
+import functools
+
+// ---- operator arithmetic ----
+check(operator.add(2, 3) == 5, "add 2 3")
+check(operator.sub(7, 2) == 5, "sub 7 2")
+check(operator.mul(3, 4) == 12, "mul 3 4")
+check(operator.truediv(7, 2) == 3.5, "truediv 7 2")
+check(operator.floordiv(7, 2) == 3, "floordiv 7 2")
+check(operator.floordiv(-7, 2) == -4, "floordiv -7 2")
+check(operator.floordiv(7, -2) == -4, "floordiv 7 -2")
+check(operator.mod(7, 2) == 1, "mod 7 2")
+check(operator.mod(-7, 2) == 1, "mod -7 2")
+check(operator.pow(2, 8) == 256, "pow 2 8")
+check(operator.neg(4) == -4, "neg")
+check(operator.pos(-3) == -3, "pos")
+check(operator.abs(-7) == 7, "abs")
+
+// ---- operator bitwise / logic ----
+check(operator.lshift(1, 4) == 16, "lshift")
+check(operator.rshift(16, 3) == 2, "rshift")
+check(operator.truth(0) == false, "truth 0")
+check(operator.truth(1) == true, "truth 1")
+check(operator.not_(0) == true, "not_ 0")
+check(operator.not_(5) == false, "not_ 5")
+
+// ---- operator comparison ----
+check(operator.eq(1, 1) == true, "eq")
+check(operator.ne(1, 2) == true, "ne")
+check(operator.lt(1, 2) == true, "lt")
+check(operator.le(2, 2) == true, "le")
+check(operator.gt(2, 1) == true, "gt")
+check(operator.ge(2, 2) == true, "ge")
+
+// ---- operator collections ----
+check(operator.contains([10, 20, 30], 20), "contains")
+check(operator.contains("hello", "ell"), "contains str")
+check(operator.getitem([10, 20, 30], 1) == 20, "getitem")
+let ig = operator.itemgetter(1)
+check(ig([10, 20, 30]) == 20, "itemgetter")
+check(operator.concat("ab", "cd") == "abcd", "concat str")
+check(operator.repeat("ab", 3) == "ababab", "repeat")
+
+// ---- operator in-place ----
+check(operator.iadd(3, 2) == 5, "iadd")
+check(operator.isub(7, 2) == 5, "isub")
+check(operator.imul(3, 4) == 12, "imul")
+check(operator.itruediv(7, 2) == 3.5, "itruediv")
+check(operator.ifloordiv(7, 2) == 3, "ifloordiv")
+
+// ---- functools.reduce ----
+check(functools.reduce(operator.add, [1, 2, 3, 4]) == 10, "reduce add")
+check(functools.reduce(operator.mul, [2, 3, 4], 1) == 24, "reduce mul init")
+check(functools.reduce(operator.add, [], 42) == 42, "reduce empty init")
+
+// ---- functools.partial ----
+let add10 = functools.partial(operator.add, 10)
+check(add10(5) == 15, "partial")
+check(functools.partial(operator.mul, 3)(4) == 12, "partial mul")
+
+// ---- functools.wraps / identity combinators ----
+let dummy = fn() { return 99 }
+check(functools.wraps(dummy)(dummy)() == 99, "wraps")
+check(functools.cmp_to_key(operator.lt) != null, "cmp_to_key")
+
+// ---- functools.lru_cache_unary memoization ----
+let cnt = { v: 0 }
+let cached = functools.lru_cache_unary(null)(fn(n) { cnt["v"] = cnt["v"] + 1; return n * 10 })
+let c1 = cached(7)
+let c2 = cached(7)
+let c3 = cached(8)
+check(c1 == 70, "lru first call")
+check(c2 == 70, "lru cache hit")
+check(c3 == 80, "lru different key")
+check(cnt["v"] == 2, "lru called exactly twice")
+
+// ---- functools.lru_cache (binary) memoization ----
+let cnt2 = { v: 0 }
+let cached2 = functools.lru_cache(null)(fn(a, b) { cnt2["v"] = cnt2["v"] + 1; return a + b })
+let d1 = cached2(3, 4)
+let d2 = cached2(3, 4)
+check(d1 == 7, "lru binary first")
+check(d2 == 7, "lru binary hit")
+check(cnt2["v"] == 1, "lru binary called once")
+
+print "test29 operator functools done"

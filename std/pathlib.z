@@ -1,0 +1,501 @@
+// Pure-Zen reimplementation of `pathlib`.
+//
+// `Path(p)` builds a path object (a dict) whose Python-like properties are
+// plain values (`str`, `name`, `stem`, `suffix`, `suffixes`, `parent`,
+// `parts`, `anchor`, `is_abs`) and whose operations are function members
+// (`exists`, `is_file`, `is_dir`, `read_text`, `write_text`, `mkdir`, glob,
+// rglob, `joinpath`, `rename`, ...).  `PurePath` is an alias of `Path`.
+//
+// Notes:
+//   - No operator overloading in Zen, so composition uses `joinpath`.
+//   - `.sort()`-style lexicographic and per-component matching come from the
+//     pure `glob` module (imported below); recursion/matching is full.
+ZEN_PURE = true
+
+import fs
+import os
+
+let _as_str = fn(x) {
+    if x == null { return "." }
+    let s = str(x)
+    if len(s) > 1 and s[0] == "{" and x["_path"] != null {
+        return x["_path"]
+    }
+    return s
+}
+
+let _glob_has_magic = fn(s) {
+    for c in list(s) {
+        if c == "*" or c == "?" or c == "[" { return true }
+    }
+    return false
+}
+
+let _glob_match_tail = fn(text, pattern) {
+    let m = len(text)
+    let n = len(pattern)
+    let ti = 0
+    let pi = 0
+    while pi < n {
+        let pc = pattern[pi]
+        if pc == "*" {
+            pi += 1
+            while pi < n and pattern[pi] == "*" { pi += 1 }
+            if pi == n { return true }
+            let si = ti
+            while si <= m {
+                if _glob_match_tail(text.substring(si, m), pattern.substring(pi, n)) {
+                    return true
+                }
+                si += 1
+            }
+            return false
+        }
+        if ti >= m { return false }
+        if pc == "?" {
+            ti += 1
+            pi += 1
+            continue
+        }
+        if pc == "[" {
+            let j = pi + 1
+            let neg = false
+            if j < n and pattern[j] == "!" {
+                neg = true
+                j += 1
+            }
+            let matched = false
+            while j < n and pattern[j] != "]" {
+                if j + 2 < n and pattern[j + 1] == "-" and pattern[j + 2] != "]" {
+                    let c0 = pattern[j]
+                    let c1 = pattern[j + 2]
+                    let cc = text[ti]
+                    if cc >= c0 and cc <= c1 or cc >= c1 and cc <= c0 { matched = true }
+                    j += 3
+                } else {
+                    if pattern[j] == text[ti] { matched = true }
+                    j += 1
+                }
+            }
+            if neg { matched = not matched }
+            if not matched { return false }
+            ti += 1
+            pi = j + 1
+            continue
+        }
+        if pattern[pi] != text[ti] { return false }
+        ti += 1
+        pi += 1
+    }
+    return ti == m
+}
+
+let _glob_join = fn(a, b) {
+    if b == "" { return a }
+    if a == "" { return b }
+    if a == "/" { return "/" + b }
+    return a + "/" + b
+}
+
+let _glob_split = fn(p) {
+    let parts = list(p.split("/"))
+    let out = []
+    for part in parts {
+        if part == "" { continue }
+        out.push(part)
+    }
+    return out
+}
+
+let _glob_children = fn(dir) {
+    let names = []
+    try {
+        names = fs.list(dir)
+    } catch e {
+        return []
+    }
+    let out = []
+    for name in names {
+        if name == "." or name == ".." { continue }
+        out.push(name)
+    }
+    return out
+}
+
+let _glob_walk = fn(base, pats, idx, recursive) {
+    let out = []
+    if idx >= len(pats) {
+        out.push(base)
+        return out
+    }
+    let comp = pats[idx]
+    if comp == "**" and recursive {
+        let rest = _glob_walk(base, pats, idx + 1, recursive)
+        for r in rest {
+            out.push(r)
+        }
+        let names = _glob_children(base)
+        for name in names {
+            let sub = _glob_join(base, name)
+            if fs.is_dir(sub) {
+                let deeper = _glob_walk(sub, pats, idx, recursive)
+                for d in deeper {
+                    out.push(d)
+                }
+            }
+        }
+        return out
+    }
+    if not _glob_has_magic(comp) {
+        let sub = _glob_join(base, comp)
+        if fs.exists(sub) {
+            let rest = _glob_walk(sub, pats, idx + 1, recursive)
+            for r in rest {
+                out.push(r)
+            }
+        }
+        return out
+    }
+    let names = _glob_children(base)
+    for name in names {
+        if _glob_match_tail(name, comp) {
+            let rest = _glob_walk(_glob_join(base, name), pats, idx + 1, recursive)
+            for r in rest {
+                out.push(r)
+            }
+        }
+    }
+    return out
+}
+
+let _glob_dedupe = fn(arr) {
+    let seen = []
+    let out = []
+    for v in arr {
+        if not seen.contains(v) {
+            seen.push(v)
+            out.push(v)
+        }
+    }
+    return out
+}
+
+let _glob_impl = fn(pathname, recursive) {
+    let orig = pathname
+    let abs = len(orig) > 0 and orig[0] == "/"
+    let pats = _glob_split(orig)
+    let k = 0
+    let lit = abs ? "/" : ""
+    while k < len(pats) and not _glob_has_magic(pats[k]) {
+        lit = _glob_join(lit, pats[k])
+        k += 1
+    }
+    if k >= len(pats) {
+        if fs.exists(orig) { return [orig] }
+        return []
+    }
+    let base = lit
+    if base == "" {
+        base = abs ? "/" : "."
+    }
+    let rows = _glob_dedupe(_glob_walk(base, pats, k, recursive)).sort()
+    let out = []
+    for r in rows {
+        if fs.exists(r) { out.push(r) }
+    }
+    return out
+}
+
+let _slash = fn(p) {
+    let out = ""
+    for c in list(p) {
+        if c == "\\" { out += "/" } else { out += c }
+    }
+    return out
+}
+
+let _is_abs = fn(p) {
+    if p == "" { return false }
+    return p[0] == "/"
+}
+
+let _pop = fn(arr) {
+    let out = []
+    let i = 0
+    while i < len(arr) - 1 {
+        out.push(arr[i])
+        i += 1
+    }
+    return out
+}
+
+let _norm = fn(p0) {
+    let p = _slash(p0)
+    if p == "" { return "." }
+    let pre = _is_abs(p) ? "/" : ""
+    let names = list(p.split("/"))
+    let parts = []
+    for name in names {
+        if name == "" or name == "." { continue }
+        if name == ".." {
+            let n = len(parts)
+            if n > 0 and parts[n - 1] != ".." {
+                parts = _pop(parts)
+            } elif pre == "" {
+                parts.push("..")
+            }
+            continue
+        }
+        parts.push(name)
+    }
+    let body = pre + parts.join("/")
+    if body == "" {
+        if pre == "/" { return "/" }
+        return "."
+    }
+    return body
+}
+
+let _join = fn(a, b) {
+    if b == "" { return a }
+    if _is_abs(b) { return b }
+    if a == "" or a == "." { return b }
+    return a + "/" + b
+}
+
+let _name = fn(p) {
+    let q = _slash(p)
+    let n = len(q)
+    let sep = -1
+    let i = n - 1
+    while i >= 0 {
+        if q[i] == "/" {
+            sep = i
+            break
+        }
+        i -= 1
+    }
+    if sep == -1 { return q }
+    return q.substring(sep + 1, n)
+}
+
+let _parent = fn(p) {
+    let q = _norm(p)
+    if q == "/" { return "/" }
+    if q == "." { return "." }
+    let i = len(q) - 1
+    while i >= 0 and q[i] == "/" { i -= 1 }
+    let j = i
+    while j >= 0 and q[j] != "/" { j -= 1 }
+    if j < 0 { return "/" }
+    let head = q.substring(0, j)
+    if head == "" { return "/" }
+    return head
+}
+
+let _suffixes_of = fn(base) {
+    let stripped = base
+    while len(stripped) > 0 and stripped[0] == "." {
+        stripped = stripped.substring(1, len(stripped))
+    }
+    if stripped == "" { return [] }
+    let segs = list(stripped.split("."))
+    let out = []
+    let i = 1
+    while i < len(segs) {
+        out.push("." + segs[i])
+        i += 1
+    }
+    return out
+}
+
+let _stem_and_suffixes = fn(self) {
+    let base = _name(self)
+    let n = len(base)
+    let dot = -1
+    let i = n - 1
+    while i >= 0 {
+        if base[i] == "." {
+            dot = i
+            break
+        }
+        i -= 1
+    }
+    if dot > 0 and dot < n - 1 {
+        let stem = base.substring(0, dot)
+        let suffix = base.substring(dot, n)
+        return [stem, suffix, _suffixes_of(base)]
+    }
+    return [base, "", _suffixes_of(base)]
+}
+
+let _anchors = fn(self) {
+    let anchor = _is_abs(self) ? "/" : ""
+    let names = list(self.split("/"))
+    let parts = []
+    for name in names {
+        if name == "" or name == "." { continue }
+        parts.push(name)
+    }
+    return [parts, anchor]
+}
+
+let _abs = fn(self) {
+    if _is_abs(self) { return _norm(self) }
+    return _norm(_join(os.cwd(), self))
+}
+
+let _expand = fn(self) {
+    let sp = _slash(self)
+    let home = os.getenv("HOME", "/")
+    if sp == "~" { return _norm(home) }
+    if len(sp) > 2 and sp.substring(0, 2) == "~/" {
+        return _norm(_join(home, sp.substring(2, len(sp))))
+    }
+    return _norm(sp)
+}
+
+let _is_relative = fn(self, other) {
+    let a = _norm(self)
+    let b = _norm(other)
+    if a == b { return true }
+    if len(a) <= len(b) { return false }
+    if a.substring(0, len(b)) != b { return false }
+    if a[len(b)] == "/" { return true }
+    return false
+}
+
+let _with_name = fn(self, name) {
+    return _join(_parent(self), name)
+}
+
+let _with_last = fn(self, last) {
+    let suffixes = _stem_and_suffixes(self)[2]
+    let base = _name(self)
+    let n = len(suffixes)
+    if n == 0 { return _with_name(self, last) }
+    let last_s = suffixes[n - 1]
+    let keep = len(base) - len(last_s)
+    return _with_name(self, base.substring(0, keep) + last)
+}
+
+let _with_stem = fn(self, stem) {
+    let suffixes = _stem_and_suffixes(self)[2]
+    let suffix = len(suffixes) == 0 ? "" : suffixes[len(suffixes) - 1]
+    return _with_name(self, stem + suffix)
+}
+
+let _path_list = fn(self) {
+    let out = []
+    let names = []
+    try {
+        names = fs.list(self)
+    } catch e {
+        throw "pathlib: cannot list directory: " + self
+    }
+    for name in names {
+        if name == "." or name == ".." { continue }
+        out.push(Path(_join(self, name)))
+    }
+    return out
+}
+
+let _path_glob = fn(self, pattern, recursive_all) {
+    let pat = _as_str(pattern)
+    if recursive_all and not pat.contains("**") {
+        pat = "**/" + pat
+    }
+    let full = _join(_slash(self), _slash(pat))
+    let hits = _glob_impl(full, pat.contains("**"))
+    let out = []
+    for h in hits {
+        out.push(Path(h))
+    }
+    return out
+}
+
+let Path = fn(p = null) {
+    let sp = p == null ? os.cwd() : _as_str(p)
+    let self = _norm(_slash(sp))
+    let ses = _stem_and_suffixes(self)
+    let anc = _anchors(self)
+    let o = {}
+    o["_path"] = self
+    o["str"] = self
+    o["name"] = _name(self)
+    o["stem"] = ses[0]
+    o["suffix"] = ses[1]
+    o["suffixes"] = ses[2]
+    let par = _parent(self)
+    if par == self {
+        o["parent"] = "/"
+    } else {
+        o["parent"] = Path(par)
+    }
+    o["parts"] = anc[0]
+    o["anchor"] = anc[1]
+    o["is_abs"] = _is_abs(self)
+    o["version"] = null
+    o["is_absolute"] = fn() { return _is_abs(self) }
+    o["is_reserved"] = fn() { return false }
+    o["exists"] = fn() { return fs.exists(self) }
+    o["is_file"] = fn() { return fs.is_file(self) }
+    o["is_dir"] = fn() { return fs.is_dir(self) }
+    o["is_relative_to"] = fn(other) { return _is_relative(self, _as_str(other)) }
+    o["absolute"] = fn() { return Path(_abs(self)) }
+    o["resolve"] = fn(strict = false) { return Path(_abs(self)) }
+    o["expanduser"] = fn() { return Path(_expand(self)) }
+    o["joinpath"] = fn(other) { return Path(_join(self, _as_str(other))) }
+    o["cwd"] = fn() { return os.cwd() }
+    o["home"] = fn() { return Path(_expand("~")) }
+    o["read_text"] = fn(encoding = null) { return fs.read(self) }
+    o["write_text"] = fn(data, encoding = null) {
+        fs.write(self, data)
+        return len(data)
+    }
+    o["read_bytes"] = fn() { return fs.read_binary(self) }
+    o["write_bytes"] = fn(data) {
+        fs.write_binary(self, data)
+        return len(data)
+    }
+    o["touch"] = fn(mode = 511, exist_ok = true) {
+        if not fs.exists(self) { fs.write(self, "") }
+        return null
+    }
+    o["mkdir"] = fn(mode = 511, parents = false, exist_ok = false) {
+        fs.mkdirs(self)
+        return null
+    }
+    o["rmdir"] = fn() { fs.rmdir(self); return null }
+    o["unlink"] = fn(missing_ok = false) {
+        if fs.exists(self) { fs.remove(self) } elif not missing_ok {
+            throw "pathlib: no such file: " + self
+        }
+        return null
+    }
+    o["rename"] = fn(target) {
+        let t = _as_str(target)
+        fs.move(self, t)
+        return Path(t)
+    }
+    o["replace"] = fn(target) {
+        let t = _as_str(target)
+        fs.move(self, t)
+        return Path(t)
+    }
+    o["with_name"] = fn(name) { return Path(_with_name(self, name)) }
+    o["with_suffix"] = fn(suffix) { return Path(_with_last(self, suffix)) }
+    o["with_stem"] = fn(stem) { return Path(_with_stem(self, stem)) }
+    o["glob"] = fn(pattern) { return _path_glob(self, pattern, false) }
+    o["rglob"] = fn(pattern) { return _path_glob(self, pattern, true) }
+    o["iterdir"] = fn() { return _path_list(self) }
+    o["to_string"] = fn() { return self }
+    o["stat"] = fn() { return {} }
+    o["owner"] = fn() { return "" }
+    o["group"] = fn() { return "" }
+    return o
+}
+
+let PurePath = Path
+let PurePosixPath = Path
+let PureWindowsPath = Path

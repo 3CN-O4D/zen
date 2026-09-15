@@ -1,0 +1,213 @@
+// Pure-Zen reimplementation of the `glob` module.
+//
+// Mirrors Python's `glob.glob` / `iglob` / `has_magic` / `escape`. Wildcard
+// matching is full anchored per path component (`*`, `?`, `[...]` with
+// ranges).  `**` any-ancestor expansion is supported when `recursive = true`.
+//
+// Notes:
+//   - Results are sorted lexicographically (Python sorts on POSIX too) and
+//     de-duplicated.
+//   - Unreadable/missing directories expand to nothing instead of raising.
+ZEN_PURE = true
+
+import fs
+
+let has_magic = fn(s) {
+    for c in list(s) {
+        if c == "*" or c == "?" or c == "[" { return true }
+    }
+    return false
+}
+
+let _match_tail = fn(text, pattern) {
+    let m = len(text)
+    let n = len(pattern)
+    let ti = 0
+    let pi = 0
+    while pi < n {
+        let pc = pattern[pi]
+        if pc == "*" {
+            pi += 1
+            while pi < n and pattern[pi] == "*" { pi += 1 }
+            if pi == n { return true }
+            let si = ti
+            while si <= m {
+                if _match_tail(text.substring(si, m), pattern.substring(pi, n)) {
+                    return true
+                }
+                si += 1
+            }
+            return false
+        }
+        if ti >= m { return false }
+        if pc == "?" {
+            ti += 1
+            pi += 1
+            continue
+        }
+        if pc == "[" {
+            let j = pi + 1
+            let neg = false
+            if j < n and pattern[j] == "!" {
+                neg = true
+                j += 1
+            }
+            let matched = false
+            while j < n and pattern[j] != "]" {
+                if j + 2 < n and pattern[j + 1] == "-" and pattern[j + 2] != "]" {
+                    let c0 = pattern[j]
+                    let c1 = pattern[j + 2]
+                    let cc = text[ti]
+                    if cc >= c0 and cc <= c1 or cc >= c1 and cc <= c0 { matched = true }
+                    j += 3
+                } else {
+                    if pattern[j] == text[ti] { matched = true }
+                    j += 1
+                }
+            }
+            if neg { matched = not matched }
+            if not matched { return false }
+            ti += 1
+            pi = j + 1
+            continue
+        }
+        if pattern[pi] != text[ti] { return false }
+        ti += 1
+        pi += 1
+    }
+    return ti == m
+}
+
+let _join = fn(a, b) {
+    if b == "" { return a }
+    if a == "" { return b }
+    if a == "/" { return "/" + b }
+    return a + "/" + b
+}
+
+let _component_split = fn(p) {
+    let parts = list(p.split("/"))
+    let out = []
+    for part in parts {
+        if part == "" { continue }
+        out.push(part)
+    }
+    return out
+}
+
+let _children = fn(dir) {
+    let names = []
+    try {
+        names = fs.list(dir)
+    } catch e {
+        return []
+    }
+    let out = []
+    for name in names {
+        if name == "." or name == ".." { continue }
+        out.push(name)
+    }
+    return out
+}
+
+let _walk = fn(base, pats, idx, recursive) {
+    let out = []
+    if idx >= len(pats) {
+        out.push(base)
+        return out
+    }
+    let comp = pats[idx]
+    if comp == "**" and recursive {
+        let rest = _walk(base, pats, idx + 1, recursive)
+        for r in rest {
+            out.push(r)
+        }
+        let names = _children(base)
+        for name in names {
+            let sub = _join(base, name)
+            if fs.is_dir(sub) {
+                let deeper = _walk(sub, pats, idx, recursive)
+                for d in deeper {
+                    out.push(d)
+                }
+            }
+        }
+        return out
+    }
+    if not has_magic(comp) {
+        let sub = _join(base, comp)
+        if fs.exists(sub) {
+            let rest = _walk(sub, pats, idx + 1, recursive)
+            for r in rest {
+                out.push(r)
+            }
+        }
+        return out
+    }
+    let names = _children(base)
+    for name in names {
+        if _match_tail(name, comp) {
+            let rest = _walk(_join(base, name), pats, idx + 1, recursive)
+            for r in rest {
+                out.push(r)
+            }
+        }
+    }
+    return out
+}
+
+let _dedupe = fn(arr) {
+    let seen = {}
+    let out = []
+    for v in arr {
+        if not seen.get(v, false) {
+            seen[v] = true
+            out.push(v)
+        }
+    }
+    return out
+}
+
+let glob = fn(pathname, recursive = false) {
+    let orig = pathname
+    let abs = len(orig) > 0 and orig[0] == "/"
+    let pats = _component_split(orig)
+    let k = 0
+    let lit = abs ? "/" : ""
+    while k < len(pats) and not has_magic(pats[k]) {
+        lit = _join(lit, pats[k])
+        k += 1
+    }
+    if k >= len(pats) {
+        if fs.exists(orig) { return [orig] }
+        return []
+    }
+    let base = lit
+    if base == "" {
+        base = abs ? "/" : "."
+    }
+    let rows = _walk(base, pats, k, recursive)
+    rows = _dedupe(rows)
+    rows = rows.sort()
+    let out = []
+    for r in rows {
+        if fs.exists(r) { out.push(r) }
+    }
+    return out
+}
+
+let iglob = fn(pathname, recursive = false) {
+    return glob(pathname, recursive)
+}
+
+let escape = fn(pathname) {
+    let out = ""
+    for c in list(pathname) {
+        if c == "*" or c == "?" or c == "[" or c == "]" {
+            out += "[" + c + "]"
+        } else {
+            out += c
+        }
+    }
+    return out
+}

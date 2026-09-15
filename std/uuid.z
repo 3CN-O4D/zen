@@ -1,0 +1,187 @@
+// Pure-Zen reimplementation of the `uuid` module.
+//
+// Mirrors Python's `uuid` module: `UUID(string)`, `uuid1/3/4/5`, the
+// `NAMESPACE_*` constants and a UUID object exposing `str`/`urn`/`hex`/`int`/
+// `bytes`/`version`/`variant`.
+//
+// Notes:
+//   - UUID objects are dicts (Zen has no classes); fields are reachable via
+//     both key lookup (`u.hex`) and `str(u)` gives the canonical form.
+//   - Hashes and random bytes are delegated to the native `crypto` and pure
+//     `random` modules (low-level APIs).
+ZEN_PURE = true
+
+import crypto
+import random as rnd
+import time
+
+let NAMESPACE_DNS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+let NAMESPACE_URL = "6ba7b811-9dad-11d1-80b4-00c04fd430c8"
+let NAMESPACE_OID = "6ba7b812-9dad-11d1-80b4-00c04fd430c8"
+let NAMESPACE_X500 = "6ba7b814-9dad-11d1-80b4-00c04fd430c8"
+
+let _HEX = "0123456789abcdef"
+
+let _hexint = fn(c) {
+    if c >= "0" and c <= "9" { return c.ord() - 48 }
+    if c >= "a" and c <= "f" { return c.ord() - 87 }
+    if c >= "A" and c <= "F" { return c.ord() - 55 }
+    return 0
+}
+
+let _byte_hex = fn(b0) {
+    let hi = int(b0 / 16)
+    let lo = int(b0 % 16)
+    return _HEX[hi] + _HEX[lo]
+}
+
+let _pad = fn(s, n) {
+    let out = s
+    while len(out) < n {
+        out = "0" + out
+    }
+    return out
+}
+
+let _hexify_int = fn(n) {
+    let out = ""
+    var x = int(n)
+    if x == 0 { return "0" }
+    while x > 0 {
+        let d = x % 16
+        out = _HEX[d] + out
+        x = int(x / 16)
+    }
+    return out
+}
+
+let _strip = fn(s) {
+    let out = ""
+    for c in list(s) {
+        if (c >= "0" and c <= "9") or (c >= "a" and c <= "f") or (c >= "A" and c <= "F") {
+            out += c.lower()
+        }
+    }
+    return out
+}
+
+let _unhex = fn(hx) {
+    let out = ""
+    let i = 0
+    while i + 1 < len(hx) {
+        let hi = _hexint(hx[i])
+        let lo = _hexint(hx[i + 1])
+        out += chr(hi * 16 + lo)
+        i += 2
+    }
+    return out
+}
+
+let _fmt = fn(hx) {
+    return hx.substring(0, 8) + "-" + hx.substring(8, 12) + "-" + hx.substring(12, 16) +
+        "-" + hx.substring(16, 20) + "-" + hx.substring(20, 32)
+}
+
+let _int_of = fn(hx) {
+    let out = 0
+    let i = 0
+    while i < len(hx) {
+        out = out * 16 + _hexint(hx[i])
+        i += 1
+    }
+    return out
+}
+
+let _version_of = fn(hx) {
+    return _hexint(hx[12])
+}
+
+let _variant_of = fn(hx) {
+    let b = _hexint(hx[16]) * 16 + _hexint(hx[17])
+    if b % 128 == b { return "reserved NCS" }
+    if b % 64 == b % 128 { return "rfc4122" }
+    if b % 32 == b % 64 { return "microsoft" }
+    return "future"
+}
+
+let _mk = fn(hx, version = null) {
+    let h = hx.lower()
+    let o = {}
+    o["version"] = version == null ? _version_of(h) : version
+    o["variant"] = _variant_of(h)
+    o["hex"] = h
+    o["int"] = _int_of(h)
+    o["bytes"] = _unhex(h)
+    o["urn"] = "urn:uuid:" + _fmt(h)
+    o["str"] = _fmt(h)
+    return o
+}
+
+let UUID = fn(other = null) {
+    if other == null { throw "uuid.UUID: expected a string" }
+    let s = str(other)
+    if len(s) > 1 and s[0] == "{" and other["hex"] != null {
+        return other
+    }
+    let h = _strip(s)
+    if len(h) != 32 { throw "uuid.UUID: badly formed hexadecimal UUID string" }
+    return _mk(h)
+}
+
+let _rand_bytes_hex = fn(n) {
+    let out = ""
+    let i = 0
+    while i < n {
+        out += _byte_hex(rnd.randint(0, 255))
+        i += 1
+    }
+    return out
+}
+
+let uuid4 = fn() {
+    let hx = _rand_bytes_hex(16)
+    hx = hx.substring(0, 12) + "4" + hx.substring(13, 32)
+    let b = _hexint(hx[16]) * 16 + _hexint(hx[17])
+    let b2 = b % 64 + 128
+    hx = hx.substring(0, 16) + _byte_hex(b2) + hx.substring(18, 32)
+    return _mk(hx, 4)
+}
+
+let _ns_uuid = fn(namespace, name, is_sha1) {
+    let ns = _strip(str(namespace))
+    if len(ns) != 32 { throw "uuid: malformed namespace UUID" }
+    let raw = _unhex(ns) + str(name)
+    let hx = is_sha1 ? crypto.sha1(raw) : crypto.md5(raw)
+    hx = hx.substring(0, 12) + (is_sha1 ? "5" : "3") + hx.substring(13, 32)
+    let b = _hexint(hx[16]) * 16 + _hexint(hx[17])
+    let b2 = b % 64 + 128
+    hx = hx.substring(0, 16) + _byte_hex(b2) + hx.substring(18, 32)
+    return _mk(hx, is_sha1 ? 5 : 3)
+}
+
+let uuid3 = fn(namespace, name) {
+    return _ns_uuid(namespace, name, false)
+}
+
+let uuid5 = fn(namespace, name) {
+    return _ns_uuid(namespace, name, true)
+}
+
+let uuid1 = fn(node = null, clock_seq = null) {
+    let t10 = int(time.unix() * 10000000.0) + 122192928000000000
+    let t_hex = _pad(_hexify_int(t10), 16)
+    let cs = clock_seq == null ? rnd.randint(0, 16383) : clock_seq
+    let node_v = node == null ? rnd.randint(0, 281474976710655) : node
+    let time_low = t_hex.substring(0, 8)
+    let time_mid = t_hex.substring(8, 12)
+    let time_hi = "1" + t_hex.substring(13, 16)
+    let clock_hi = _byte_hex(int(cs / 256) % 64 + 128)
+    let clock_low = _byte_hex(int(cs % 256))
+    let node_hex = _pad(_hexify_int(node_v), 12)
+    return _mk(time_low + time_mid + time_hi + clock_hi + clock_low + node_hex, 1)
+}
+
+let uuid1_fields = fn() {
+    let u = uuid1()
+    return [u["hex"].substring(0, 8), u["hex"].substring(8, 12), u["hex"].substring(12, 16), u["hex"].substring(16, 20), u["hex"].substring(20, 32)]
+}

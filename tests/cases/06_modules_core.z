@@ -44,9 +44,9 @@ check(binascii.hexlify("AB") == "4142", "binascii.hexlify")
 
 # hashlib
 import hashlib
-check(hashlib.sha256("abc").substring(0, 6) == "ba7816", "sha256 known vector")
-check(hashlib.md5("abc") == "900150983cd24fb0d6963f7d28e17f72", "md5 known vector")
-check(hashlib.sha1("abc") == "a9993e364706816aba3e25717850c26c9cd0d89d", "sha1 known vector")
+check(hashlib.sha256("abc").hexdigest().substring(0, 6) == "ba7816", "sha256 known vector")
+check(hashlib.md5("abc").hexdigest() == "900150983cd24fb0d6963f7d28e17f72", "md5 known vector")
+check(hashlib.sha1("abc").hexdigest() == "a9993e364706816aba3e25717850c26c9cd0d89d", "sha1 known vector")
 
 # re
 import re
