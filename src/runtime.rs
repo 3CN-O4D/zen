@@ -3170,9 +3170,14 @@ impl Function {
     /// True when `values` ends with a kwargs dict whose keys all name real
     /// parameters of this function.
     fn is_named_call<'a>(&self, values: &'a [Value]) -> Option<&'a indexmap::IndexMap<String, Value>> {
+        // An empty dict is a positional value, not an empty kwargs map:
+        // the LAST argument must carry at least one key matching a param.
         let Value::Dict(map) = values.last()? else {
             return None;
         };
+        if map.is_empty() {
+            return None;
+        }
         let mut param_names = Vec::new();
         for (n, _) in &self.params {
             param_names.push(n.as_str());
@@ -3392,6 +3397,11 @@ pub struct Vm {
     reg_log: std::sync::Arc<std::sync::Mutex<RegistryLog>>,
     foreign_classes: ahash::AHashSet<String>,
     stdlib_factories: HashMap<String, fn() -> Value>,
+    /// Names of module functions currently executing via tree-walk (top of
+    /// stack is the innermost). Nested lambdas created while a module function
+    /// runs are registered under this qualified prefix so their bare
+    /// `__lambda_N` names cannot collide with the importing program's own.
+    treewalk_module_stack: Vec<String>,
     lambda_counter: u64,
     locked: ahash::AHashSet<String>,
     file: String,
@@ -3488,6 +3498,7 @@ impl Vm {
             reg_log: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             foreign_classes: ahash::AHashSet::new(),
             stdlib_factories: HashMap::new(),
+            treewalk_module_stack: Vec::new(),
             lambda_counter: 0,
             locked: ahash::AHashSet::new(),
             file: "<string>".into(),
@@ -5379,7 +5390,10 @@ Expr::Index(obj, idx) => {
                 }
             }
             Expr::Lambda(params, body) => {
-                let fname = format!("__lambda_{}", self.lambda_counter);
+                let fname = match self.treewalk_module_stack.last() {
+                    Some(ctx) => format!("{ctx}::__lambda_{}", self.lambda_counter),
+                    None => format!("__lambda_{}", self.lambda_counter),
+                };
                 self.lambda_counter += 1;
                 let names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
                 let param_set: std::collections::HashSet<String> = names.iter().cloned().collect();
@@ -6745,6 +6759,11 @@ Expr::Index(obj, idx) => {
                 let btree: indexmap::IndexMap<String, Value> = map.into_iter().collect();
                 self.vars.insert(name.clone(), Value::Dict(Arc::new(btree)));
                 self.module_names.insert(name.clone());
+                // Repointing an already-loaded global (native prelude dict
+                // swapped for its pure companion) must drop the bytecode
+                // LoadGlobal cache, or later uses of the name keep the
+                // stale native dict.
+                self.global_cache = None;
                 continue;
             }
             // Check if it's a dotted submodule (e.g. pkg.sub -> parent.sub)
@@ -6833,6 +6852,7 @@ Expr::Index(obj, idx) => {
                 self.module_names.insert(name.clone());
             }
             self.imported_modules.insert(name, vars);
+            self.global_cache = None;
         }
         Ok(Flow::Normal)
     }
@@ -6976,7 +6996,17 @@ Expr::Index(obj, idx) => {
         // names the parent happens to share with this module (e.g. plain-name
         // function registrations left by an earlier `from mod import fn`) are
         // not mistaken for pre-existing builtins and filtered out of exports.
-        let initial_keys: std::collections::HashSet<String> = module_vm.vars.keys().cloned().collect();
+        let initial_keys: std::collections::HashSet<String> =
+            module_vm.vars.keys().cloned().collect();
+        // Snapshot the pristine baseline AFTER seeding native functions (so the
+        // battery of pre-seeded global module dicts like `random`, `math`, ...
+        // from Vm::new is recorded) but BEFORE the module body runs. Exports and
+        // module-var wiring use this baseline later to distinguish prelude names
+        // the module never touched from names the module itself defined or
+        // rebound (the module may legitimately rebind a prelude name — e.g.
+        // `let random = fn...` shadowing the pre-seeded `random` module global).
+        let baseline_vars: std::collections::HashMap<String, Value> =
+            module_vm.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         // Modules are self-contained: they see the prelude, builtins/natives,
         // and whatever they import themselves — NOT the importer's private
         // definitions. Seeding the parent's whole function/class maps here
@@ -7001,6 +7031,228 @@ Expr::Index(obj, idx) => {
             format!("\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n \x1b[1;34m-->\x1b[0m {}:1\n  \x1b[1;34m|\x1b[0m\n  \x1b[1;31m= {}\x1b[0m", e, path, e)
         };
         module_vm.exec_source_cached(path, &source, &parse_err)?;
+        // Wire module-level variables into the bytecode module functions that
+        // reference them. A module's top-level `let` bindings live ONLY in the
+        // module dict, but compiled bodies resolve free names against the
+        // CALLER's vars — so a module function reading/writing its module's own
+        // state (e.g. `_state` inside std/random.z) would hit `undefined
+        // variable`, while the same module falling back to tree-walk captures
+        // those names as closure cells. Recreate that capture here: give each
+        // referenced name a shared CELL and rewrite the function's global
+        // access instructions onto matching local-slot opcodes (slots
+        // param_count..param_count+captured). The existing bytecode locals
+        // machinery then delivers correct read/modify/write semantics through
+        // the shared cell, keeping the module dict and callers coherent.
+        {
+            use crate::bytecode::{Instruction, Opcode as Bc};
+            if !initial_keys.is_empty() {
+                let plain_vars: Vec<String> = module_vm
+                    .vars
+                    .iter()
+                    .filter(|(k, v)| {
+!initial_keys.contains(k.as_str())
+                            && !matches!(v, Value::Function(_) | Value::NativeFunction(_))
+                    })
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                if !plain_vars.is_empty() {
+                    let is_global_inst = |op: Bc| -> bool {
+                        matches!(
+                            op,
+                            Bc::LoadGlobal
+                                | Bc::StoreGlobal
+                                | Bc::AddGlobal
+                                | Bc::SubGlobal
+                                | Bc::MulGlobal
+                                | Bc::DivGlobal
+                                | Bc::ModGlobal
+                                | Bc::AddGlobalImm
+                                | Bc::SubGlobalImm
+                                | Bc::JmpLtGlobalConst
+                                | Bc::JmpLeGlobalConst
+                                | Bc::JmpGtGlobalConst
+                                | Bc::JmpGeGlobalConst
+                        )
+                    };
+                    let global_name_idx =
+                        |inst: &Instruction| -> u16 {
+                            match inst.opcode {
+                                Bc::JmpLtGlobalConst
+                                | Bc::JmpLeGlobalConst
+                                | Bc::JmpGtGlobalConst
+                                | Bc::JmpGeGlobalConst => inst.arg2,
+                                _ => inst.arg1,
+                            }
+                        };
+                    let referenced_of =
+                        |bc: &crate::bytecode::CompiledFunction| -> Vec<String> {
+                            let mut out: Vec<String> = Vec::new();
+                            for inst in &bc.instructions {
+                                if !is_global_inst(inst.opcode) {
+                                    continue;
+                                }
+                                let Some(Value::String(s)) =
+                                    bc.constants.get(global_name_idx(inst) as usize)
+                                else {
+                                    continue;
+                                };
+                                if plain_vars.iter().any(|p| p == s) && !out.contains(s) {
+                                    out.push(s.clone());
+                                }
+                            }
+                            out.sort();
+                            out
+                        };
+                    // Shared cell per referenced module var (one cell, reused by
+                    // every function that touches it and by the exports map).
+                    for function in module_vm.functions.values() {
+                        let Some(bc) = &function.bytecode else { continue };
+                        for k in referenced_of(bc) {
+                            let Some(v) = module_vm.vars.get(&k).cloned() else {
+                                continue;
+                            };
+                            if matches!(v, Value::Cell(_)) {
+                                continue;
+                            }
+                            module_vm
+                                .vars
+                                .insert(k.clone(), Value::Cell(Arc::new(Mutex::new(v))));
+                        }
+                    }
+                    for function in module_vm.functions.values_mut() {
+                        let bc_owned = {
+                            let Some(bc) = &function.bytecode else { continue };
+                            Arc::clone(bc)
+                        };
+                        let bc = &*bc_owned;
+                        let referenced = referenced_of(bc);
+                        if referenced.is_empty() {
+                            continue;
+                        }
+                        let mut cap_slots: Vec<(String, Value)> = Vec::new();
+                        for k in &referenced {
+                            let Some(v) = module_vm.vars.get(k) else { continue };
+                            cap_slots.push((k.clone(), v.clone()));
+                        }
+                        if cap_slots.is_empty() {
+                            continue;
+                        }
+                        // Module vars follow any closure vars the bytecode body
+                        // already captured (nested lambdas), so slot indices stay
+                        // disjoint from existing captures.
+                        let mut new_cap_names = bc.captured_names.clone();
+                        let base_slot =
+                            bc.param_count as usize + bc.captured_names.len();
+                        let mut slot_of: HashMap<String, u16> = HashMap::new();
+                        let existing_len = new_cap_names.len();
+                        for (i, name) in new_cap_names[..existing_len].iter().enumerate() {
+                            slot_of.insert(name.clone(), (bc.param_count as usize + i) as u16);
+                        }
+                        for (i, k) in referenced.iter().enumerate() {
+                            new_cap_names.push(k.clone());
+                            slot_of.insert(k.clone(), (base_slot + i) as u16);
+                        }
+                        let mut instructions = bc.instructions.clone();
+                        let orig_cap_len = bc.captured_names.len();
+                        let added = referenced.len();
+                        let param = bc.param_count as usize;
+                        // Rebase body-local slot operands past the new captured
+                        // region. The module compiled this function with EMPTY
+                        // captures, so its local temps start at `param`
+                        // (`param + captured_len` for nested lambdas that already
+                        // capture). Every preserved local slot moves up by
+                        // `added`; captured-region reads/writes stay put (their
+                        // slots are reseeded from `function.captured` at frame
+                        // time).
+                        let rebase = |s: u16| -> u16 {
+                            let s = s as usize;
+                            if s >= param + orig_cap_len {
+                                (s + added) as u16
+                            } else {
+                                s as u16
+                            }
+                        };
+                        for inst in instructions.iter_mut() {
+                            if is_global_inst(inst.opcode) {
+                                let Some(Value::String(s)) =
+                                    bc.constants.get(global_name_idx(inst) as usize)
+                                else {
+                                    continue;
+                                };
+                                let Some(slot) = slot_of.get(s.as_str()).copied() else {
+                                    continue;
+                                };
+                                inst.opcode = match inst.opcode {
+                                    Bc::LoadGlobal => Bc::LoadLocal,
+                                    Bc::StoreGlobal => Bc::StoreLocal,
+                                    Bc::AddGlobal => Bc::AddLocal,
+                                    Bc::SubGlobal => Bc::SubLocal,
+                                    Bc::MulGlobal => Bc::MulLocal,
+                                    Bc::DivGlobal => Bc::DivLocal,
+                                    Bc::ModGlobal => Bc::ModLocal,
+                                    Bc::AddGlobalImm => Bc::AddLocalImm,
+                                    Bc::SubGlobalImm => Bc::SubLocalImm,
+                                    Bc::JmpLtGlobalConst => Bc::JmpLtLocalConst,
+                                    Bc::JmpLeGlobalConst => Bc::JmpLeLocalConst,
+                                    Bc::JmpGtGlobalConst => Bc::JmpGtLocalConst,
+                                    Bc::JmpGeGlobalConst => Bc::JmpGeLocalConst,
+                                    _ => continue,
+                                };
+                                match inst.opcode {
+                                    Bc::JmpLtLocalConst
+                                    | Bc::JmpLeLocalConst
+                                    | Bc::JmpGtLocalConst
+                                    | Bc::JmpGeLocalConst => inst.arg2 = slot,
+                                    _ => inst.arg1 = slot,
+                                };
+                                continue;
+                            }
+                            // Shift preserved local slot operands.
+                            match inst.opcode {
+                                Bc::LoadLocal | Bc::StoreLocal
+                                | Bc::AddLocal | Bc::SubLocal
+                                | Bc::MulLocal | Bc::DivLocal
+                                | Bc::ModLocal
+                                | Bc::AddLocalImm | Bc::SubLocalImm => {
+                                    inst.arg1 = rebase(inst.arg1);
+                                }
+                                Bc::JmpLtLocal | Bc::JmpLeLocal => {
+                                    inst.arg2 = rebase(inst.arg2);
+                                    inst.arg3 = rebase(inst.arg3);
+                                }
+                                Bc::JmpLtLocalConst | Bc::JmpLeLocalConst
+                                | Bc::JmpGtLocalConst | Bc::JmpGeLocalConst => {
+                                    inst.arg2 = rebase(inst.arg2);
+                                }
+                                _ => {}
+                            }
+                        }
+                        let rewritten = crate::bytecode::CompiledFunction {
+                            name: bc.name.clone(),
+                            params: bc.params.clone(),
+                            param_count: bc.param_count,
+                            captured_names: new_cap_names,
+                            // Preserved body temps (params + old captures +
+                            // temps) all shifted up by the new capture count.
+                            local_count: (bc.local_count as usize + added) as u16,
+                            instructions,
+                            constants: bc.constants.clone(),
+                        };
+                        let mut captured = function.captured.clone();
+                        let mut effective = function.effective_captured.clone();
+                        for (k, v) in &cap_slots {
+                            captured.insert(k.clone(), v.clone());
+                            if !effective.iter().any(|(n, _)| n == k) {
+                                effective.push((k.clone(), v.clone()));
+                            }
+                        }
+                        function.bytecode = Some(std::sync::Arc::new(rewritten));
+                        function.captured = captured;
+                        function.effective_captured = effective;
+                    }
+                }
+            }
+        }
         // Qualify bare `__lambda_N` names that still reference THIS module's
         // functions. The compiler names freshly-defined lambdas from a single
         // global counter, and the importing program's own lambdas use the same
@@ -7078,7 +7330,24 @@ Expr::Index(obj, idx) => {
             self.classes.entry(class.clone()).or_insert_with(|| def.clone());
         }
         let exports: HashMap<String, Value> = module_vm.vars.into_iter()
-            .filter(|(k, _)| !initial_keys.contains(k))
+            .filter(|(k, v)| {
+                if !initial_keys.contains(k) {
+                    // Names the module itself defined are always exported.
+                    return true;
+                }
+                // Prelude names are exported only when the module rebound them
+                // to a function (e.g. `let random = fn...` shadowing the
+                // pre-seeded `random` module dict). Untouched or dict-rebound
+                // prelude globals stay out of the exports. The rebound binding
+                // may be cell-wrapped (closure machinery), so deref first.
+                match crate::runtime::deref_cells(v) {
+                    Value::Function(_) | Value::NativeFunction(_) => {
+                        matches!(baseline_vars.get(k), Some(Value::Dict(_)))
+                    }
+                    _ => false,
+                }
+            })
+            .map(|(k, v)| (k, crate::runtime::deref_cells(&v)))
             .collect();
         let mut exports = exports;
         for (fname, _fn) in &art_functions {
@@ -7095,6 +7364,25 @@ Expr::Index(obj, idx) => {
                     class.clone(),
                     Value::Function(format!("{namespace}.{class}")),
                 );
+            }
+        }
+        // Module-level `let f = fn...` bindings call their siblings by bare
+        // name from bytecode (`Opcode::Call "later"` resolves only through
+        // `functions`). Register the module-owned function under its binding
+        // name so those internal calls resolve: qualified `ns::name` plus a
+        // first-wins plain `name` alias mirroring named-function handling.
+        for (name, value) in &exports {
+            let Value::Function(fqn) = crate::runtime::deref_cells(value) else { continue };
+            if !fqn.starts_with(&format!("{namespace}::")) {
+                continue;
+            }
+            let Some(function) = self.functions.get(fqn.as_str()).cloned() else {
+                continue;
+            };
+            let alias_key = format!("{namespace}::{name}");
+            self.register_function(alias_key, function.clone());
+            if !self.functions.contains_key(name.as_str()) {
+                self.register_function(name.clone(), function.clone());
             }
         }
         // Everything just registered belongs to THIS module; tag the
@@ -7658,7 +7946,17 @@ Expr::Index(obj, idx) => {
                 self.locals.push((k.clone(), v.clone()));
             }
             self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone()).collect());
+            // Module-qualified functions (namespace::name) run in this VM's
+            // tree-walk: prefix any nested lambdas they create so their bare
+            // `__lambda_N` names cannot collide with the importer's own.
+            let namespaced = name.contains("::");
+            if namespaced {
+                self.treewalk_module_stack.push(name.to_string());
+            }
             let flow = self.exec(&body);
+            if namespaced {
+                self.treewalk_module_stack.pop();
+            }
             self.capture_frames.pop();
             // Restore locals stack
             self.locals.truncate(saved_len);
@@ -8225,18 +8523,19 @@ Err(format!("undefined function: `{name}`"))
                 Opcode::JmpLtLocal | Opcode::JmpLeLocal => {
                     let ia = base + inst.arg2 as usize;
                     let ib = base + inst.arg3 as usize;
-                    let taken = match (locals.get(ia), locals.get(ib)) {
-                        (Some(Value::Number(x)), Some(Value::Number(y))) => {
+                    let va = locals.get(ia).map(deref_cell).unwrap_or(Value::Null);
+                    let vb = locals.get(ib).map(deref_cell).unwrap_or(Value::Null);
+                    let taken = match (va, vb) {
+                        (Value::Number(x), Value::Number(y)) => {
                             if inst.opcode == Opcode::JmpLtLocal { x >= y } else { x > y }
                         }
-                        (Some(a), Some(b)) => {
+                        (a, b) => {
                             let k = if inst.opcode == Opcode::JmpLtLocal { Kind::Lt } else { Kind::Le };
-                            match self.binary(deref_cells(a), &k, deref_cells(b))? {
+                            match self.binary(a, &k, b)? {
                                 Value::Bool(t) => !t,
                                 other => !other.truthy(),
                             }
                         }
-                        _ => return Err("bad slots in fused compare".into()),
                     };
                     if taken {
                         ip = inst.arg1 as usize;
@@ -8247,24 +8546,25 @@ Err(format!("undefined function: `{name}`"))
                 | Opcode::JmpGtLocalConst
                 | Opcode::JmpGeLocalConst => {
                     let ia = base + inst.arg2 as usize;
+                    let va = locals.get(ia).map(deref_cell).unwrap_or(Value::Null);
                     let taken =
-                        match (locals.get(ia), cur.constants.get(inst.arg3 as usize)) {
-                            (Some(Value::Number(x)), Some(Value::Number(y))) => {
+                        match (va, cur.constants.get(inst.arg3 as usize)) {
+                            (Value::Number(x), Some(Value::Number(y))) => {
                                 match inst.opcode {
-                                    Opcode::JmpLtLocalConst => x >= y,
-                                    Opcode::JmpLeLocalConst => x > y,
-                                    Opcode::JmpGtLocalConst => x <= y,
-                                    _ => x < y,
+                                    Opcode::JmpLtLocalConst => x >= *y,
+                                    Opcode::JmpLeLocalConst => x > *y,
+                                    Opcode::JmpGtLocalConst => x <= *y,
+                                    _ => x < *y,
                                 }
                             }
-                            (Some(a), Some(b)) => {
+                            (a, Some(b)) => {
                                 let k = match inst.opcode {
                                     Opcode::JmpLtLocalConst => Kind::Lt,
                                     Opcode::JmpLeLocalConst => Kind::Le,
                                     Opcode::JmpGtLocalConst => Kind::Gt,
                                     _ => Kind::Ge,
                                 };
-                                match self.binary(a.clone(), &k, b.clone())? {
+                                match self.binary(a, &k, b.clone())? {
                                     Value::Bool(t) => !t,
                                     other => !other.truthy(),
                                 }
@@ -9173,6 +9473,7 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
         } else {
             self.vars.insert(name.to_string(), value);
         }
+        self.global_cache = None;
     }
     fn self_field_get(&mut self, name: &str) -> Option<Value> {
         let inst = {
@@ -10121,8 +10422,16 @@ let function = self
         for (k, v) in &function.effective_captured {
             self.locals.push((k.clone(), v.clone()));
         }
-        self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone()).collect());
+self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone()).collect());
+        let qualified = format!("{class_name}.{method}");
+        let namespaced = class_name.contains('.');
+        if namespaced {
+            self.treewalk_module_stack.push(qualified);
+        }
         let flow = self.exec(&body);
+        if namespaced {
+            self.treewalk_module_stack.pop();
+        }
         self.capture_frames.pop();
         self.locals.truncate(saved_len);
         self.frame_starts.pop();
@@ -18050,12 +18359,19 @@ impl Repl {
             Ok(tokens) => {
                 let program = match Parser::new(tokens).program() {
                     Ok(p) => p,
-                    Err(_) => {
-                        // Fall back to evaluating as a bare expression and printing.
+                    Err(program_err) => {
+                        // Try as a bare expression (`5 + 5`); if that also
+                        // fails, report the real statement error rather than
+                        // the confusing "expected expression" from re-parsing
+                        // the whole line as an expression.
                         {
-                            let value = self.vm.eval_expr_source(line)?;
-                            println!("{}", value);
-                            return Ok(());
+                            match self.vm.eval_expr_source(line) {
+                                Ok(value) => {
+                                    println!("{}", value);
+                                    return Ok(());
+                                }
+                                Err(_) => return Err(program_err),
+                            }
                         }
                     }
                 };
