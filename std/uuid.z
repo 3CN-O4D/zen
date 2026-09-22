@@ -12,7 +12,7 @@
 ZEN_PURE = true
 
 import crypto
-import random as rnd
+import random
 import time
 
 let NAMESPACE_DNS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
@@ -39,6 +39,31 @@ let _pad = fn(s, n) {
     let out = s
     while len(out) < n {
         out = "0" + out
+    }
+    return out
+}
+
+let _utf8_hex = fn(s) {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let cp = s[i].ord()
+        if cp < 128 {
+            out += _byte_hex(cp)
+        } elif cp < 2048 {
+            out += _byte_hex(192 + int(cp / 64))
+            out += _byte_hex(128 + cp % 64)
+        } elif cp < 65536 {
+            out += _byte_hex(224 + int(cp / 4096))
+            out += _byte_hex(128 + int(cp / 64) % 64)
+            out += _byte_hex(128 + cp % 64)
+        } else {
+            out += _byte_hex(240 + int(cp / 262144))
+            out += _byte_hex(128 + int(cp / 4096) % 64)
+            out += _byte_hex(128 + int(cp / 64) % 64)
+            out += _byte_hex(128 + cp % 64)
+        }
+        i += 1
     }
     return out
 }
@@ -132,7 +157,7 @@ let _rand_bytes_hex = fn(n) {
     let out = ""
     let i = 0
     while i < n {
-        out += _byte_hex(rnd.randint(0, 255))
+        out += _byte_hex(random.randint(0, 255))
         i += 1
     }
     return out
@@ -150,8 +175,8 @@ let uuid4 = fn() {
 let _ns_uuid = fn(namespace, name, is_sha1) {
     let ns = _strip(str(namespace))
     if len(ns) != 32 { throw "uuid: malformed namespace UUID" }
-    let raw = _unhex(ns) + str(name)
-    let hx = is_sha1 ? crypto.sha1(raw) : crypto.md5(raw)
+    let raw_hex = ns + _utf8_hex(str(name))
+    let hx = crypto.digest_hex(is_sha1 ? "sha1" : "md5", raw_hex)
     hx = hx.substring(0, 12) + (is_sha1 ? "5" : "3") + hx.substring(13, 32)
     let b = _hexint(hx[16]) * 16 + _hexint(hx[17])
     let b2 = b % 64 + 128
@@ -170,8 +195,8 @@ let uuid5 = fn(namespace, name) {
 let uuid1 = fn(node = null, clock_seq = null) {
     let t10 = int(time.unix() * 10000000.0) + 122192928000000000
     let t_hex = _pad(_hexify_int(t10), 16)
-    let cs = clock_seq == null ? rnd.randint(0, 16383) : clock_seq
-    let node_v = node == null ? rnd.randint(0, 281474976710655) : node
+    let cs = clock_seq == null ? random.randint(0, 16383) : clock_seq
+    let node_v = node == null ? random.randint(0, 281474976710655) : node
     let time_low = t_hex.substring(0, 8)
     let time_mid = t_hex.substring(8, 12)
     let time_hi = "1" + t_hex.substring(13, 16)

@@ -15,6 +15,7 @@ let crypto = Value::Dict(Arc::new(indexmap::IndexMap::from([
     ("sha3_512".into(), Value::NativeFunction("crypto_sha3_512".into())),
     ("blake2b".into(), Value::NativeFunction("crypto_blake2b".into())),
     ("blake2s".into(), Value::NativeFunction("crypto_blake2s".into())),
+    ("digest_hex".into(), Value::NativeFunction("crypto_digest_hex".into())),
     ("hmac_sha256".into(), Value::NativeFunction("crypto_hmac_sha256".into())),
     ("hmac_sha1".into(), Value::NativeFunction("crypto_hmac_sha1".into())),
     ("hmac_md5".into(), Value::NativeFunction("crypto_hmac_md5".into())),

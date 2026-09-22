@@ -4426,7 +4426,7 @@ impl Vm {
         crate::ffi::init_ffi_module(self);
 
         // Register all core native functions eagerly
-            const NATIVES: [&str; 577] = [
+            const NATIVES: [&str; 578] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -4606,6 +4606,7 @@ impl Vm {
             "crypto_sha3_512",
             "crypto_blake2b",
             "crypto_blake2s",
+            "crypto_digest_hex",
             "crypto_hmac_sha256",
             "crypto_hmac_sha1",
             "crypto_hmac_md5",
@@ -6814,6 +6815,9 @@ Expr::Index(obj, idx) => {
         }
         if pure {
             map.insert("native".into(), Value::Dict(native_super));
+            map.insert("pure".into(), Value::Bool(true));
+        } else {
+            map.insert("pure".into(), Value::Bool(false));
         }
         Some(map)
     }
@@ -7401,6 +7405,20 @@ Expr::Index(obj, idx) => {
                 self.register_function(fname.clone(), function.clone());
             }
         }
+        // Thread-through: this module's compiled functions may hold captured
+        // values that reference namespaced functions of modules it imported
+        // (e.g. `random::__lambda_3`, `random::randint`). Those registrations
+        // live in `module_vm.functions`, which dies when the module exits, so
+        // copy every namespaced entry it carried into the caller's registry.
+        // Callers then resolve the FQN references faithfully (no stale
+        // bytecode alias bleed between imported modules).
+        for (fname, function) in &module_vm.functions {
+            if fname.contains("::")
+                && !self.functions.contains_key(fname.as_str())
+            {
+                self.register_function(fname.clone(), function.clone());
+            }
+        }
         // Register the module's classes under a namespaced key so `new module.Class(...)` works.
         for (class, def) in &art_classes {
             let key = format!("{namespace}.{class}");
@@ -7655,6 +7673,26 @@ Expr::Index(obj, idx) => {
     ) -> HashMap<String, Value> {
         let mut captured: HashMap<String, Value> = HashMap::new();
         for k in free {
+            // Explicitly imported modules are authoritative: a module's export
+            // may share its plain name with a registered public function of
+            // the imported module (random.z exports `random`, glob.z exports
+            // `glob`, ...), and that registry entry must NOT shadow the dict
+            // the user actually imported.
+            if let Some(module_exports) = self.imported_modules.get(k) {
+                let dict = match self.vars.get(k).cloned() {
+                    Some(Value::Dict(d)) => Value::Dict(d),
+                    _ => Value::Dict(Arc::new(
+                        module_exports
+                            .iter()
+                            .map(|(n, v)| (n.clone(), v.clone()))
+                            .collect::<indexmap::IndexMap<String, Value>>(),
+                    )),
+                };
+                let cell = Value::Cell(Arc::new(Mutex::new(dict)));
+                self.vars.insert(k.clone(), cell.clone());
+                captured.insert(k.clone(), cell);
+                continue;
+            }
             // Function-registry names outrank globals (see the bytecode
             // DefineFunction handler): a `func k` visible here must win over
             // an unrelated same-named native module dict seeded into vars.
@@ -8091,7 +8129,10 @@ Expr::Index(obj, idx) => {
             }
         }
 
-Err(format!("undefined function: `{name}`"))
+if name.contains("::") && !self.functions.contains_key(name) {
+            return Err(format!("undefined function: `{name}`"));
+        }
+        Err(format!("undefined function: `{name}`"))
     }
     /// Push an iterative VM frame for a dynamic function-value call instead of
     /// recursing through the tree-walk `call` machinery. Falls back to
@@ -9311,16 +9352,28 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                     let mut captured_map = HashMap::new();
                     for cn in &cf.captured_names {
                         // Nearest binding first: frame locals (params/captures
-                        // of the enclosing compiled function), then the
-                        // function registry, then globals. The registry must
-                        // outrank globals: named functions live there, while
-                        // `vars` may hold an unrelated native module dict
-                        // sharing the name (e.g. a `func ftp` inside a module
-                        // vs. the seeded `ftp` tool namespace).
+                        // of the enclosing compiled function), then an
+                        // explicitly imported module dict (authoritative; a
+                        // leaked plain-name export with the same name must not
+                        // shadow `import glob`), then the function registry,
+                        // then globals. The registry outranks pre-seeded
+                        // native module dicts in `vars`: named functions live
+                        // there, while `vars` may hold an unrelated native
+                        // module dict sharing the name (e.g. a `func ftp`
+                        // inside a module vs. the seeded `ftp` namespace).
                         let found = if let Some(idx) =
                             self.locals.iter().rposition(|(n, _)| n == cn)
                         {
                             Some(self.locals[idx].1.clone())
+                        } else if let Some(vars) = self.imported_modules.get(cn) {
+                            match self.vars.get(cn).cloned() {
+                                Some(Value::Dict(d)) => Some(Value::Dict(d)),
+                                _ => Some(Value::Dict(Arc::new(
+                                    vars.iter()
+                                        .map(|(n, v)| (n.clone(), v.clone()))
+                                        .collect::<indexmap::IndexMap<String, Value>>(),
+                                ))),
+                            }
                         } else if self.functions.contains_key(cn.as_str()) {
                             Some(Value::Function(cn.clone()))
                         } else {
@@ -11666,6 +11719,37 @@ where
     hasher.update(data);
     let digest = hasher.finalize();
     Ok(Value::String(hex_encode(&digest)))
+}
+
+/// Byte-exact digest primitive: hashes bytes decoded from a hex string so
+/// pure-Zen modules can digest arbitrary binary data (e.g. raw uuid namespace
+/// UUIDs) without a native `bytes` type. `algo` selects the hasher.
+fn hash_hex_from_hex(args: Vec<Value>) -> Result<Value, String> {
+    let (algo, hex) = match args.as_slice() {
+        [Value::String(a), Value::String(h)] => (a, h),
+        _ => return Err("crypto.digest_hex expects (algo, hexstring)".into()),
+    };
+    let bytes = hex_decode(hex).ok_or_else(|| "crypto.digest_hex: hexstring must have an even number of hex digits".to_string())?;
+    fn bytes_digest<D>(bytes: &[u8]) -> String
+    where
+        D: sha2::Digest + Default,
+    {
+        let mut d = D::default();
+        d.update(bytes);
+        hex_encode(&d.finalize())
+    }
+    let out = match algo.as_str() {
+        "sha256" => bytes_digest::<sha2::Sha256>(&bytes),
+        "sha1" => bytes_digest::<sha1::Sha1>(&bytes),
+        "md5" => bytes_digest::<md5::Md5>(&bytes),
+        "sha512" => bytes_digest::<sha2::Sha512>(&bytes),
+        "sha224" => bytes_digest::<sha2::Sha224>(&bytes),
+        "sha384" => bytes_digest::<sha2::Sha384>(&bytes),
+        "sha3_256" => bytes_digest::<sha3::Sha3_256>(&bytes),
+        "sha3_512" => bytes_digest::<sha3::Sha3_512>(&bytes),
+        _ => return Err(format!("crypto.digest_hex: unsupported hash algorithm: {algo}")),
+    };
+    Ok(Value::String(out))
 }
 
 fn hmac_hex_sha256(args: Vec<Value>) -> Result<Value, String> {
@@ -15310,6 +15394,7 @@ fn native_for(name: &str) -> NativeFunc {
         "crypto_sha3_512" => |args| hash_hex::<sha3::Sha3_512>(args),
         "crypto_blake2b" => |args| hash_hex::<blake2::Blake2b512>(args),
         "crypto_blake2s" => |args| hash_hex::<blake2::Blake2s256>(args),
+        "crypto_digest_hex" => |args| hash_hex_from_hex(args),
         "crypto_hmac_sha256" => |args| hmac_hex_sha256(args),
         "crypto_hmac_sha1" => |args| hmac_hex_sha1(args),
         "crypto_hmac_md5" => |args| hmac_hex_md5(args),

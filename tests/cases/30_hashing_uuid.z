@@ -79,7 +79,11 @@ let ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 check(ns["hex"] == "6ba7b8109dad11d180b400c04fd430c8", "UUID parse hex")
 check(ns["version"] == 1, "UUID parse version")
 
-// ---- uuid3/uuid5 byte-exact for ASCII namespaces ----
+// ---- uuid3/uuid5 byte-exact for standard namespaces ----
+let u3d = uuid.uuid3(uuid.NAMESPACE_DNS, "python.org")
+check(u3d["str"] == "6fa459ea-ee8a-3ca4-894e-db77e160355e", "uuid3 NAMESPACE_DNS python.org")
+let u5d = uuid.uuid5(uuid.NAMESPACE_DNS, "python.org")
+check(u5d["str"] == "886313e1-3b8a-5372-9b90-0c9aee199e5d", "uuid5 NAMESPACE_DNS python.org")
 let ascii_ns = "00000000000000000000000000000000"
 let u3 = uuid.uuid3(ascii_ns, "python.org")
 check(u3["str"] == "0421fac3-a9c6-3ea3-aee8-8f20aff3f278", "uuid3 ascii ns")

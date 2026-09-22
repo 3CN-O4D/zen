@@ -1,0 +1,104 @@
+# threading.z — Python-like threading module (backed by the Rust thread natives)
+
+var _threads = {}
+var _next_id = 1
+
+func _new_id() {
+    let id = _next_id
+    _next_id += 1
+    return id
+}
+
+func _track(ident, obj) {
+    _threads[ident] = obj
+}
+
+func _untrack(ident) {
+    _threads.remove(ident)
+}
+
+func _tracked(ident) {
+    return _threads.has(ident)
+}
+
+class Thread {
+    var _handle
+    var name
+    var daemon
+    var ident
+    var _target
+
+    func init(target = null, kwargs = null) {
+        _target = target
+        if kwargs != null and kwargs.has("target") {
+            _target = kwargs.get("target")
+        }
+        _handle = null
+        name = if kwargs != null and kwargs.has("name") {
+            str(kwargs.get("name"))
+        } else {
+            "Thread-" + str(_new_id())
+        }
+        daemon = if kwargs != null and kwargs.has("daemon") {
+            kwargs.get("daemon")
+        } else {
+            false
+        }
+        ident = null
+    }
+
+    func start() {
+        if _target == null {
+            return false
+        }
+        if _handle != null {
+            return false
+        }
+        _handle = threading_start(_target)
+        ident = _handle["id"]
+        _track(ident, self)
+        return true
+    }
+
+    func join() {
+        if _handle == null {
+            return false
+        }
+        let id = _handle["id"]
+        let ok = threading_join(id)
+        if ok {
+            _untrack(id)
+        }
+        return ok
+    }
+
+    func is_alive() {
+        if _handle == null {
+            return false
+        }
+        return _tracked(_handle["id"])
+    }
+
+    func run() {
+        if _target != null {
+            _target()
+        }
+    }
+}
+
+func current_thread() {
+    let t = new Thread(null, {name: "MainThread", daemon: false})
+    return t
+}
+
+func enumerate() {
+    let out = [current_thread()]
+    for k in keys(_threads) {
+        out.push(_threads[k])
+    }
+    return out
+}
+
+func active_count() {
+    return enumerate().length()
+}

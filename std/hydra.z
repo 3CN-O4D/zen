@@ -1,0 +1,184 @@
+# hydra.z — Brute-force password tester (SSH, FTP, HTTP, Telnet, SMTP)
+
+import base64
+import fs
+
+var _attempts = 0
+
+func _split_host(host) {
+    let parts = host.split(":")
+    if parts.length() == 2 {
+        return {host: parts[0], port: int(parts[1])}
+    }
+    return {host: host, port: null}
+}
+
+func _ok(value) {
+    return {status: if value { "success" } else { "fail" }}
+}
+
+func ftp(host, user, pass) {
+    let hp = _split_host(host)
+    var session = null
+    try {
+        session = ftp.connect(hp.host, if hp.port == null { 21 } else { hp.port })
+    } catch {
+        return false
+    }
+    var ok = false
+    try {
+        ftp.login(session, user, pass)
+        ok = true
+    } catch {
+    }
+    try {
+        ftp.quit(session)
+    } catch {
+    }
+    return ok
+}
+
+func telnet(host, user, pass) {
+    let hp = _split_host(host)
+    var session = null
+    try {
+        session = telnet.connect(hp.host, if hp.port == null { 23 } else { hp.port })
+    } catch {
+        return false
+    }
+    var ok = false
+    try {
+        telnet.write(session, "\r\n" + user + "\r\n" + pass + "\r\n")
+        let out = telnet.read_until(session, "#")
+        let lower = out.to_lower()
+        if lower.contains("incorrect") || lower.contains("denied") || lower.contains("failed") || lower.contains("invalid") {
+            ok = false
+        } else {
+            ok = true
+        }
+    } catch {
+        ok = false
+    }
+    try {
+        telnet.close(session)
+    } catch {
+    }
+    return ok
+}
+
+func smtp(host, user, pass) {
+    let hp = _split_host(host)
+    var session = null
+    try {
+        session = smtp.connect(hp.host, if hp.port == null { 25 } else { hp.port })
+    } catch {
+        return false
+    }
+    var ok = false
+    try {
+        smtp.login(session, user, pass)
+        ok = true
+    } catch {
+    }
+    try {
+        smtp.quit(session)
+    } catch {
+    }
+    return ok
+}
+
+func ssh(host, user, pass) {
+    let hp = _split_host(host)
+    var ok = false
+    try {
+        let opts = {host: hp.host, user: user}
+        if hp.port != null {
+            opts.port = hp.port
+        }
+        opts.options = "-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5"
+        ssh.run(opts, "true")
+        ok = true
+    } catch {
+        ok = false
+    }
+    return ok
+}
+
+func http(host, user, pass, urlpath) {
+    let hp = _split_host(host)
+    var base = host
+    if !host.starts_with("http://") && !host.starts_with("https://") {
+        base = "http://" + host
+    }
+    var url = base
+    if urlpath != null && urlpath != "" {
+        if urlpath.starts_with("/") {
+            url = base + urlpath
+        } else {
+            url = base + "/" + urlpath
+        }
+    }
+    let token = base64.encode(user + ":" + pass)
+    var ok = false
+    try {
+        let resp = http.get(url, {headers: {Authorization: "Basic " + token}})
+        let status = resp.status
+        if status != 401 && status != 403 && status != 407 {
+            ok = true
+        }
+    } catch {
+        ok = false
+    }
+    return ok
+}
+
+func test(proto, host, user, pass) {
+    if proto == "ftp" {
+        return _ok(ftp(host, user, pass))
+    }
+    if proto == "ssh" {
+        return _ok(ssh(host, user, pass))
+    }
+    if proto == "http" {
+        return _ok(http(host, user, pass, null))
+    }
+    if proto == "telnet" {
+        return _ok(telnet(host, user, pass))
+    }
+    if proto == "smtp" {
+        return _ok(smtp(host, user, pass))
+    }
+    return _ok(false)
+}
+
+func run(proto, host, user, passwords) {
+    var attempts = 0
+    var results = []
+    var errors = []
+    var ok = false
+    var found = ""
+    for pw in passwords {
+        attempts += 1
+        var res = test(proto, host, user, pw)
+        let rec = {password: pw, success: res.status == "success"}
+        results.push(rec)
+        if res.status == "success" {
+            ok = true
+            found = pw
+            break
+        }
+    }
+    return {success: ok, password: found, attempts: attempts, errors: errors, elapsed: 0.0, results: results}
+}
+
+func run_file(proto, host, user, path) {
+    var pws = []
+    let raw = fs.read(path)
+    for line in raw.split("\n") {
+        let t = line.strip()
+        if t != "" {
+            pws.push(t)
+        }
+    }
+    return run(proto, host, user, pws)
+}
