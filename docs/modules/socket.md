@@ -55,4 +55,3 @@ print(resp.data)
 
 ## See Also
 - [http](http.md) — Higher-level HTTP client.
-- [dns](dns.md) — DNS resolution.

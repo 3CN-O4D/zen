@@ -52,5 +52,5 @@ if wa.state() == "CONNECTED" {
 ```
 
 ## See Also
-- [browser](browser/overview.md) — For web-based automation.
+- [browser](../browser/overview.md) — For web-based automation.
 - [threading](threading.md) — For running a WhatsApp poll loop in the background.

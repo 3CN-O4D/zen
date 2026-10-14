@@ -101,7 +101,7 @@ browser.close()
 
 ## See Also
 - [Finding Elements](../browser/finding.md) — Advanced selectors and text search.
-- [Evaluating JS](../browser/interacting.md#evaluating-javascript) — Running custom logic in the page.
+- [Evaluating JS](../browser/interacting.md) — Running custom logic in the page.
 - [CSV Module](../modules/csv.md) — Saving your scraped data.
 
 ## Parsing Saved HTML with soup

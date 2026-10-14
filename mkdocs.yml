@@ -39,7 +39,7 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.snippets
-  - admonitions
+  - pymdownx.details
   - tables
   - toc:
       permalink: true
