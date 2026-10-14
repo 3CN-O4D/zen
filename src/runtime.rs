@@ -5051,6 +5051,13 @@ impl Vm {
                 if let Some(i) = found {
                     return Ok(deref_cells(&self.locals[i].1));
                 }
+                // Implicit-self fields precede globals: a bare field name in
+                // a method means the field (matching plain `x = v`, which
+                // already routes fields first). Locals still shadow fields,
+                // and methods are excluded from field lookup as before.
+                if let Some(v) = self.self_field_get(n) {
+                    return Ok(v);
+                }
                 if let Some(v) = self.vars.get(n) {
                     return Ok(deref_cells(v));
                 }
@@ -5063,9 +5070,6 @@ impl Vm {
                     } else {
                         Value::Dict(Arc::new(vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<indexmap::IndexMap<String, Value>>()))
                     });
-                }
-                if let Some(v) = self.self_field_get(n) {
-                    return Ok(v);
                 }
                 let mut candidates: Vec<&str> = self.vars.keys().map(|s| s.as_str()).collect();
                 candidates.extend(self.functions.keys().map(|s| s.as_str()).filter(|k| !k.contains("::")));
@@ -9582,6 +9586,16 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             }
             return;
         }
+        // Route bare field names to the instance ahead of globals, matching
+        // reads (and plain `x = v`, which already prefers fields). Locals
+        // still shadow fields. Without this, member/index write-backs
+        // (`sections[k] = v` on a field) silently diverge from field reads:
+        // reads keep hitting the instance while writes pile into a shadowing
+        // global snapshot, leaking state across objects.
+        if self.is_self_field(resolve) {
+            self.self_field_set(resolve, value);
+            return;
+        }
         if let Some(g) = self.vars.get(resolve).cloned() {
             if matches!(g, Value::Cell(_)) && cell_set(&g, value.clone()) {
                 return;
@@ -10335,12 +10349,26 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
         let mut steps = nested_steps.to_vec();
         steps.push(final_step);
         let local_idx = self.locals.iter().rposition(|(n, _)| n == root);
-        let root_val = match local_idx {
-            Some(i) => self.locals[i].1.clone(),
-            None => match self.vars.get(root) {
-                Some(v) => v.clone(),
-                None => return Err(format!("undefined variable: `{root}`")),
-            },
+        // Resolve the root exactly like reads do (locals, then self fields,
+        // then globals) so a bare field name works as a nested-assignment
+        // root instead of erroring with "undefined variable".
+        enum RootLoc {
+            Local(usize),
+            Global,
+            Field,
+        }
+        let (root_val, loc) = match local_idx {
+            Some(i) => (self.locals[i].1.clone(), RootLoc::Local(i)),
+            None => {
+                let field_val = self.self_field_get(root);
+                match field_val {
+                    Some(v) => (v, RootLoc::Field),
+                    None => match self.vars.get(root) {
+                        Some(v) => (v.clone(), RootLoc::Global),
+                        None => return Err(format!("undefined variable: `{root}`")),
+                    },
+                }
+            }
         };
         let new_val = if let Some(op) = compound_op {
             let current = self.read_at_steps(&root_val, &steps)?;
@@ -10353,18 +10381,23 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
             Some(v) => v,
             None => return Ok(false),
         };
-        // Write back into the binding, honoring captured cells.
-        match local_idx {
-            Some(i) => {
+        // Write back into the binding, honoring captured cells — or into the
+        // instance field the root resolved from, so field writes persist
+        // instead of spawning shadowing globals.
+        match loc {
+            RootLoc::Local(i) => {
                 if matches!(self.locals[i].1, Value::Cell(_)) {
                     cell_set(&self.locals[i].1, result_root);
                 } else {
                     self.locals[i].1 = result_root;
                 }
             }
-            None => {
+            RootLoc::Global => {
                 self.vars.insert(root.to_string(), result_root);
                 self.global_cache = None;
+            }
+            RootLoc::Field => {
+                self.self_field_set(root, result_root);
             }
         }
         Ok(true)

@@ -78,7 +78,6 @@ browser.close()
 ```
 
 ## Headless Data Export
-
 Combining scraping with the `csv` module.
 
 ```zen
@@ -104,3 +103,24 @@ browser.close()
 - [Finding Elements](../browser/finding.md) — Advanced selectors and text search.
 - [Evaluating JS](../browser/interacting.md#evaluating-javascript) — Running custom logic in the page.
 - [CSV Module](../modules/csv.md) — Saving your scraped data.
+
+## Parsing Saved HTML with soup
+
+For markup you already have (saved pages, API responses, fixtures), the
+`soup` standard module parses and queries without a browser:
+
+```zen
+import soup
+import fs
+
+let html = fs.read("page.html")
+let doc = soup.parse(html)
+
+for a in doc.select("h2.title a") {
+    print a.get_text("").strip() + " -> " + a.attr("href", "?")
+}
+
+print soup.strip_tags("<p>Hi</p> <b>there</b>")  # Hi there
+```
+
+See [soup](../stdlib/soup.md) for `find`, `find_all`, selectors, and entities.

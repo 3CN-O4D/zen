@@ -1,0 +1,539 @@
+// BeautifulSoup-like HTML parsing for Zen.
+//
+// `parse(html)` builds a tree of `Node`s; `find` / `find_all` / `select`
+// query it with tag names, classes, ids, or a small CSS subset
+// (`tag`, `.class`, `#id`, `tag.class`, `tag#id`, and descendant chains like
+// `div p`). `get_text` extracts readable text, `prettify` re-indents markup,
+// and `escape` / `unescape` convert HTML entities.
+//
+// The parser is lenient like a browser: missing end tags auto-close at the
+// end of input, unknown tags are kept, void elements (`br`, `img`, ...) never
+// take children, and malformed input degrades to text rather than raising.
+
+// ── entities ──────────────────────────────────────────────────────────────
+
+let _ENTITIES = {
+    "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
+    "nbsp": " ", "copy": "©", "reg": "®", "trade": "™",
+    "hellip": "…", "mdash": "—", "ndash": "–", "laquo": "«",
+    "raquo": "»", "iexcl": "¡", "iquest": "¿", "sect": "§",
+    "para": "¶", "middot": "·", "bull": "•", "dagger": "†",
+    "Dagger": "‡", "prime": "′", "Prime": "″", "lsaquo": "‹",
+    "rsaquo": "›", "sbquo": "‚", "bdquo": "„", "ldquo": "“",
+    "rdquo": "”", "lsquo": "‘", "rsquo": "’", "frasl": "⁄",
+    "oline": "‾", "curren": "¤", "brvbar": "¦", "uml": "¨",
+    "ordf": "ª", "ordm": "º", "not": "¬", "shy": "­",
+    "macr": "¯", "deg": "°", "plusmn": "±", "sup1": "¹",
+    "sup2": "²", "sup3": "³", "acute": "´", "micro": "µ",
+    "frac12": "½", "frac14": "¼", "frac34": "¾", "times": "×",
+    "divide": "÷", "cent": "¢", "pound": "£", "yen": "¥",
+    "euro": "€"
+}
+
+let _is_digit = fn(c) {
+    let o = c.ord()
+    return o >= 48 and o <= 57
+}
+
+let _is_hex = fn(c) {
+    let o = c.ord()
+    return (o >= 48 and o <= 57) or (o >= 97 and o <= 102) or (o >= 65 and o <= 70)
+}
+
+let _hexval = fn(c) {
+    let o = c.ord()
+    if o >= 48 and o <= 57 { return o - 48 }
+    if o >= 97 and o <= 102 { return o - 87 }
+    return o - 55
+}
+
+let _join = fn(parts, sep) {
+    let out = ""
+    let i = 0
+    while i < len(parts) {
+        if i > 0 { out = out + sep }
+        out = out + str(parts[i])
+        i += 1
+    }
+    return out
+}
+
+let _is_space = fn(c) {
+    return c == " " or c == "\t" or c == "\n" or c == "\r"
+}
+
+let _is_name_char = fn(c) {
+    let o = c.ord()
+    if o >= 97 and o <= 122 { return true }
+    if o >= 65 and o <= 90 { return true }
+    if o >= 48 and o <= 57 { return true }
+    return c == "-" or c == "_" or c == "." or c == ":"
+}
+
+let escape = fn(s) {
+    let out = ""
+    let i = 0
+    while i < len(s) {
+        let c = s[i]
+        if c == "&" { out = out + "&amp;" }
+        else if c == "<" { out = out + "&lt;" }
+        else if c == ">" { out = out + "&gt;" }
+        else if c == "\"" { out = out + "&quot;" }
+        else { out = out + c }
+        i += 1
+    }
+    return out
+}
+
+let unescape = fn(s) {
+    let out = ""
+    let i = 0
+    let n = len(s)
+    while i < n {
+        let c = s[i]
+        if c != "&" {
+            out = out + c
+            i += 1
+        } else {
+            let j = i + 1
+            while j < n and s[j] != ";" and (j - i) < 12 {
+                j += 1
+            }
+            if j < n and s[j] == ";" {
+                let body = s[i + 1:j]
+                if len(body) > 0 and body[0] == "#" {
+                    let code = -1
+                    if len(body) > 1 and (body[1] == "x" or body[1] == "X") {
+                        code = 0
+                        let k = 2
+                        while k < len(body) {
+                            if _is_hex(body[k]) {
+                                code = code * 16 + _hexval(body[k])
+                            } else {
+                                code = -1
+                                break
+                            }
+                            k += 1
+                        }
+                    } else {
+                        code = 0
+                        let k = 1
+                        while k < len(body) {
+                            if _is_digit(body[k]) {
+                                code = code * 10 + (body[k].ord() - 48)
+                            } else {
+                                code = -1
+                                break
+                            }
+                            k += 1
+                        }
+                    }
+                    if code >= 0 {
+                        out = out + chr(code)
+                    } else {
+                        out = out + s[i:j + 1]
+                    }
+                    i = j + 1
+                } else if _ENTITIES.has(body) {
+                    out = out + _ENTITIES.get(body)
+                    i = j + 1
+                } else {
+                    out = out + c
+                    i += 1
+                }
+            } else {
+                out = out + c
+                i += 1
+            }
+        }
+    }
+    return out
+}
+
+// ── nodes ─────────────────────────────────────────────────────────────────
+
+let VOID = ["area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr"]
+
+class Node {
+    var tag
+    var attrs
+    var kids
+    var text
+    var parent
+
+    func init(t, a, k, x, p) {
+        tag = t
+        attrs = a
+        kids = k
+        text = x
+        parent = p
+    }
+
+    func attr(name, dflt) {
+        if attrs.has(name) { return attrs.get(name) }
+        return dflt
+    }
+
+    func has_class(c) {
+        if not attrs.has("class") { return false }
+        let parts = attrs.get("class").split(" ")
+        for p in parts {
+            if p == c { return true }
+        }
+        return false
+    }
+
+    func is_text() { return tag == "#text" }
+    func is_tag() { return tag != "#text" and tag != "#doc" }
+
+    func children() {
+        let out = []
+        for k in kids {
+            if k.is_tag() { out.push(k) }
+        }
+        return out
+    }
+
+    func get_text(sep) {
+        if tag == "#text" { return text }
+        let parts = []
+        for k in kids {
+            parts.push(k.get_text(sep))
+        }
+        let raw = _join(parts, sep)
+        return raw
+    }
+
+    func stripped_text() {
+        return self.get_text("").strip()
+    }
+
+    func _matches(t, c, i) {
+        if t != null and tag != t { return false }
+        if c != null and not self.has_class(c) { return false }
+        if i != null {
+            if not attrs.has("id") { return false }
+            if attrs.get("id") != i { return false }
+        }
+        return true
+    }
+
+    func find(t, c, i) {
+        for k in kids {
+            if k.is_tag() and k._matches(t, c, i) { return k }
+            let deeper = k.find(t, c, i)
+            if deeper != null { return deeper }
+        }
+        return null
+    }
+
+    func find_all(t, c, i) {
+        // NOTE: call arguments arrive by value, so collectors must be built
+        // from return values rather than a shared accumulator.
+        let out = []
+        for k in kids {
+            if k.is_tag() and k._matches(t, c, i) { out.push(k) }
+            let deeper = k.find_all(t, c, i)
+            for d in deeper { out.push(d) }
+        }
+        return out
+    }
+
+    func find_by_id(want) {
+        return self.find(null, null, want)
+    }
+
+    func select(css) {
+        let parts = _split_selector(css)
+        if len(parts) == 0 { return [] }
+        let found = self._select_parts(parts, 0)
+        return found
+    }
+
+    func _select_parts(parts, idx) {
+        let out = []
+        let part = parts[idx]
+        let last = idx == len(parts) - 1
+        for k in kids {
+            if k.is_tag() {
+                if k._matches(part["tag"], part["class"], part["id"]) {
+                    if last {
+                        out.push(k)
+                    } else {
+                        let deeper = k._select_parts(parts, idx + 1)
+                        for d in deeper { out.push(d) }
+                    }
+                }
+                let skipped = k._select_parts(parts, idx)
+                for d in skipped { out.push(d) }
+            } else {
+                let skipped = k._select_parts(parts, idx)
+                for d in skipped { out.push(d) }
+            }
+        }
+        return out
+    }
+
+    func prettify(depth) {
+        let pad = _pad(depth)
+        if tag == "#text" { return pad + text.strip() }
+        if tag == "#doc" {
+            let parts = []
+            for k in kids { parts.push(k.prettify(depth)) }
+            return _join(parts, "\n")
+        }
+        let astr = self._attr_string()
+        if len(kids) == 0 { return pad + "<" + tag + astr + " />" }
+        let parts = []
+        for k in kids { parts.push(k.prettify(depth + 1)) }
+        return pad + "<" + tag + astr + ">\n" + _join(parts, "\n") + "\n" + pad + "</" + tag + ">"
+    }
+
+    func _attr_string() {
+        let out = ""
+        for k in attrs.keys() {
+            let v = attrs.get(k)
+            if v == true {
+                out = out + " " + k
+            } else {
+                out = out + " " + k + "=\"" + escape(str(v)) + "\""
+            }
+        }
+        return out
+    }
+
+    func show() {
+        if tag == "#text" { return "#text(" + text.strip() + ")" }
+        return "<" + tag + self._attr_string() + ">"
+    }
+}
+
+let _pad = fn(depth) {
+    let out = ""
+    let i = 0
+    while i < depth * 2 {
+        out = out + " "
+        i += 1
+    }
+    return out
+}
+
+let _split_selector = fn(css) {
+    let parts = []
+    for chunk in css.split(" ") {
+        let c = chunk.strip()
+        if len(c) == 0 { continue }
+        let part = {"tag": null, "class": null, "id": null}
+        let rest = c
+        // #id only, .class only, or tag-led combos
+        if rest[0] == "#" {
+            part["id"] = rest[1:]
+        } else if rest[0] == "." {
+            part["class"] = rest[1:]
+        } else {
+            let ti = 0
+            while ti < len(rest) and rest[ti] != "." and rest[ti] != "#" {
+                ti += 1
+            }
+            part["tag"] = rest[:ti].lower()
+            while ti < len(rest) {
+                if rest[ti] == "." {
+                    let j = ti + 1
+                    while j < len(rest) and rest[j] != "." and rest[j] != "#" {
+                        j += 1
+                    }
+                    part["class"] = rest[ti + 1:j]
+                    ti = j
+                } else {
+                    let j = ti + 1
+                    while j < len(rest) and rest[j] != "." and rest[j] != "#" {
+                        j += 1
+                    }
+                    part["id"] = rest[ti + 1:j]
+                    ti = j
+                }
+            }
+        }
+        parts.push(part)
+    }
+    return parts
+}
+
+// ── parser ────────────────────────────────────────────────────────────────
+
+let _new_node = fn(t, a, p) {
+    return new Node(t, a, [], "", p)
+}
+
+let _new_text = fn(x, p) {
+    return new Node("#text", {}, [], x, p)
+}
+
+let _read_name = fn(html, i, n) {
+    let start = i
+    while i < n and _is_name_char(html[i]) {
+        i += 1
+    }
+    return [html[start:i].lower(), i]
+}
+
+let _skip_spaces = fn(html, i, n) {
+    while i < n and _is_space(html[i]) {
+        i += 1
+    }
+    return i
+}
+
+let _read_attr_value = fn(html, i, n) {
+    if i < n and (html[i] == "\"" or html[i] == "'") {
+        let q = html[i]
+        i += 1
+        let start = i
+        while i < n and html[i] != q {
+            i += 1
+        }
+        let v = html[start:i]
+        if i < n { i += 1 }
+        return [v, i]
+    }
+    let start = i
+    while i < n and not _is_space(html[i]) and html[i] != ">" and html[i] != "/" {
+        i += 1
+    }
+    return [html[start:i], i]
+}
+
+let _in_list = fn(list, want) {
+    for x in list {
+        if x == want { return true }
+    }
+    return false
+}
+
+let parse = fn(html) {
+    let root = _new_node("#doc", {}, null)
+    let stack = [root]
+    let i = 0
+    let n = len(html)
+    while i < n {
+        let c = html[i]
+        if c != "<" {
+            let start = i
+            while i < n and html[i] != "<" {
+                i += 1
+            }
+            let chunk = html[start:i]
+            // Whitespace-only text is kept (like BeautifulSoup): callers that
+            // want clean text use `get_text` with stripping or `stripped_text`.
+            let top = stack[len(stack) - 1]
+            top.kids.push(_new_text(unescape(chunk), top))
+            continue
+        }
+        // comment
+        if i + 3 < n and html[i + 1] == "!" and html[i + 2] == "-" and html[i + 3] == "-" {
+            i += 4
+            while i + 2 < n and not (html[i] == "-" and html[i + 1] == "-" and html[i + 2] == ">") {
+                i += 1
+            }
+            i += 3
+            continue
+        }
+        // doctype / declaration
+        if i + 1 < n and html[i + 1] == "!" {
+            i += 2
+            while i < n and html[i] != ">" {
+                i += 1
+            }
+            i += 1
+            continue
+        }
+        // processing instruction
+        if i + 1 < n and html[i + 1] == "?" {
+            i += 2
+            while i + 1 < n and not (html[i] == "?" and html[i + 1] == ">") {
+                i += 1
+            }
+            i += 2
+            continue
+        }
+        // close tag
+        if i + 1 < n and html[i + 1] == "/" {
+            i += 2
+            i = _skip_spaces(html, i, n)
+            let r = _read_name(html, i, n)
+            let name = r[0]
+            i = r[1]
+            while i < n and html[i] != ">" {
+                i += 1
+            }
+            i += 1
+            while len(stack) > 1 and stack[len(stack) - 1].tag != name {
+                stack.pop()
+            }
+            if len(stack) > 1 {
+                stack.pop()
+            }
+            continue
+        }
+        // open tag
+        i += 1
+        i = _skip_spaces(html, i, n)
+        let r = _read_name(html, i, n)
+        let name = r[0]
+        i = r[1]
+        if len(name) == 0 {
+            // stray "<" becomes text
+            let top = stack[len(stack) - 1]
+            top.kids.push(_new_text("<", top))
+            continue
+        }
+        let attrs = {}
+        let self_close = false
+        while i < n {
+            i = _skip_spaces(html, i, n)
+            if i >= n { break }
+            if html[i] == ">" {
+                i += 1
+                break
+            }
+            if html[i] == "/" and i + 1 < n and html[i + 1] == ">" {
+                self_close = true
+                i += 2
+                break
+            }
+            if html[i] == "/" {
+                i += 1
+                continue
+            }
+            let ar = _read_name(html, i, n)
+            let aname = ar[0]
+            i = ar[1]
+            if len(aname) == 0 {
+                i += 1
+                continue
+            }
+            i = _skip_spaces(html, i, n)
+            if i < n and html[i] == "=" {
+                i += 1
+                i = _skip_spaces(html, i, n)
+                let vr = _read_attr_value(html, i, n)
+                attrs[aname] = unescape(vr[0])
+                i = vr[1]
+            } else {
+                attrs[aname] = true
+            }
+        }
+        let top = stack[len(stack) - 1]
+        let node = _new_node(name, attrs, top)
+        top.kids.push(node)
+        if not self_close and not _in_list(VOID, name) {
+            stack.push(node)
+        }
+    }
+    return root
+}
+
+let strip_tags = fn(html) {
+    return parse(html).get_text("")
+}

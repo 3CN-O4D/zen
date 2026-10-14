@@ -56,14 +56,14 @@ nav:
   - Language:
     - Overview: language/overview.md
     - Types: language/types.md
-    - Variables: language/variables.md
-    - Operators: language/operators.md
-    - Control Flow: language/control-flow.md
-    - Functions: language/functions.md
-    - Classes: language/classes.md
+    - Variables: variables.md
+    - Operators: operators.md
+    - Control Flow: control-flow.md
+    - Functions: functions.md
+    - Classes: classes.md
     - Lists & Dicts: language/collections.md
-    - Strings: language/strings.md
-    - Error Handling: language/errors.md
+    - Strings: strings.md
+    - Error Handling: errors.md
   - Browser:
     - Overview: browser/overview.md
     - Navigation: browser/navigation.md
@@ -80,14 +80,42 @@ nav:
     - crypto: modules/crypto.md
     - datetime: modules/datetime.md
     - threading: modules/threading.md
-    - WhatsApp: modules/whatsapp.md
+    - WhatsApp: modules/wa.md
   - Standard Library:
     - Overview: stdlib/overview.md
-    - list.z: stdlib/list.md
-    - str.z: stdlib/str.md
-    - dict.z: stdlib/dict.md
-    - test.z: stdlib/test.md
-    - browser.z: stdlib/browser.md
+    - argparser: stdlib/argparser.md
+    - base64: stdlib/base64.md
+    - binascii: stdlib/binascii.md
+    - bisect: stdlib/bisect.md
+    - bytes: stdlib/bytes.md
+    - calendar: stdlib/calendar.md
+    - collections: stdlib/collections.md
+    - copy: stdlib/copy.md
+    - ffmpeg: stdlib/ffmpeg.md
+    - fractions: stdlib/fractions.md
+    - functools: stdlib/functools.md
+    - glob: stdlib/glob.md
+    - hashlib: stdlib/hashlib.md
+    - heapq: stdlib/heapq.md
+    - ini: stdlib/ini.md
+    - itertools: stdlib/itertools.md
+    - json: stdlib/json.md
+    - logging: stdlib/logging.md
+    - math: stdlib/math.md
+    - nmap: stdlib/nmap.md
+    - operator: stdlib/operator.md
+    - pathlib: stdlib/pathlib.md
+    - pprint: stdlib/pprint.md
+    - random: stdlib/random.md
+    - requests: stdlib/requests.md
+    - shutil: stdlib/shutil.md
+    - soup: stdlib/soup.md
+    - statistics: stdlib/statistics.md
+    - string: stdlib/string.md
+    - sys: stdlib/sys.md
+    - tempfile: stdlib/tempfile.md
+    - textwrap: stdlib/textwrap.md
+    - uuid: stdlib/uuid.md
   - Editor Setup:
     - VSCode: editors/vscode.md
     - Vim/Neovim: editors/vim.md

@@ -1,0 +1,95 @@
+// Calendar helpers in the spirit of Python's `calendar`.
+//
+// Proleptic Gregorian calendar. Weekdays are Monday=0 … Sunday=6.
+
+let DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+let DAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+let MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+let MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+let MONTH_DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+let is_leap = fn(year) {
+    if year % 400 == 0 { return true }
+    if year % 100 == 0 { return false }
+    return year % 4 == 0
+}
+
+let days_in_month = fn(year, month) {
+    if month == 2 and is_leap(year) { return 29 }
+    return MONTH_DAYS[month]
+}
+
+let weekday = fn(year, month, day) {
+    // Tomohiko Sakamoto's method; 0 = Sunday. Shifted to Monday = 0.
+    let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    let y = year
+    if month < 3 { y -= 1 }
+    let dow = (y + int(y / 4) - int(y / 100) + int(y / 400) + t[month - 1] + day) % 7
+    return (dow + 6) % 7
+}
+
+let month_range = fn(year, month) {
+    // [weekday of the 1st (Mon=0), days in month].
+    return [weekday(year, month, 1), days_in_month(year, month)]
+}
+
+let month_calendar = fn(year, month) {
+    // Weeks (Mon..Sun); 0 marks days outside the month.
+    let r = month_range(year, month)
+    let first = r[0]
+    let days = r[1]
+    let weeks = []
+    let week = [0, 0, 0, 0, 0, 0, 0]
+    let d = 1
+    let wd = first
+    while d <= days {
+        week[wd] = d
+        d += 1
+        wd += 1
+        if wd == 7 {
+            weeks.push(week)
+            week = [0, 0, 0, 0, 0, 0, 0]
+            wd = 0
+        }
+    }
+    if wd != 0 { weeks.push(week) }
+    return weeks
+}
+
+let _pad2 = fn(n) {
+    if n < 10 { return " " + str(n) }
+    return str(n)
+}
+
+let month_str = fn(year, month) {
+    let head = MONTH_NAMES[month] + " " + str(year)
+    let lines = [head, "Mo Tu We Th Fr Sa Su"]
+    for week in month_calendar(year, month) {
+        let parts = []
+        for d in week {
+            if d == 0 {
+                parts.push("  ")
+            } else {
+                parts.push(_pad2(d))
+            }
+        }
+        lines.push(_join(parts, " "))
+    }
+    return _join(lines, "\n")
+}
+
+let _join = fn(parts, sep) {
+    let out = ""
+    let i = 0
+    while i < len(parts) {
+        if i > 0 { out = out + sep }
+        out = out + str(parts[i])
+        i += 1
+    }
+    return out
+}
+
+let yeardays = fn(year) {
+    if is_leap(year) { return 366 }
+    return 365
+}

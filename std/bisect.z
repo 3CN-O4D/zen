@@ -1,0 +1,59 @@
+// Binary search in the spirit of Python's `bisect`.
+//
+// Like `heapq`, insertion returns a NEW list (rebind it:
+// `let xs = bisect.insort(xs, x)`), because call arguments arrive by value.
+
+let bisect_left = fn(a, x) {
+    let lo = 0
+    let hi = len(a)
+    while lo < hi {
+        let mid = int((lo + hi) / 2)
+        if a[mid] < x {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return lo
+}
+
+let bisect_right = fn(a, x) {
+    let lo = 0
+    let hi = len(a)
+    while lo < hi {
+        let mid = int((lo + hi) / 2)
+        if x < a[mid] {
+            hi = mid
+        } else {
+            lo = mid + 1
+        }
+    }
+    return lo
+}
+
+let insort_left = fn(a, x) {
+    // `a` already arrives as a private copy, so splice it directly.
+    let i = bisect_left(a, x)
+    let res = []
+    let k = 0
+    while k < len(a) {
+        if k == i { res.push(x) }
+        res.push(a[k])
+        k += 1
+    }
+    if i == len(a) { res.push(x) }
+    return res
+}
+
+let insort_right = fn(a, x) {
+    let i = bisect_right(a, x)
+    let res = []
+    let k = 0
+    while k < len(a) {
+        if k == i { res.push(x) }
+        res.push(a[k])
+        k += 1
+    }
+    if i == len(a) { res.push(x) }
+    return res
+}

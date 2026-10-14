@@ -1,0 +1,82 @@
+// Test 37: field-rooted assignment semantics (engine regression tests).
+//
+// Bare field names must work as nested-assignment roots on the first try,
+// must not leak state across objects, and must keep reads/writes consistent.
+let fail = 0
+let check = fn(cond, label) {
+    if not cond {
+        fail += 1
+        print "FAIL: " + label
+    }
+}
+
+class Box {
+    var data
+    func init() { data = {} }
+    func set(s, k, v) {
+        // First-use, pre-existing section, no priming: must just work.
+        if not data.has(s) {
+            data[s] = {}
+        }
+        data[s][k] = v
+        return null
+    }
+    func get(s, k, d) {
+        if data.has(s) {
+            let inner = data.get(s)
+            if inner.has(k) { return inner.get(k) }
+        }
+        return d
+    }
+    func bump(s, k) {
+        if not data.has(s) {
+            data[s] = {}
+        }
+        if not data.get(s).has(k) {
+            data[s][k] = 0
+        }
+        data[s][k] += 1
+        return data.get(s).get(k)
+    }
+}
+
+// First use on a pre-existing section (the original failure).
+let a = new Box()
+a.set("x", "k", 1)
+check(a.get("x", "k", "?") == 1, "first-use nested field store")
+
+// Independence across objects (the cross-object poisoning).
+let b = new Box()
+check(b.get("x", "k", "?") == "?", "fresh object unaffected")
+b.set("y", "k", 2)
+check(b.get("y", "k", "?") == 2, "second object stores")
+check(a.get("x", "k", "?") == 1, "first object intact")
+check(a.get("y", "k", "?") == "?", "first object lacks second's keys")
+
+// Compound assignment through a field root.
+check(a.bump("x", "k") == 2, "nested compound assign")
+check(a.get("x", "k", "?") == 2, "compound persisted")
+
+// Plain and depth-1 field stores still behave.
+class Counter {
+    var n
+    var meta
+    func init() {
+        n = 0
+        meta = {}
+    }
+    func tick() {
+        n += 1
+        return n
+    }
+    func tag(k, v) {
+        meta[k] = v
+        return null
+    }
+}
+let c1 = new Counter()
+let c2 = new Counter()
+check(c1.tick() == 1, "plain field assign")
+check(c2.tick() == 1, "independent counter")
+c1.tag("a", "x")
+check(c2.meta.has("a") == false, "depth-1 stores isolated")

@@ -25,6 +25,9 @@ sys.exit(0)
 | `version` | `string` | The Zen version string. |
 | `path` | `list` | The search path for modules. |
 | `stdin` / `stdout` / `stderr` | `string` | Labels for standard I/O streams. |
+| `byteorder` | `string` | `"little"`. |
+| `maxsize` | `int` | Largest native integer. |
+| `hexversion` | `int` | Version as a single integer. |
 
 ## Functions
 
@@ -33,6 +36,7 @@ sys.exit(0)
 | `exit(code)` | Terminates the current process with the given exit code. |
 | `getsizeof(obj)` | Returns an approximate memory size of the object in bytes. |
 | `getdefaultencoding()` | Returns the default string encoding ("utf-8"). |
+| `getrecursionlimit()` | Returns the interpreter recursion limit. |
 
 ## Examples
 

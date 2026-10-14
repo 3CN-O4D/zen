@@ -1,0 +1,59 @@
+// Test 33: soup pure module (HTML parsing + queries)
+let fail = 0
+let check = fn(cond, label) {
+    if not cond {
+        fail += 1
+        print "FAIL: " + label
+    }
+}
+
+import soup
+
+// ---- entities ----
+check(soup.unescape("&lt;&gt;&amp;&quot;&#65;&#x42;") == "<>&\"AB", "entities basic")
+check(soup.unescape("&unknown;") == "&unknown;", "entities unknown kept")
+check(soup.unescape("plain") == "plain", "entities plain")
+check(soup.escape("<a>&\"") == "&lt;a&gt;&amp;&quot;", "escape")
+
+// ---- basic parse ----
+let doc = soup.parse("<div id=\"top\" class=\"a b\"><p>Hello <b>World</b></p></div>")
+check(doc.find("p", null, null).get_text("") == "Hello World", "nested text")
+check(doc.find("div", null, null).attr("id", "?") == "top", "attr id")
+check(doc.find("div", null, null).attr("missing", "d") == "d", "attr default")
+check(doc.find(null, "a", null).tag == "div", "find by class")
+check(doc.find(null, null, "top").tag == "div", "find by id")
+check(doc.find("span", null, null) == null, "find missing is null")
+check(len(doc.find_all("p", null, null)) == 1, "find_all count")
+check(len(doc.find_all(null, null, null)) == 3, "find_all all tags")
+
+// ---- void / boolean / unquoted attrs ----
+let v = soup.parse("<br><img src=x alt='pic' hidden><hr>")
+check(len(v.find_all("br", null, null)) == 1, "void br")
+check(v.find("img", null, null).attr("src", "?") == "x", "unquoted attr")
+check(v.find("img", null, null).attr("hidden", "?") == true, "boolean attr")
+check(v.find("img", null, null).attr("alt", "?") == "pic", "single-quoted attr")
+
+// ---- selectors ----
+let s = soup.parse("<div class=\"x\" id=\"a\"><p class=\"y\">one</p><p>two</p></div>")
+check(len(s.select("p")) == 2, "select tag")
+check(s.select(".y")[0].get_text("") == "one", "select class")
+check(s.select("#a")[0].tag == "div", "select id")
+check(s.select("div.x#a")[0].tag == "div", "select combo")
+check(s.select("div p")[1].get_text("") == "two", "select descendant")
+
+// ---- tree nav ----
+let t = s.find("div", null, null)
+check(len(t.children()) == 2, "children")
+check(t.find("p", null, null).parent.tag == "div", "parent")
+check(t.children()[0].has_class("y"), "has_class")
+
+// ---- malformed + comments ----
+let m = soup.parse("<ul><li>a<li>b</ul><!-- x --><p>unclosed")
+check(m.find("ul", null, null).get_text("|") == "a|b", "auto-close li")
+check(m.find("p", null, null).get_text("") == "unclosed", "unclosed p")
+check(soup.strip_tags("<p>Hi</p> <b>there</b>") == "Hi there", "strip_tags")
+
+// ---- prettify ----
+let p = soup.parse("<div><p>x</p></div>").find("div", null, null).prettify(0)
+check(p.find("<div>") != -1, "prettify open")
+check(p.find("</div>") != -1, "prettify close")
