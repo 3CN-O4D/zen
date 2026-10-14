@@ -96,6 +96,7 @@ nav:
     - functools: stdlib/functools.md
     - glob: stdlib/glob.md
     - hashlib: stdlib/hashlib.md
+    - hydra: stdlib/hydra.md
     - heapq: stdlib/heapq.md
     - ini: stdlib/ini.md
     - itertools: stdlib/itertools.md
@@ -115,6 +116,7 @@ nav:
     - sys: stdlib/sys.md
     - tempfile: stdlib/tempfile.md
     - textwrap: stdlib/textwrap.md
+    - threading: stdlib/threading.md
     - uuid: stdlib/uuid.md
   - Editor Setup:
     - VSCode: editors/vscode.md

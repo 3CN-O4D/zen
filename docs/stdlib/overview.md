@@ -29,6 +29,7 @@ print(sys.platform)
 | `functools` | Reduce, partials, memoizing decorators. |
 | `glob` | Shell-style path matching. |
 | `hashlib` | MD5/SHA/blake2 hashing and PBKDF2. |
+| `hydra` | Login testing for authorized audits (ssh/ftp/http/telnet/smtp). |
 | `heapq` | Binary heaps and top-n selection. |
 | `ini` | INI/config files with defaults and typed getters. |
 | `itertools` | Combinatorics and iterator tools. |
@@ -48,6 +49,7 @@ print(sys.platform)
 | `sys` | System-specific parameters and functions. |
 | `tempfile` | Temporary files and directories. |
 | `textwrap` | Wrapping, filling, dedenting, shortening. |
+| `threading` | Threads (`Thread`, `current_thread`, `enumerate`). |
 | `uuid` | UUID generation (v1/v3/v4/v5). |
 
 ## How to use
@@ -87,6 +89,7 @@ if args.verbose {
 - [functools](functools.md) — Higher-order functions.
 - [glob](glob.md) — Path globbing.
 - [hashlib](hashlib.md) — Hashing.
+- [hydra](hydra.md) — Login testing.
 - [heapq](heapq.md) — Binary heaps.
 - [ini](ini.md) — INI/config files.
 - [itertools](itertools.md) — Iterator tools.
@@ -105,4 +108,5 @@ if args.verbose {
 - [sys](sys.md) — System information and CLI arguments.
 - [tempfile](tempfile.md) — Temporary files.
 - [textwrap](textwrap.md) — Text wrapping.
+- [threading](threading.md) — Threads.
 - [uuid](uuid.md) — Unique identifiers.
