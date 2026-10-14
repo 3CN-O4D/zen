@@ -16,6 +16,19 @@ build/
 .DS_Store
 Thumbs.db
 
+# Build artifacts
+/target/
+dist/
+*.tar.gz
+*.deb
+*.zip
+*.deb
+zen_*.deb
+zen-*.tar.gz
+zen_*.deb
+*.deb
+zen_*.deb
+
 # Python (legacy)
 venv/
 __pycache__/
@@ -35,3 +48,9 @@ monalisa_images/
 /zen/
 # accidental nmap output dump
 J
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
