@@ -1,0 +1,31 @@
+pub fn sha256(data: String) -> String {
+    return __native_crypto_hash("sha256", data)
+}
+
+pub fn sha384(data: String) -> String {
+    return __native_crypto_hash("sha384", data)
+}
+
+pub fn sha512(data: String) -> String {
+    return __native_crypto_hash("sha512", data)
+}
+
+pub fn sha3_256(data: String) -> String {
+    return __native_crypto_hash("sha3_256", data)
+}
+
+pub fn sha3_512(data: String) -> String {
+    return __native_crypto_hash("sha3_512", data)
+}
+
+pub fn blake3(data: String) -> String {
+    return __native_crypto_hash("blake3", data)
+}
+
+pub fn md5(data: String) -> String {
+    return __native_crypto_hash("md5", data)
+}
+
+pub fn sha1(data: String) -> String {
+    return __native_crypto_hash("sha1", data)
+}

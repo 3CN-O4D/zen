@@ -1,0 +1,224 @@
+// Pure-Zen reimplementation of the `string` module.
+//
+// Declares ZEN_PURE so the .z tier wins over the Rust tier on import; the
+// native members stay reachable as `string.native.*` and setting
+// ZEN_NATIVE_ONLY=string restores the native tier.
+//
+// Note: indices follow .z byte/char handling, so for ASCII input — the
+// expected range of the Rust tier's byte-oriented helpers — results match.
+ZEN_PURE = true
+
+let upper = fn(s) { return s.upper() }
+let lower = fn(s) { return s.lower() }
+
+let title = fn(s) {
+    let out = ""
+    let ws = true
+    for c in list(s) {
+        if c.isspace() {
+            ws = true
+            out += c
+        } elif ws {
+            out += c.upper()
+            ws = false
+        } else {
+            out += c.lower()
+        }
+    }
+    return out
+}
+
+let capitalize = fn(s) {
+    let out = ""
+    let first = true
+    for c in list(s) {
+        if first {
+            out += c.upper()
+            first = false
+        } else {
+            out += c.lower()
+        }
+    }
+    return out
+}
+
+let swapcase = fn(s) {
+    let out = ""
+    for c in list(s) {
+        if c.isupper() {
+            out += c.lower()
+        } elif c.islower() {
+            out += c.upper()
+        } else {
+            out += c
+        }
+    }
+    return out
+}
+
+let strip = fn(s) { return s.strip() }
+let lstrip = fn(s) { return s.lstrip() }
+let rstrip = fn(s) { return s.rstrip() }
+
+let split = fn(s, sep = " ") {
+    if sep == "" {
+        let out = []
+        for c in list(s) { out.push(c) }
+        return out
+    }
+    let out = []
+    let cur = ""
+    let i = 0
+    let m = len(sep)
+    let n = len(s)
+    while i < n {
+        if i + m <= n and s.substring(i, i + m) == sep {
+            out.push(cur)
+            cur = ""
+            i += m
+        } else {
+            cur += s[i]
+            i += 1
+        }
+    }
+    out.push(cur)
+    return out
+}
+
+let splitlines = fn(s) {
+    let out = []
+    let cur = ""
+    let i = 0
+    let n = len(s)
+    while i < n {
+        let c = s[i]
+        if c == "\r" and i + 1 < n and s[i + 1] == "\n" {
+            out.push(cur)
+            cur = ""
+            i += 2
+        } elif c == "\n" or c == "\r" {
+            out.push(cur)
+            cur = ""
+            i += 1
+        } else {
+            cur += c
+            i += 1
+        }
+    }
+    if cur != "" {
+        out.push(cur)
+    }
+    return out
+}
+
+let join = fn(sep, items) {
+    let out = ""
+    let first = true
+    for x in items {
+        if not first {
+            out += sep
+        }
+        if type(x) == "string" {
+            out += x
+        } else {
+            out += str(x)
+        }
+        first = false
+    }
+    return out
+}
+
+let replace = fn(s, old, rep) { return s.replace(old, rep) }
+let count = fn(s, sub) { return s.count(sub) }
+
+let find = fn(s, sub) { return s.find(sub) }
+
+let rfind = fn(s, sub) {
+    let m = len(sub)
+    let n = len(s)
+    let i = n - m
+    while i >= 0 {
+        if s.substring(i, i + m) == sub {
+            return i
+        }
+        i -= 1
+    }
+    return -1
+}
+
+let startswith = fn(s, prefix) { return s.startswith(prefix) }
+let endswith = fn(s, suffix) { return s.endswith(suffix) }
+let contains = fn(s, sub) { return s.contains(sub) }
+
+let ljust = fn(s, width, fill = " ") {
+    let f = list(fill)[0]
+    let out = s
+    while len(out) < width {
+        out += f
+    }
+    return out
+}
+
+let rjust = fn(s, width, fill = " ") {
+    let f = list(fill)[0]
+    let out = ""
+    while len(out) + len(s) < width {
+        out += f
+    }
+    return out + s
+}
+
+let center = fn(s, width, fill = " ") {
+    let f = list(fill)[0]
+    if len(s) >= width {
+        return s
+    }
+    let total = width - len(s)
+    let left = int(total / 2)
+    let right = total - left
+    let out = ""
+    let _i = 0
+    while _i < left {
+        out += f
+        _i += 1
+    }
+    out += s
+    _i = 0
+    while _i < right {
+        out += f
+        _i += 1
+    }
+    return out
+}
+
+let zfill = fn(s, width) {
+    let sign = ""
+    if s.startswith("-") or s.startswith("+") {
+        sign = s[0]
+        s = s.substring(1, len(s))
+    }
+    let out = sign
+    while len(out) + len(s) < width {
+        out += "0"
+    }
+    return out + s
+}
+
+let repeat = fn(s, n) { return s.repeat(n) }
+
+let isdigit = fn(s) { return s.isdigit() }
+let isalpha = fn(s) { return s.isalpha() }
+let isalnum = fn(s) { return s.isalnum() }
+let isspace = fn(s) { return s.isspace() }
+let islower = fn(s) { return s.islower() }
+let isupper = fn(s) { return s.isupper() }
+
+let digits = "0123456789"
+let hexdigits = "0123456789abcdefABCDEF"
+let octdigits = "01234567"
+let ascii_letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+let ascii_lowercase = "abcdefghijklmnopqrstuvwxyz"
+let ascii_uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+let punctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+let whitespace = " \t\n\r\x0b\x0c"
+let printable = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \t\n\r\x0b\x0c"

@@ -1,0 +1,68 @@
+# Functions: params, returns, recursion, closures over globals
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+func add(a, b) {
+    return a + b
+}
+check(add(2, 3) == 5, "basic call")
+
+func fib(n) {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+check(fib(20) == 6765, "recursion fib20")
+
+# early return paths
+func sign(n) {
+    if n > 0 { return "pos" }
+    elif n < 0 { return "neg" }
+    return "zero"
+}
+check(sign(5) == "pos", "sign pos")
+check(sign(-5) == "neg", "sign neg")
+check(sign(0) == "zero", "sign zero")
+
+# loop inside function with break (loop state must not escape the call)
+func first_over(list, limit) {
+    for v in list {
+        if v > limit { return v }
+    }
+    return -1
+}
+check(first_over([1, 7, 2], 3) == 7, "early return from loop")
+check(first_over([1, 2], 3) == -1, "no match sentinel")
+
+# function calling another function that contains a while+break
+# (regression guard: inner break must not leak into outer loops)
+func scan(s, target) {
+    var i = 0
+    while i < s.length() {
+        if s[i] == target {
+            break
+        }
+        i = i + 1
+    }
+    return i
+}
+func count_all(words, ch) {
+    var total = 0
+    var k = 0
+    while k < words.length() {
+        total = total + scan(words[k], ch)
+        k = k + 1
+    }
+    return total
+}
+check(count_all(["hi", "hey"], "e") == 3, "inner break isolation")
+
+# lambda-ish usage via vars is not relied on; plain alias works:
+var add_alias = add
+check(add_alias(4, 4) == 8, "function value alias")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

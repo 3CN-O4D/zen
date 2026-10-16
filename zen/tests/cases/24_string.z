@@ -1,0 +1,93 @@
+// 24_string: the pure-Zen string override — parity with the Rust tier, the
+// <mod>["native"] escape hatch, and ZEN_NATIVE_ONLY bypass.
+import string
+import os
+import sys
+
+let failed = 0
+let check = fn(cond, what) {
+    if not cond {
+        print "FAIL: " + what
+        failed += 1
+    }
+}
+
+check(string.get("ZEN_PURE", null) == null, "ZEN_PURE marker stripped")
+check(string["native"] != null, "native escape hatch present")
+
+let na = string["native"]
+
+let c1 = fn(f, a) {
+    if not (string[f](a) == na[f](a)) { print "FAIL: " + f; failed += 1 }
+}
+let c2 = fn(f, a, b) {
+    if not (string[f](a, b) == na[f](a, b)) { print "FAIL: " + f; failed += 1 }
+}
+let c3 = fn(f, a, b, c) {
+    if not (string[f](a, b, c) == na[f](a, b, c)) { print "FAIL: " + f; failed += 1 }
+}
+
+c1("upper", "HeLLo 123")         c1("lower", "HeLLo 123")
+c1("title", "hello WORLD foo-bar")
+c1("capitalize", "hello WORLD")
+c1("swapcase", "HeLLo World")
+c1("strip", "  hi  ")            c1("lstrip", "  hi  ")        c1("rstrip", "  hi  ")
+c2("split", "a,,b,c,", ",")      c2("split", "a b  c", " ")    c2("split", "ab", "")
+c1("split", "a b  c")
+c1("splitlines", "a\nb\r\nc\nd") c1("splitlines", "a\n")       c1("splitlines", "\n\n")
+c1("splitlines", "")             c1("splitlines", "\r\n")
+c2("join", ",", ["a", "b", "c"]) c2("join", "-", [1, 2, 3])    c2("join", "", ["a", "", "c"])
+c3("replace", "aaa bbb aaa", "aaa", "x")
+c2("count", "aabbaaab", "aa")    c2("count", "aaa", "a")        c2("count", "abc", "zz")
+c2("find", "hello world", "o")   c2("find", "hello", "zz")      c2("find", "hello", "hello")
+c2("rfind", "hello world", "o")  c2("rfind", "hello", "zz")
+c2("startswith", "hello", "he")  c2("startswith", "hello", "x")
+c2("endswith", "hello", "lo")    c2("endswith", "hello", "x")
+c2("contains", "hello", "ell")   c2("contains", "hello", "x")
+c2("ljust", "hi", 6)             c3("ljust", "hi", 6, "*")
+c2("rjust", "hi", 6)             c3("rjust", "hi", 6, ".")
+c2("center", "hi", 6)            c3("center", "hi", 7, "=")
+c2("zfill", "42", 6)             c2("zfill", "-42", 6)         c2("zfill", "+42", 6)    c2("zfill", "", 3)
+c2("repeat", "ab", 3)            c2("repeat", "ab", 0)
+c1("isdigit", "12345")           c1("isdigit", "12a")          c1("isdigit", "")
+c1("isalpha", "abc")             c1("isalpha", "a1c")
+c1("isalnum", "abc123")          c1("isalnum", "a-b")
+c1("isspace", " \t\n")           c1("isspace", "a ")
+c1("islower", "abc")             c1("islower", "aBc")          c1("islower", "ABC")
+c1("isupper", "ABC")             c1("isupper", "AbC")          c1("isupper", "abc")
+
+check(string.digits == na.digits, "digits constant")
+check(string.hexdigits == na.hexdigits, "hexdigits constant")
+check(string.octdigits == na.octdigits, "octdigits constant")
+check(string.ascii_letters == na.ascii_letters, "ascii_letters constant")
+check(string.ascii_lowercase == na.ascii_lowercase, "ascii_lowercase constant")
+check(string.ascii_uppercase == na.ascii_uppercase, "ascii_uppercase constant")
+check(string.punctuation == na.punctuation, "punctuation constant")
+check(string.whitespace == na.whitespace, "whitespace constant")
+check(string.printable == na.printable, "printable constant")
+
+// ZEN_NATIVE_ONLY=string must bypass the pure tier.
+let zen_bin = "../../target/debug/zen"
+let check_native_probe = fn(expected_exit) {
+    let cpid = sys.fork()
+    if cpid == 0 {
+        if expected_exit == 0 {
+            os.setenv("ZEN_NATIVE_ONLY", "string")
+        }
+        sys.exec("/bin/sh", ["-c", zen_bin + " -e 'import string; import sys; if string.get(\"native\", 0) == 0 { sys.exit(0) } else { sys.exit(1) }'"])
+    }
+    let w = sys.waitpid(cpid, 0)
+    check(sys.wexitstatus(w[1]) == expected_exit,
+        expected_exit == 0 ? "ZEN_NATIVE_ONLY removes native sub-dict"
+                           : "default keeps native sub-dict")
+}
+
+check_native_probe(1)   // default: native present  -> child exit 1
+check_native_probe(0)   // ZEN_NATIVE_ONLY: absent  -> child exit 0
+
+if failed == 0 {
+    print "24_string: all ok"
+} else {
+    print "24_string: " + failed + " failures"
+    sys.exit(1)
+}

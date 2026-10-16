@@ -1,0 +1,17 @@
+[package]
+name = "zen-compiler"
+version = "3.0.0"
+edition = "2021"
+description = "Zen compiler: AST to bytecode"
+license = "MIT"
+
+[dependencies]
+zen-syntax = { path = "../zen-syntax" }
+zen-vm = { path = "../zen-vm" }
+thiserror = { workspace = true }
+indexmap = { workspace = true }
+ahash = { workspace = true }
+phf = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

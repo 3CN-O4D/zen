@@ -1,0 +1,23 @@
+[package]
+name = "zen-jit"
+version = "3.0.0"
+edition = "2021"
+description = "Zen Cranelift JIT (optional, behind feature)"
+license = "MIT"
+
+[dependencies]
+zen-vm = { path = "../zen-vm" }
+cranelift-codegen = { version = "0.136", optional = true }
+cranelift-frontend = { version = "0.136", optional = true }
+cranelift-jit = { version = "0.136", optional = true }
+cranelift-native = { version = "0.136", optional = true }
+cranelift-module = { version = "0.136", optional = true }
+rayon = "1.12"
+
+[features]
+default = []
+jit = ["zen-vm/jit", "cranelift-codegen", "cranelift-frontend", "cranelift-jit", "cranelift-native", "cranelift-module"]
+
+[dev-dependencies]
+zen-compiler = { path = "../zen-compiler" }
+serde_json = { workspace = true }

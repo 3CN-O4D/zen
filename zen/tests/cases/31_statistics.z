@@ -1,0 +1,68 @@
+// Test 31: statistics pure module
+let fail = 0
+let check = fn(cond, label) {
+    if not cond {
+        fail += 1
+        print "FAIL: " + label
+    }
+}
+let approx = fn(a, b, eps) {
+    let d = a - b
+    if d < 0 { d = -d }
+    return d < eps
+}
+
+import statistics
+
+// ---- basic aggregation ----
+check(statistics.mean([1, 2, 3, 4]) == 2.5, "mean")
+check(statistics.fmean([1, 2, 3, 4]) == 2.5, "fmean")
+check(statistics.sum([1, 2, 3, 4]) == 10, "sum")
+check(statistics.min([3, 1, 2]) == 1, "min")
+check(statistics.max([3, 1, 2]) == 3, "max")
+
+// ---- median ----
+check(statistics.median([1, 2, 3, 4]) == 2.5, "median even")
+check(statistics.median([1, 2, 3]) == 2, "median odd")
+check(statistics.median_low([1, 2, 3, 4]) == 2, "median_low")
+check(statistics.median_high([1, 2, 3, 4]) == 3, "median_high")
+check(statistics.median_grouped([52, 52, 53, 54]) == 52.5, "median_grouped")
+
+// ---- mode ----
+check(statistics.mode([1, 2, 2, 3]) == 2, "mode")
+check(statistics.mode(["red", "red", "green", "blue", "blue"]) == "red", "mode ties first")
+let mm = statistics.multimode([1, 1, 2, 3, 3])
+check(len(mm) == 2, "multimode count")
+check(mm.contains(1) and mm.contains(3), "multimode values")
+
+// ---- variance / stdev ----
+check(approx(statistics.variance([1, 2, 3, 4, 5]), 2.5, 1e-9), "variance")
+check(approx(statistics.stdev([1, 2, 3, 4, 5]), 1.5811388300841898, 1e-9), "stdev")
+check(approx(statistics.pvariance([1, 2, 3, 4, 5]), 2.0, 1e-9), "pvariance")
+check(approx(statistics.pstdev([1, 2, 3, 4, 5]), 1.4142135623730951, 1e-9), "pstdev")
+
+// ---- quantiles ----
+let qe = statistics.quantiles([1, 2, 3, 4], 4, "exclusive")
+check(len(qe) == 3, "quantiles exclusive len")
+check(qe[0] == 1.25, "q1 exclusive")
+check(qe[1] == 2.5,  "q2 exclusive")
+check(qe[2] == 3.75, "q3 exclusive")
+
+let qi = statistics.quantiles([1, 2, 3, 4], 4, "inclusive")
+check(qi[0] == 1.75, "q1 inclusive")
+check(qi[1] == 2.5,  "q2 inclusive")
+check(qi[2] == 3.25, "q3 inclusive")
+
+// ---- geometric / harmonic mean ----
+check(approx(statistics.geometric_mean([1, 2, 3, 4]), 2.213363839400643, 1e-9), "geometric_mean")
+check(approx(statistics.harmonic_mean([1, 2, 4]), 1.7142857142857142, 1e-9), "harmonic_mean")
+
+// ---- linear_regression ----
+let lr = statistics.linear_regression([1, 2, 3, 4, 5], [2, 4, 5, 4, 5])
+check(approx(lr["slope"], 0.6, 1e-9), "linreg slope")
+check(approx(lr["intercept"], 2.2, 1e-9), "linreg intercept")
+
+// ---- correlation ----
+check(approx(statistics.correlation([1, 2, 3, 4, 5], [2, 4, 5, 4, 5]), 0.7745966692414834, 1e-9), "correlation")
+
+print "test31 statistics done"

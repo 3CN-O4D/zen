@@ -1,0 +1,19 @@
+pub fn totp(secret: String, time_step: Int = 30, digits: Int = 6) -> String {
+    return __native_crypto_totp(secret, time_step, digits)
+}
+
+pub fn totp_verify(secret: String, token: String, window: Int = 1, time_step: Int = 30, digits: Int = 6) -> Bool {
+    return __native_crypto_totp_verify(secret, token, window, time_step, digits)
+}
+
+pub fn hotp(secret: String, counter: Int, digits: Int = 6) -> String {
+    return __native_crypto_hotp(secret, counter, digits)
+}
+
+pub fn hotp_verify(secret: String, token: String, counter: Int, window: Int = 1, digits: Int = 6) -> Bool {
+    return __native_crypto_hotp_verify(secret, token, counter, window, digits)
+}
+
+pub fn generate_secret() -> String {
+    return __native_crypto_otp_generate_secret()
+}

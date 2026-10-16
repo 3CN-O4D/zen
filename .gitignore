@@ -44,8 +44,12 @@ test_zen_dir/
 moi_pdfs/
 monalisa_images/
 
-# stray nested build dir
-/zen/
+# nested 3.0.0 rewrite workspace (tracked; only build/scratch junk excluded)
+zen/target/
+zen/fuzz/
+zen/scratch_mod/
+zen/crash-*
+zen/leak-*
 # accidental nmap output dump
 J
 

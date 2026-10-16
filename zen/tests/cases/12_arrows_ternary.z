@@ -1,0 +1,96 @@
+# Arrow functions, python-style ternary, chained comparisons,
+# multi-variable for, and list comprehensions.
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+# Arrow functions: single expression body
+let double = (x) => x * 2
+check(double(5) == 10, "arrow single-expression body")
+
+let add2 = (x, y) => x + y
+check(add2(2, 3) == 5, "arrow two params")
+
+let say_hello = () => "Hello!"
+check(say_hello() == "Hello!", "arrow zero params")
+
+# Arrow functions: block body with auto-return of last expression
+let process = (x) => {
+    let result = x * 2
+    result + 1
+}
+check(process(5) == 11, "arrow block body auto-return")
+
+let explicit = (x) => {
+    let result = x * 2
+    return result + 1
+}
+check(explicit(5) == 11, "arrow block body explicit return")
+
+# Arrow functions as callbacks
+let numbers = [1, 2, 3, 4, 5]
+let doubled = numbers.map((x) => x * 2)
+check(doubled == [2, 4, 6, 8, 10], "arrow callback map")
+
+let evens = numbers.filter((x) => x % 2 == 0)
+check(evens == [2, 4], "arrow callback filter")
+
+let sum = numbers.reduce((acc, x) => acc + x)
+check(sum == 15, "arrow callback reduce")
+
+# Python-style ternary: `x if cond else y`
+let status = "pass" if 60 >= 50 else "fail"
+check(status == "pass", "python-style ternary true branch")
+
+let other = "pass" if 3 > 10 else "fail"
+check(other == "fail", "python-style ternary false branch")
+
+let chained = "high" if 70 > 60 else "medium" if 40 > 30 else "young"
+check(chained == "high", "nested python-style ternary")
+
+# lambda single-expression with python ternary
+let abs = lambda x: x if x >= 0 else -x
+check(abs(-5) == 5 && abs(3) == 3, "lambda ternary body")
+
+# Existing C-style ternary still works
+let q = 5 ? "yes" : "no"
+check(q == "yes", "C-style ternary still works")
+
+# Chained comparisons evaluate the middle operand once
+check(1 < 5 < 10, "chained less-than")
+check(1 < 5 > 3, "chained mixed comparison")
+check(3 <= 3 <= 9, "chained inclusive")
+check(!(5 > 2 > 4), "chained comparison short-circuits")
+
+# Multi-variable for over enumerate (list of [i, item] pairs)
+var summed = 0
+for i, item in enumerate([10, 20, 30]) {
+    summed = summed + item
+}
+check(summed == 60, "multi-var for over enumerate")
+
+# Multi-variable for over dict items()
+var names = ""
+for key, value in {a: 1, b: 2}.items() {
+    names = names + key
+}
+check(names == "ab", "multi-var for over dict items")
+
+# List comprehensions
+let squares = [x ** 2 for x in 1 -> 5]
+check(squares == [1, 4, 9, 16, 25], "comprehension basic")
+
+let ev2 = [x for x in 1 -> 10 if x % 2 == 0]
+check(ev2 == [2, 4, 6, 8, 10], "comprehension with guard")
+
+let flat = [cell for row in [[1, 2], [3, 4]] for cell in row]
+check(flat == [1, 2, 3, 4], "nested comprehension")
+
+let upper = [name.upper() for name in ["alice", "bob"]]
+check(upper == ["ALICE", "BOB"], "comprehension method calls")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

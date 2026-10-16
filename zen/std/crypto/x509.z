@@ -1,0 +1,35 @@
+pub class Certificate {
+    let data: String
+
+    pub init(data: String) {
+        self.data = data
+    }
+
+    pub fn not_after() -> String {
+        return __native_crypto_x509_not_after(self.data)
+    }
+
+    pub fn not_before() -> String {
+        return __native_crypto_x509_not_before(self.data)
+    }
+
+    pub fn subject() -> String {
+        return __native_crypto_x509_subject(self.data)
+    }
+
+    pub fn issuer() -> String {
+        return __native_crypto_x509_issuer(self.data)
+    }
+
+    pub fn is_valid() -> Bool {
+        return __native_crypto_x509_is_valid(self.data)
+    }
+
+    pub fn parse(pem: String) -> Certificate {
+        return Certificate(pem)
+    }
+}
+
+pub fn parse(pem: String) -> Certificate {
+    return Certificate(pem)
+}

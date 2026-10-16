@@ -1,0 +1,110 @@
+# Differential probe: throw, try/catch and finally.
+
+# A bare catch handles any runtime error.
+var caught = false
+try { var bad = 1 / 0; caught = bad == 0 } catch { caught = true }
+print(caught)
+
+# `throw` raises a UserError carrying the stringified value.
+var msg = ""
+try { throw "custom failure" } catch { msg = "handled" }
+print(msg)
+
+# A body that completes normally skips the catch body.
+var ok = true
+try { var five = 10 / 2; ok = five == 5 } catch { ok = false }
+print(ok)
+
+# Inner handlers run before outer ones.
+var order = ""
+try {
+    try { throw "inner" } catch { order = order + "i" }
+    throw "outer"
+} catch { order = order + "o" }
+print(order)
+
+# finally runs on the failure path, then the error reaches the catch.
+var fin = ""
+try { try { throw "x" } finally { fin = fin + "f" } } catch { fin = fin + "c" }
+print(fin)
+
+# finally also runs when nothing failed.
+var fin2 = ""
+try { fin2 = fin2 + "b" } finally { fin2 = fin2 + "f" }
+print(fin2)
+
+# A typed catch sees the error value.
+var m = "none"
+try { throw "boom" } catch UserError e { m = str(e) }
+print(m)
+
+# A clause whose type does not match falls through to the next clause.
+var hit = ""
+try { throw "z" } catch TypeError { hit = hit + "t" } catch UserError { hit = hit + "u" }
+print(hit)
+
+# Errors raised inside a callee are catchable by the caller.
+func deep() { return [1][5] }
+var hit9 = false
+try { deep() } catch IndexError { hit9 = true }
+print(hit9)
+
+# An unmatched typed catch lets the error keep propagating outward.
+func escapes() {
+    try { throw "boom" } catch TypeError { print("WRONG") }
+    print("propagated")
+}
+try { escapes() } catch { print("outer caught") }
+
+# finally still runs when a clause handled the error.
+var fin3 = ""
+try {
+    try { throw "y" } catch { fin3 = fin3 + "c" } finally { fin3 = fin3 + "f" }
+} catch { }
+print(fin3)
+# Leaving a try with break/continue must retire that handler.
+var b = ""
+for v in [1, 2, 3] {
+    try { if v == 2 { break } } catch { }
+    b = b + str(v)
+}
+print(b)
+
+var c = ""
+for v in [1, 2, 3] {
+    try { if v == 2 { continue } } catch { }
+    c = c + str(v)
+}
+print(c)
+
+# A retired handler must not swallow an error raised after the loop.
+var log = ""
+try {
+    for v in [1, 2, 3] {
+        try { if v == 3 { break } } catch { }
+    }
+    throw "after"
+} catch { log = "caught" }
+print(log)
+
+# A handler retired by continue must not swallow a later error in the same frame.
+var loops = 0
+while loops < 2 {
+    loops = loops + 1
+    try { continue } catch { }
+}
+var after = "pending"
+try { throw "after-loop" } catch { after = "caught" }
+print(after)
+
+# A handler retired by break must not outrank an enclosing live handler.
+var leaked = ""
+var n = 0
+try {
+    while n < 2 {
+        n = n + 1
+        try { break } catch { leaked = leaked + "c" }
+    }
+    throw "leak"
+} catch { leaked = leaked + "o" }
+print(leaked)

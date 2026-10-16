@@ -1,0 +1,21 @@
+[package]
+name = "zen-benchmarks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "zen-benches"
+path = "src/main.rs"
+
+[dependencies]
+zen-compiler = { path = "../crates/zen-compiler" }
+zen-vm = { path = "../crates/zen-vm" }
+zen-jit = { path = "../crates/zen-jit", optional = true }
+
+[features]
+default = []
+# M11 measurement protocol: links the Cranelift lowerer so bench_core can
+# time steady-state JIT execution (`--features jit` + `ZEN_JIT=1`). The
+# default build is unchanged (pure interpreter, the M4 protocol).
+jit = ["dep:zen-jit", "zen-vm/jit", "zen-jit/jit"]

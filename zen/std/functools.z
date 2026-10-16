@@ -1,0 +1,103 @@
+// Pure-Zen port of Python's `functools` module.
+//
+// Low-level helper module (no native tier). Provides the higher-order helpers
+// `.z` modules and user code build on.
+//
+// Notes:
+//   - Functions are not dicts in the pure tier, so `wraps`/`update_wrapper`
+//     cannot copy `__name__`/`__doc__` attributes and are identity combinators.
+//   - No variadic calls in Zen: `partial` binds exactly one positional
+//     argument and the decorated callable supplies the remaining one (use
+//     `partial2`/`partial3` for more bound arguments).
+//   - Zen dicts are copied across closure capture, so the memo tables are
+//     kept as captured lists of key/value pairs. `maxsize` is accepted for
+//     API compatibility but the cache is unbounded (list rebinding across
+//     closure frames is not reliable in the pure tier).
+
+let reduce = fn(f, seq, initial = null) {
+    let it = list(seq)
+    let n = len(it)
+    if n == 0 {
+        if initial == null { throw "functools.reduce: empty sequence with no initial value" }
+        return initial
+    }
+    let acc = initial
+    let start = 0
+    if acc == null {
+        acc = it[0]
+        start = 1
+    }
+    let i = start
+    while i < n {
+        acc = f(acc, it[i])
+        i += 1
+    }
+    return acc
+}
+
+let partial = fn(f, a) {
+    return fn(b) { return f(a, b) }
+}
+
+let partial2 = fn(f, a, b) {
+    return fn(c) { return f(a, b, c) }
+}
+
+let partial3 = fn(f, a, b, c) {
+    return fn(d) { return f(a, b, c, d) }
+}
+
+let update_wrapper = fn(wrapper, wrapped) {
+    return wrapper
+}
+
+let wraps = fn(wrapped) {
+    return fn(f) { return f }
+}
+
+let total_ordering = fn(cls) {
+    return cls
+}
+
+let cmp_to_key = fn(cmp) {
+    return cmp
+}
+
+let _lookup = fn(pairs, key) {
+    let i = 0
+    while i < len(pairs) {
+        if pairs[i][0] == key { return pairs[i] }
+        i += 1
+    }
+    return null
+}
+
+let lru_cache = fn(maxsize = null) {
+    let pairs = []
+    return fn(f) {
+        let wrapped = fn(a, b) {
+            let key = str(a) + "\x01" + str(b)
+            let hit = _lookup(pairs, key)
+            if hit != null { return hit[1] }
+            let result = f(a, b)
+            pairs.push([key, result])
+            return result
+        }
+        return wrapped
+    }
+}
+
+let lru_cache_unary = fn(maxsize = null) {
+    let pairs = []
+    return fn(f) {
+        let wrapped = fn(a) {
+            let key = str(a)
+            let hit = _lookup(pairs, key)
+            if hit != null { return hit[1] }
+            let result = f(a)
+            pairs.push([key, result])
+            return result
+        }
+        return wrapped
+    }
+}

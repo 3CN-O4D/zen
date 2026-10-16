@@ -1,0 +1,36 @@
+# Classes: init, self fields, methods, multiple instances
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+class Counter {
+    func init(start) {
+        self.n = start
+    }
+    func inc(by) {
+        self.n = self.n + by
+        return self.n
+    }
+    func get() {
+        return self.n
+    }
+}
+
+var a = new Counter(10)
+var b = new Counter(100)
+check(a.get() == 10, "init stores field")
+check(b.get() == 100, "second instance independent")
+
+a.inc(1)
+a.inc(2)
+check(a.get() == 13, "method mutates own state")
+check(b.get() == 100, "sibling instance untouched")
+
+# method return values chainable into expressions
+check(a.inc(7) == 20 && a.get() == 20, "inc returns new value")
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

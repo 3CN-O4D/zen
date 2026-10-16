@@ -1,0 +1,7 @@
+pub fn sha256(key: String, data: String) -> String {
+    return __native_crypto_hmac("sha256", key, data)
+}
+
+pub fn sha512(key: String, data: String) -> String {
+    return __native_crypto_hmac("sha512", key, data)
+}

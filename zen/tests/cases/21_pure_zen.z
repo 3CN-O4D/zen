@@ -1,0 +1,65 @@
+// 21_pure_zen: the ZEN_PURE override rule — a std/<mod>.z companion wins
+// over the Rust tier on import, the native tier stays reachable as
+// <mod>["native"] (`.native` is a lexer keyword, so bracket access is the
+// escape hatch), and ZEN_NATIVE_ONLY restores the native tier.
+//
+// NOTE: base64["native"] is only present when the ZEN_PURE companion engaged.
+// A plain Rust module has no "native" member.
+import base64
+import os
+import sys
+
+let failed = 0
+let check = fn(cond, what) {
+    if not cond {
+        print "FAIL: " + what
+        failed += 1
+    }
+}
+
+// The pure tier is active: ZEN_PURE is stripped, the compat function members
+// exist and their values round-trip against the native tier.
+check(base64.get("ZEN_PURE", null) == null, "ZEN_PURE marker stripped")
+check(base64["native"] != null, "native escape hatch present")
+check(base64["native"].encode != null, "native.encode reachable")
+
+// Parity between the two tiers, including UTF-8 input.
+let samples = ["", "a", "ab", "abc", "ZEN_PURE base64!", "héllo zö", "🙂 data\n"]
+for s in list(samples) {
+    let p = base64.encode(s)
+    let n = base64["native"].encode(s)
+    check(p == n, "encode parity " + s)
+    check(base64.decode(p) == base64["native"].decode(n), "decode parity " + s)
+}
+
+// URL-safe encode/decode.
+let u = "héllo?world/--__"
+check(base64.url_decode(base64.url_encode(u)) == u, "url round trip " + u)
+
+// ZEN_NATIVE_ONLY=base64 must bypass the pure tier: the "native" escape
+// hatch injected by the companion disappears when the env var is set.
+let zen_bin = "../../target/debug/zen"
+let check_native_probe = fn(expected_exit) {
+    let cpid = sys.fork()
+    if cpid == 0 {
+        // Clear stale module cache and (optionally) set ZEN_NATIVE_ONLY.
+        if expected_exit == 0 {
+            os.setenv("ZEN_NATIVE_ONLY", "base64")
+        }
+        sys.exec("/bin/sh", ["-c", zen_bin + " -e 'import base64; import sys; if base64.get(\"native\", 0) == 0 { sys.exit(0) } else { sys.exit(1) }'"])
+    }
+    let w = sys.waitpid(cpid, 0)
+    check(sys.wexitstatus(w[1]) == expected_exit,
+        expected_exit == 0 ? "ZEN_NATIVE_ONLY removes native sub-dict"
+                           : "default keeps native sub-dict")
+}
+
+check_native_probe(1)   // default: native present  → child exit 1
+check_native_probe(0)   // ZEN_NATIVE_ONLY: absent  → child exit 0
+
+if failed == 0 {
+    print "21_pure_zen: all ok"
+} else {
+    print "21_pure_zen: " + failed + " failures"
+    sys.exit(1)
+}

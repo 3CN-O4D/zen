@@ -1,0 +1,60 @@
+// 23_collections: the pure-Zen collections override — parity with the Rust
+// tier, the <mod>["native"] escape hatch, and ZEN_NATIVE_ONLY bypass.
+import collections
+import os
+import sys
+
+let failed = 0
+let check = fn(cond, what) {
+    if not cond {
+        print "FAIL: " + what
+        failed += 1
+    }
+}
+
+check(collections.get("ZEN_PURE", null) == null, "ZEN_PURE marker stripped")
+check(collections["native"] != null, "native escape hatch present")
+
+let na = collections["native"]
+
+check(collections.Counter([1, 2, 1, "a", "a", 2.5]) == na.Counter([1, 2, 1, "a", "a", 2.5]), "Counter mixed")
+check(collections.Counter([]) == na.Counter([]), "Counter empty")
+check(collections.Counter(["héllo", "héllo", "🙃"]) == na.Counter(["héllo", "héllo", "🙃"]), "Counter utf8")
+let pc = collections.Counter([1, 1, 2])
+check(pc["1"] == 2 and pc["2"] == 1, "Counter values")
+check(len(collections.Counter([1, 1, 2]).keys()) == 2, "Counter key count")
+
+check(collections.chain([[1, 2], [3, 4]]) == na.chain([1, 2], [3, 4]), "chain lists")
+check(collections.chain([1, 2]) == na.chain(1, 2), "chain pushes non-list args")
+check(collections.chain([]) == na.chain(), "chain empty")
+
+check(collections.flatten([1, [2, [3, [4, 5]]], 6]) == na.flatten([1, [2, [3, [4, 5]]], 6]), "flatten deep")
+check(collections.flatten([]) == na.flatten([]), "flatten empty")
+check(collections.flatten([1, 2, 3]) == na.flatten([1, 2, 3]), "flatten already flat")
+check(collections.flatten(["a", ["b", ["c"]]]) == na.flatten(["a", ["b", ["c"]]]), "flatten strings")
+
+// ZEN_NATIVE_ONLY=collections must bypass the pure tier.
+let zen_bin = "../../target/debug/zen"
+let check_native_probe = fn(expected_exit) {
+    let cpid = sys.fork()
+    if cpid == 0 {
+        if expected_exit == 0 {
+            os.setenv("ZEN_NATIVE_ONLY", "collections")
+        }
+        sys.exec("/bin/sh", ["-c", zen_bin + " -e 'import collections; import sys; if collections.get(\"native\", 0) == 0 { sys.exit(0) } else { sys.exit(1) }'"])
+    }
+    let w = sys.waitpid(cpid, 0)
+    check(sys.wexitstatus(w[1]) == expected_exit,
+        expected_exit == 0 ? "ZEN_NATIVE_ONLY removes native sub-dict"
+                           : "default keeps native sub-dict")
+}
+
+check_native_probe(1)   // default: native present  -> child exit 1
+check_native_probe(0)   // ZEN_NATIVE_ONLY: absent  -> child exit 0
+
+if failed == 0 {
+    print "23_collections: all ok"
+} else {
+    print "23_collections: " + failed + " failures"
+    sys.exit(1)
+}

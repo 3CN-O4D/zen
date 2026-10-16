@@ -1,0 +1,11 @@
+pub fn sign(payload: Dict, key: String, algorithm: String = "HS256") -> String {
+    return __native_crypto_jwt_sign(payload, key, algorithm)
+}
+
+pub fn verify(token: String, key: String, algorithms: List = ["HS256"]) -> Dict {
+    return __native_crypto_jwt_verify(token, key, algorithms)
+}
+
+pub fn decode(token: String) -> Dict {
+    return __native_crypto_jwt_decode(token)
+}

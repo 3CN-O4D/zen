@@ -1,0 +1,364 @@
+// Pure-Zen reimplementation of the `statistics` module.
+//
+// Pure (ZEN_PURE = true); mirrors Python's `statistics` module function
+// surface. `list.sort()`/`sorted` sort lexicographically (by string) in the
+// pure tier, so a numeric insertion sort (`_sort`) is used for all median and
+// quantile work.
+//
+// Notes:
+//   - No variadic calls: `sum`/`min`/`max` accept a single sequence argument.
+//   - Functions return numbers (floats), like the Python module.
+ZEN_PURE = true
+
+let _MAX = 1.7976931348623157e308
+
+let _isnan = fn(x) {
+    return x != x
+}
+
+let _sqrt = fn(x) {
+    return x ** 0.5
+}
+
+let _sort = fn(arr) {
+    let n = len(arr)
+    let i = 1
+    while i < n {
+        let key = arr[i]
+        let j = i - 1
+        while j >= 0 {
+            if not (arr[j] > key) { break }
+            arr[j + 1] = arr[j]
+            j -= 1
+        }
+        arr[j + 1] = key
+        i += 1
+    }
+    return arr
+}
+
+let _check_seq = fn(it) {
+    let n = len(it)
+    if n == 0 { throw "statistics: requires at least one data point" }
+    return it
+}
+
+let sum = fn(data) {
+    let it = list(data)
+    let out = 0
+    for v in it {
+        out += v
+    }
+    return out
+}
+
+let min = fn(data) {
+    let it = list(data)
+    let n = len(it)
+    if n == 0 { throw "statistics: min requires at least one data point" }
+    let out = it[0]
+    let i = 1
+    while i < n {
+        if it[i] < out { out = it[i] }
+        i += 1
+    }
+    return out
+}
+
+let max = fn(data) {
+    let it = list(data)
+    let n = len(it)
+    if n == 0 { throw "statistics: max requires at least one data point" }
+    let out = it[0]
+    let i = 1
+    while i < n {
+        if it[i] > out { out = it[i] }
+        i += 1
+    }
+    return out
+}
+
+let mean = fn(data) {
+    let it = _check_seq(list(data))
+    return sum(it) / len(it)
+}
+
+let fmean = fn(data, weights = null) {
+    let it = list(data)
+    let n = len(it)
+    if n == 0 { throw "statistics: fmean requires at least one data point" }
+    let ws = weights == null ? [] : list(weights)
+    if weights != null and len(ws) != n {
+        throw "statistics: weights must be the same length as data"
+    }
+    let s = 0
+    let wsum = 0
+    let i = 0
+    while i < n {
+        let w = weights != null ? ws[i] : 1
+        s += it[i] * w
+        wsum += w
+        i += 1
+    }
+    return s / wsum
+}
+
+let geometric_mean = fn(data) {
+    let it = _check_seq(list(data))
+    let out = 1
+    for v in it {
+        if v < 0 { throw "statistics: geometric_mean does not accept negative arguments" }
+        out *= v
+    }
+    return out ** (1.0 / len(it))
+}
+
+let harmonic_mean = fn(data, weights = null) {
+    let it = list(data)
+    let n = len(it)
+    if n == 0 { throw "statistics: harmonic_mean requires at least one data point" }
+    let ws = weights == null ? [] : list(weights)
+    if weights != null and len(ws) != n {
+        throw "statistics: weights must be the same length as data"
+    }
+    let s = 0
+    let wsum = 0
+    let i = 0
+    while i < n {
+        if it[i] == 0 { throw "statistics: harmonic_mean does not support zero values" }
+        let w = weights != null ? ws[i] : 1
+        s += w / it[i]
+        wsum += w
+        i += 1
+    }
+    return wsum / s
+}
+
+let median = fn(data) {
+    let it = _check_seq(list(data))
+    it = _sort(it)
+    let n = len(it)
+    let h = int(n / 2)
+    if n % 2 == 0 {
+        return (it[h - 1] + it[h]) / 2
+    }
+    return it[h]
+}
+
+let median_low = fn(data) {
+    let it = _sort(list(data))
+    let n = len(it)
+    if n == 0 { throw "statistics: no median for empty data" }
+    let h = int(n / 2)
+    if n % 2 == 0 { return it[h - 1] }
+    return it[h]
+}
+
+let median_high = fn(data) {
+    let it = _sort(list(data))
+    let n = len(it)
+    if n == 0 { throw "statistics: no median for empty data" }
+    let h = int(n / 2)
+    return it[h]
+}
+
+let median_grouped = fn(data, interval = 1) {
+    let it = _sort(list(data))
+    let n = len(it)
+    if n == 0 { throw "statistics: no median for empty data" }
+    if n == 1 { return it[0] }
+    let iv = interval
+    let m = int(n / 2)
+    let L = it[m]
+    let i = 0
+    while i < n and it[i] < L { i += 1 }
+    let t = 0
+    let j = i
+    while j < n and it[j] == L {
+        t += 1
+        j += 1
+    }
+    if t == n { return L }
+    let lo = L - iv / 2
+    return lo + iv * (n / 2 - i) / t
+}
+
+let mode = fn(data) {
+    let it = _check_seq(list(data))
+    let counts = {}
+    let best = it[0]
+    let bestc = 0
+    for v in it {
+        let key = str(v)
+        let c = counts.get(key, 0) + 1
+        counts[key] = c
+        if c > bestc {
+            bestc = c
+            best = v
+        }
+    }
+    return best
+}
+
+let multimode = fn(data) {
+    let it = _check_seq(list(data))
+    let counts = {}
+    let bestc = 0
+    for v in it {
+        let key = str(v)
+        let c = counts.get(key, 0) + 1
+        counts[key] = c
+        if c > bestc { bestc = c }
+    }
+    let out = []
+    let seen = {}
+    for v in it {
+        let key = str(v)
+        if not seen.get(key, false) and counts.get(key, 0) == bestc {
+            seen[key] = true
+            out.push(v)
+        }
+    }
+    return out
+}
+
+let pvariance = fn(data, mu = null) {
+    let it = list(data)
+    let n = len(it)
+    if n == 0 { throw "statistics: pvariance requires at least one data point" }
+    let xbar = mu
+    if xbar == null { xbar = sum(it) / n }
+    let out = 0
+    for v in it {
+        out += (v - xbar) * (v - xbar)
+    }
+    return out / n
+}
+
+let variance = fn(data, xbar = null) {
+    let it = list(data)
+    let n = len(it)
+    if n < 2 { throw "statistics: variance requires at least two data points" }
+    let xb = xbar
+    if xb == null { xb = sum(it) / n }
+    let out = 0
+    for v in it {
+        out += (v - xb) * (v - xb)
+    }
+    return out / (n - 1)
+}
+
+let pstdev = fn(data, mu = null) {
+    return _sqrt(pvariance(data, mu))
+}
+
+let stdev = fn(data, xbar = null) {
+    return _sqrt(variance(data, xbar))
+}
+
+let quantiles = fn(data, n = 4, method = "exclusive") {
+    if n < 1 { throw "statistics: n must be at least 1" }
+    let it = _sort(list(data))
+    let ld = len(it)
+    if ld < 2 { throw "statistics: at least two data points are required" }
+    let result = []
+    if method == "inclusive" {
+        let m = ld - 1
+        let i = 1
+        while i < n {
+            let j = int(i * m / n)
+            let delta = i * m - j * n
+            result.push((it[j] * (n - delta) + it[j + 1] * delta) / n)
+            i += 1
+        }
+        return result
+    }
+    if method == "exclusive" {
+        let m = ld + 1
+        let i = 1
+        while i < n {
+            let j = int(i * m / n)
+            if j < 1 { j = 1 }
+            if j > ld - 1 { j = ld - 1 }
+            let delta = i * m - j * n
+            result.push((it[j - 1] * (n - delta) + it[j] * delta) / n)
+            i += 1
+        }
+        return result
+    }
+    throw "statistics: unknown quantile method"
+}
+
+let _ss = fn(it) {
+    let xb = sum(it) / len(it)
+    let out = 0
+    for v in it {
+        out += (v - xb) * (v - xb)
+    }
+    return out
+}
+
+let _cov = fn(x, y) {
+    let n = len(x)
+    if n != len(y) { throw "statistics: x and y must have the same length" }
+    if n < 2 { throw "statistics: at least two data points are required" }
+    let xb = sum(x) / n
+    let yb = sum(y) / n
+    let out = 0
+    let i = 0
+    while i < n {
+        out += (x[i] - xb) * (y[i] - yb)
+        i += 1
+    }
+    return out / (n - 1)
+}
+
+let correlation = fn(x, y) {
+    let n = len(x)
+    if n != len(y) { throw "statistics: x and y must have the same length" }
+    if n < 2 { throw "statistics: correlation requires at least two data points" }
+    let xb = sum(x) / n
+    let yb = sum(y) / n
+    let sxx = 0
+    let syy = 0
+    let sxy = 0
+    let i = 0
+    while i < n {
+        let dx = x[i] - xb
+        let dy = y[i] - yb
+        sxx += dx * dx
+        syy += dy * dy
+        sxy += dx * dy
+        i += 1
+    }
+    if sxx == 0 or syy == 0 { throw "statistics: at least one of the inputs is constant" }
+    return sxy / _sqrt(sxx * syy)
+}
+
+let linear_regression = fn(x, y, proportional = false) {
+    let n = len(x)
+    if n != len(y) { throw "statistics: x and y must have the same length" }
+    if n < 2 { throw "statistics: linear_regression requires at least two data points" }
+    let xb = sum(x) / n
+    let yb = sum(y) / n
+    let sxx = 0
+    let sxy = 0
+    let i = 0
+    while i < n {
+        let dx = x[i] - xb
+        sxx += dx * dx
+        sxy += dx * (y[i] - yb)
+        i += 1
+    }
+    let slope = sxy / sxx
+    let intercept = proportional ? 0 : yb - slope * xb
+    return { slope: slope, intercept: intercept }
+}
+
+let gmean = fn(data) {
+    return geometric_mean(data)
+}
+
+let hmean = fn(data, weights = null) {
+    return harmonic_mean(data, weights)
+}

@@ -1,0 +1,19 @@
+pub fn pbkdf2(password: String, salt: String, iterations: Int = 100000, length: Int = 32) -> String {
+    return __native_crypto_pbkdf2(password, salt, iterations, length)
+}
+
+pub fn argon2id(password: String, salt: String = "", memory: Int = 65536, iterations: Int = 3, parallelism: Int = 1, length: Int = 32) -> String {
+    return __native_crypto_argon2id(password, salt, memory, iterations, parallelism, length)
+}
+
+pub fn argon2id_hash(password: String) -> String {
+    return __native_crypto_argon2id_hash(password)
+}
+
+pub fn verify_argon2id(password: String, hash: String) -> Bool {
+    return __native_crypto_argon2id_verify(password, hash)
+}
+
+pub fn hkdf(ikm: String, salt: String = "", info: String = "", length: Int = 32) -> String {
+    return __native_crypto_hkdf(ikm, salt, info, length)
+}

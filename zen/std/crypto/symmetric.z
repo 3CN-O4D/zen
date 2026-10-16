@@ -1,0 +1,27 @@
+pub fn generate_key(alg: String = "aes-256-gcm") -> String {
+    return __native_crypto_sym_generate_key(alg)
+}
+
+pub fn encrypt(alg: String, key: String, plaintext: String, aad: String = "") -> String {
+    return __native_crypto_sym_encrypt(alg, key, plaintext, aad)
+}
+
+pub fn decrypt(alg: String, key: String, ciphertext: String, aad: String = "") -> String {
+    return __native_crypto_sym_decrypt(alg, key, ciphertext, aad)
+}
+
+pub fn encrypt_aes_gcm(key: String, plaintext: String, aad: String = "") -> String {
+    return encrypt("aes-256-gcm", key, plaintext, aad)
+}
+
+pub fn decrypt_aes_gcm(key: String, ciphertext: String, aad: String = "") -> String {
+    return decrypt("aes-256-gcm", key, ciphertext, aad)
+}
+
+pub fn encrypt_chacha20_poly1305(key: String, plaintext: String, aad: String = "") -> String {
+    return encrypt("chacha20-poly1305", key, plaintext, aad)
+}
+
+pub fn decrypt_chacha20_poly1305(key: String, ciphertext: String, aad: String = "") -> String {
+    return decrypt("chacha20-poly1305", key, ciphertext, aad)
+}

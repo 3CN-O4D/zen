@@ -1,0 +1,95 @@
+// 20_sockets: raw sys socket syscalls build a full loopback TCP + UDP
+// roundtrip in pure Zen (sockaddr packing done by hand).
+import sys
+
+let D = "0123456789abcdef"
+let B2H = fn(n) { D[n >> 4 & 15] + D[n & 15] }
+let P2 = fn(n) { B2H((n >> 8) & 255) + B2H(n & 255) }
+let HB = {"0":0,"1":1,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"a":10,"b":11,"c":12,"d":13,"e":14,"f":15}
+let H2I = fn(s) { let v = 0; for c in list(s) { v = v * 16 + HB[c] }; return v }
+let SA = fn(port) { "0200" + P2(port) + "7f000001" + "0000000000000000" }
+
+let failed = 0
+let check = fn(cond, what) {
+    if not cond {
+        print "FAIL: " + what
+        failed += 1
+    }
+}
+
+// ---- socketpair echo + poll integration ----
+let pair = sys.socketpair(sys.AF_UNIX, sys.SOCK_STREAM | sys.SOCK_CLOEXEC, 0)
+sys.send(pair[0], "68656c6c6f")
+check(sys.recv(pair[1], 64) == "68656c6c6f", "socketpair echo")
+sys.send(pair[0], "58")
+let pr = sys.poll([{"fd": pair[1], "events": sys.POLLIN}], 100)
+check(pr[0].revents == sys.POLLIN, "poll on socketpair")
+let sb = sys.getsockopt(pair[0], sys.SOL_SOCKET, sys.SO_SNDBUF, 4)
+check(sb == "00400300", "getsockopt RAW + peer=" + sb)
+sys.setsockopt(pair[0], sys.SOL_SOCKET, sys.SO_KEEPALIVE, 1)
+check(sys.getsockopt(pair[0], sys.SOL_SOCKET, sys.SO_KEEPALIVE, 4) == "01000000", "setsockopt int")
+check(sys.recv(pair[1], 64) == "58", "drain poll byte")
+sys.shutdown(pair[0], sys.SHUT_WR)
+check(sys.recv(pair[1], 64) == "", "shutdown then EOF")
+sys.close(pair[0])
+sys.close(pair[1])
+
+// ---- TCP loopback roundtrip over a fork'd client ----
+let srv = sys.socket(sys.AF_INET, sys.SOCK_STREAM, 0)
+sys.setsockopt(srv, sys.SOL_SOCKET, sys.SO_REUSEADDR, 1)
+sys.bind(srv, SA(0))
+let port = H2I(sys.getsockname(srv).substring(4, 8))
+sys.listen(srv, 16)
+let cpid = sys.fork()
+if cpid == 0 {
+    let cli = sys.socket(sys.AF_INET, sys.SOCK_STREAM, 0)
+    sys.connect(cli, SA(port))
+    sys.send(cli, "48692066726f6d206368696c64")
+    let rep = sys.recv(cli, 256)
+    if rep != "7265706c792d6563686f" {
+        print "FAIL: tcp client reply mismatch"
+    }
+    sys.close(cli)
+    sys.exit(0)
+}
+let conn = sys.accept(srv)
+let peer = sys.getpeername(conn)
+check(peer.substring(0, 4) == "0200", "peer family AF_INET")
+check(peer.substring(8, 16) == "7f000001", "peer addr 127.0.0.1")
+let msg = sys.recv(conn, 256)
+check(msg == "48692066726f6d206368696c64", "server received client data")
+sys.send(conn, "7265706c792d6563686f")
+sys.close(conn)
+let w = sys.waitpid(cpid, 0)
+check(sys.wexitstatus(w[1]) == 0, "tcp child exit 0")
+sys.close(srv)
+
+// ---- UDP datagram roundtrip ----
+let usrv = sys.socket(sys.AF_INET, sys.SOCK_DGRAM, sys.IPPROTO_UDP)
+sys.bind(usrv, SA(0))
+let uport = H2I(sys.getsockname(usrv).substring(4, 8))
+let ucpid = sys.fork()
+if ucpid == 0 {
+    let c = sys.socket(sys.AF_INET, sys.SOCK_DGRAM, sys.IPPROTO_UDP)
+    sys.sendto(c, "646174616772616d", SA(uport))
+    let r = sys.recvfrom(c, 256)
+    if r[0] != "706f6e67" {
+        print "FAIL: udp client reply mismatch"
+    }
+    sys.close(c)
+    sys.exit(0)
+}
+let r = sys.recvfrom(usrv, 256)
+check(r[0] == "646174616772616d", "udp server data")
+check(r[1].substring(8, 16) == "7f000001", "udp sender 127.0.0.1")
+sys.sendto(usrv, "706f6e67", r[1])
+let uw = sys.waitpid(ucpid, 0)
+check(sys.wexitstatus(uw[1]) == 0, "udp child exit 0")
+sys.close(usrv)
+
+if failed == 0 {
+    print "20_sockets: all ok"
+} else {
+    print "20_sockets: " + failed + " failures"
+    sys.exit(1)
+}

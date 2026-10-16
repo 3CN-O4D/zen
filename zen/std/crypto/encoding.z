@@ -1,0 +1,23 @@
+pub fn b64encode(data: String) -> String {
+    return __native_crypto_b64encode(data)
+}
+
+pub fn b64decode(data: String) -> String {
+    return __native_crypto_b64decode(data)
+}
+
+pub fn b64urlencode(data: String) -> String {
+    return __native_crypto_b64urlencode(data)
+}
+
+pub fn b64urldecode(data: String) -> String {
+    return __native_crypto_b64urldecode(data)
+}
+
+pub fn hex_encode(data: String) -> String {
+    return __native_crypto_hex_encode(data)
+}
+
+pub fn hex_decode(data: String) -> String {
+    return __native_crypto_hex_decode(data)
+}

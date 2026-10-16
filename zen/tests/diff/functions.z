@@ -1,0 +1,50 @@
+# Differential probe: functions, recursion, closures (read-only capture).
+func add(a, b) {
+    return a + b
+}
+print(add(2, 3))
+
+func fact(n) {
+    if n <= 1 { return 1 }
+    return n * fact(n - 1)
+}
+print(fact(5))
+
+func classify(n) {
+    if n < 0 { return "neg" }
+    if n == 0 { return "zero" }
+    return "pos"
+}
+print(classify(-3))
+print(classify(0))
+print(classify(9))
+
+var base = 10
+var offset = func(x) { return x + base }
+print(offset(5))
+
+# Redeclaring a name rebinds it instead of failing.
+var dup = 1
+dup = 2
+var dup = 3
+print(dup)
+
+let shadow = 1
+let shadow = 2
+print(shadow)
+
+func rebinds() {
+    var v = "first"
+    var v = "second"
+    return v
+}
+print(rebinds())
+
+# An inner binding shadows an outer one without disturbing it.
+var outer = "kept"
+func shadows() {
+    var outer = "inner"
+    return outer
+}
+print(shadows())
+print(outer)

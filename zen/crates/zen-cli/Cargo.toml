@@ -1,0 +1,27 @@
+[package]
+name = "zen-cli"
+version = "3.0.0"
+edition = "2021"
+description = "Zen CLI: zenn and zen binaries"
+license = "MIT"
+
+[[bin]]
+name = "zen"
+path = "src/main.rs"
+
+[[bin]]
+name = "zenn"
+path = "src/zenn.rs"
+
+[dependencies]
+zen-compiler = { path = "../zen-compiler" }
+zen-vm = { path = "../zen-vm" }
+zen-syntax = { path = "../zen-syntax" }
+zen-jit = { path = "../zen-jit", optional = true }
+rustyline = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = []
+jit = ["zen-jit", "zen-jit/jit"]
+python = ["zen-vm/python"]

@@ -1,0 +1,65 @@
+# Differential probe: if-expressions.
+
+var n = 5
+print(if n > 3 { "big" } else { "small" })
+print(if n < 3 { "big" } else { "small" })
+
+# No `else` and nothing matched yields nil.
+print(if n > 100 { "big" })
+
+# elif chains pick the first matching arm.
+print(if n > 100 { "huge" } elif n > 3 { "big" } else { "small" })
+print(if n > 100 { "huge" } elif n > 50 { "big" } else { "small" })
+
+# A block's value is its last expression statement.
+print(if n > 3 { var a = 2; a * 3 } else { 0 })
+
+# An arm whose last statement is not an expression is nil.
+print(if n > 3 { var b = 2 } else { 0 })
+
+# An empty arm is nil.
+print(if n > 3 { } else { 7 })
+
+# Non-boolean conditions use truthiness: only nil and false are falsy.
+print(if n { "truthy" } else { "falsy" })
+print(if 0 { "truthy" } else { "falsy" })
+print(if "" { "truthy" } else { "falsy" })
+
+# Side effects run in arm order, exactly once.
+var order = ""
+func mark(t) {
+    order = order + t
+    return true
+}
+var r = if mark("a") { mark("b") } elif mark("c") { mark("d") } else { mark("e") }
+print(order)
+
+# Nesting, and use as an argument. Note the nested `if` parses in statement
+# position, so that arm's value is nil.
+print(if n > 3 { if n > 4 { "inner" } else { "other" } } else { "no" })
+print("v=" + str(if n > 3 { 7 } else { 8 }))
+
+func classify(v) {
+    return if v < 0 { "neg" } elif v == 0 { "zero" } else { "pos" }
+}
+print(classify(-1))
+print(classify(0))
+print(classify(1))
+
+# Inside containers and as a call argument.
+var xs = [if n > 3 { 1 } else { 2 }, 9]
+print(xs)
+print(str(if n > 3 { "y" } else { "n" }))
+
+# An if-expression used as a loop condition.
+var i = 0
+var hits = 0
+while if i < 3 { true } else { false } {
+    hits = hits + (if i == 1 { 10 } else { 1 })
+    i = i + 1
+}
+print(hits)
+# Remaining falsy values.
+print(if nil { "t" } else { "f" })
+print(if [] { "t" } else { "f" })
+print(if false { "t" } else { "f" })

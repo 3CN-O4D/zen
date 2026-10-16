@@ -1,0 +1,23 @@
+pub fn bytes(n: Int) -> String {
+    return __native_crypto_rand_bytes(n)
+}
+
+pub fn hex(n: Int) -> String {
+    return __native_crypto_rand_hex(n)
+}
+
+pub fn base64(n: Int) -> String {
+    return __native_crypto_rand_base64(n)
+}
+
+pub fn uuid4() -> String {
+    return __native_crypto_rand_uuid4()
+}
+
+pub fn secure_token() -> String {
+    return __native_crypto_rand_secure_token()
+}
+
+pub fn int(min: Int, max: Int) -> Int {
+    return __native_crypto_rand_int(min, max)
+}

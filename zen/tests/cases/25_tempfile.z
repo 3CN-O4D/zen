@@ -1,0 +1,70 @@
+// 25_tempfile: the pure-Zen tempfile override — parity with the Rust tier,
+// the <mod>["native"] escape hatch, and ZEN_NATIVE_ONLY bypass.
+import tempfile
+import os
+import fs
+import sys
+
+let failed = 0
+let check = fn(cond, what) {
+    if not cond {
+        print "FAIL: " + what
+        failed += 1
+    }
+}
+
+check(tempfile.get("ZEN_PURE", null) == null, "ZEN_PURE marker stripped")
+check(tempfile["native"] != null, "native escape hatch present")
+
+let na = tempfile["native"]
+
+check(tempfile.dir() == na.dir(), "dir parity")
+check(tempfile.dir() != null, "dir returns a path")
+
+let d = tempfile.mkdtemp("zt")
+check(fs.is_dir(d), "mkdtemp creates dir")
+check(d.startswith(tempfile.dir() + "/zt"), "mkdtemp prefix honored")
+os.execute("rm -rf " + d)
+check(not fs.exists(d), "mkdtemp cleanup")
+
+let d2 = tempfile.mkdtemp()
+check(fs.is_dir(d2), "mkdtemp default prefix creates dir")
+check(d2.startswith(tempfile.dir() + "/zen"), "mkdtemp default prefix")
+os.execute("rm -rf " + d2)
+
+let f = tempfile.mkstemp("ztmp")
+check(fs.is_file(f), "mkstemp creates file")
+check(f.startswith(tempfile.dir() + "/ztmp"), "mkstemp prefix honored")
+fs.remove(f)
+check(not fs.exists(f), "mkstemp cleanup")
+
+let f2 = tempfile.mkstemp()
+check(fs.is_file(f2), "mkstemp default prefix creates file")
+check(f2.startswith(tempfile.dir() + "/zen"), "mkstemp default prefix")
+fs.remove(f2)
+
+// ZEN_NATIVE_ONLY=tempfile must bypass the pure tier.
+let zen_bin = "../../target/debug/zen"
+let check_native_probe = fn(expected_exit) {
+    let cpid = sys.fork()
+    if cpid == 0 {
+        if expected_exit == 0 {
+            os.setenv("ZEN_NATIVE_ONLY", "tempfile")
+        }
+        sys.exec("/bin/sh", ["-c", zen_bin + " -e 'import tempfile; import sys; if tempfile.get(\"native\", 0) == 0 { sys.exit(0) } else { sys.exit(1) }'"])
+    }
+    let w = sys.waitpid(cpid, 0)
+    check(sys.wexitstatus(w[1]) == expected_exit,
+        expected_exit == 0 ? "ZEN_NATIVE_ONLY removes native sub-dict"
+                           : "default keeps native sub-dict")
+}
+
+check_native_probe(1)   // default: native present  -> child exit 1
+check_native_probe(0)   // ZEN_NATIVE_ONLY: absent  -> child exit 0
+
+if failed == 0 {
+    print "25_tempfile: all ok"
+} else {
+    print "25_tempfile: " + failed + " failures"
+    sys.exit(1)
+}

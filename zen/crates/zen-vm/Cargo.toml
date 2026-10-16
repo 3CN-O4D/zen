@@ -1,0 +1,57 @@
+[package]
+name = "zen-vm"
+version = "3.0.0"
+edition = "2021"
+description = "Zen virtual machine: value, bytecode, interpreter, modules"
+license = "MIT"
+
+[dependencies]
+serde_json = { workspace = true }
+zen-syntax = { path = "../zen-syntax" }
+thiserror = { workspace = true }
+indexmap = { workspace = true }
+ahash = { workspace = true }
+dashmap = { workspace = true }
+crossbeam-channel = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true }
+rustls = { workspace = true }
+hyper = { workspace = true }
+regex = "1"
+sha2 = "0.10"
+hmac = "0.12"
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+argon2 = "0.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets", "serde"] }
+rsa = "0.9"
+jsonwebtokens = "1.2"
+totp-rs = "5"
+x509-parser = "0.16"
+webpki-roots = "1"
+pkcs8 = "0.10"
+blake3 = "1"
+blake2 = "0.10"
+pbkdf2 = "0.12"
+md5 = "0.7"
+sha1 = "0.10"
+sha3 = "0.10"
+rusqlite = { version = "0.31", features = ["bundled"] }
+qrcode = "0.14"
+libc = "0.2"
+libffi = "3.2"
+libloading = "0.8"
+# CPython embedding for `pymport` (opt-in: needs libpython at build AND run
+# time). Off by default so every other build stays hermetic.
+pyo3 = { version = "0.30", optional = true, features = ["auto-initialize"] }
+
+[features]
+default = []
+jit = []
+python = ["dep:pyo3"]
+
+[dev-dependencies]
+zen-compiler = { path = "../zen-compiler" }

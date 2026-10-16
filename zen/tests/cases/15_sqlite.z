@@ -1,0 +1,76 @@
+# sqlite module — embedded SQLite (offline, no network).
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import sqlite
+import fs
+
+let db = "/tmp/zen_test/zen_sqlite_case.db"
+let b = fs.exists(db)
+if b {
+    fs.remove(db)
+}
+
+var h = sqlite.open(db)
+check(typeof(h) == "int", "sqlite.open returns an integer handle")
+
+var r = sqlite.exec(h, "CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT, n INTEGER)")
+check(r.ok, "create table")
+check(r.rows == 0, "create returns 0 rows")
+
+r = sqlite.exec(h, "INSERT INTO kv VALUES (?, ?, ?)", ["alpha", "one", 1])
+check(r.ok and r.rows == 1, "insert row")
+r = sqlite.exec(h, "INSERT INTO kv VALUES (?, ?, ?)", ["bravo", "two", 2])
+check(r.ok, "insert second row")
+r = sqlite.exec(h, "UPDATE kv SET v = ? WHERE k = ?", ["uno", "alpha"])
+check(r.rows == 1, "update row")
+
+var rows = sqlite.query(h, "SELECT k, v, n FROM kv ORDER BY n")
+check(rows.length() == 2, "query returns 2 rows")
+check(rows[0].k == "alpha" and rows[0].v == "uno", "order by n")
+check(rows[1].n == 2, "numeric column is a number")
+
+# BLOB round-trip (list of byte numbers).
+sqlite.exec(h, "CREATE TABLE bl (id INTEGER PRIMARY KEY, data BLOB)")
+sqlite.exec(h, "INSERT INTO bl (data) VALUES (?)", [[72, 105, 33]])
+var blobs = sqlite.query(h, "SELECT data FROM bl")
+check(blobs[0].data.length() == 3, "blob back as list")
+check(blobs[0].data[2] == 33, "blob bytes correct")
+
+# handle registry persists across module calls
+rows = sqlite.query(h, "SELECT COUNT(*) AS c FROM kv")
+check(rows[0].c == 2, "count works")
+
+# params protect against injection
+r = sqlite.exec(h, "INSERT INTO kv VALUES (?, ?, ?)", ["evil', 'x', 9", "quoted", 3])
+check(r.ok, "bound params handle quotes")
+
+check(sqlite.close(h) == true, "close returns true")
+check(sqlite.close(h) == false, "double close returns false")
+
+var closed = false
+try {
+    sqlite.query(h, "SELECT 1")
+} catch {
+    closed = true
+}
+check(closed, "query on closed handle raises")
+
+# In-memory db shortcut
+h = sqlite.openMemory()
+sqlite.exec(h, "CREATE TABLE t (x)")
+sqlite.exec(h, "INSERT INTO t VALUES (7)")
+check(sqlite.query(h, "SELECT x FROM t")[0].x == 7, "openMemory works")
+
+print("escape: " + sqlite.escape("it's"))
+check(sqlite.escape("it's") == "'it''s'", "escape doubles quotes")
+
+if fails == 0 {
+    print("15_sqlite: all ok")
+}
+exit(if fails > 0 { 1 } else { 0 })

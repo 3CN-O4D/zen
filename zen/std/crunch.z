@@ -1,0 +1,77 @@
+// crunch — deterministic generator helpers (charsets, exhaustive generation,
+// pattern expansion). Pure-Zen tier; a native implementation can shadow it the
+// same way the other tiers do.
+
+let _CHARSETS = {
+    "lower": "abcdefghijklmnopqrstuvwxyz",
+    "upper": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "digits": "0123456789",
+    "l": "abcdefghijklmnopqrstuvwxyz",
+    "u": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "d": "0123456789",
+    "alnum": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+}
+
+let charset = fn(name) {
+    let c = _CHARSETS.get(name, null)
+    if c == null {
+        throw "crunch.charset: unknown charset '" + name + "'"
+    }
+    return c
+}
+
+let _expand = fn(alphabet, length) {
+    let out = []
+    if length == 0 {
+        out.push("")
+        return out
+    }
+    let rest = _expand(alphabet, length - 1)
+    let i = 0
+    while i < len(alphabet) {
+        let ch = alphabet.substring(i, i + 1)
+        for r in list(rest) {
+            out.push(ch + r)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+let generate = fn(minlen, maxlen, cs) {
+    let alphabet = charset(cs)
+    let out = []
+    let n = minlen
+    while n <= maxlen {
+        for s in list(_expand(alphabet, n)) {
+            out.push(s)
+        }
+        n = n + 1
+    }
+    return out
+}
+
+let pattern = fn(spec) {
+    let parts = spec.split(":")
+    let combos = [""]
+    let i = 1
+    while i < len(parts) {
+        let alphabet = charset(parts[i])
+        let next = []
+        for prefix in list(combos) {
+            let j = 0
+            while j < len(alphabet) {
+                next.push(prefix + alphabet.substring(j, j + 1))
+                j = j + 1
+            }
+        }
+        combos = next
+        i = i + 1
+    }
+    let literal = parts[0]
+    let out = []
+    for c in list(combos) {
+        out.push(literal + c)
+    }
+    return out
+}

@@ -1,0 +1,149 @@
+// Pure-Zen reimplementation of the `random` module.
+//
+// Declares ZEN_PURE so the .z tier wins over the Rust tier on import; the
+// native members stay reachable as `random.native.*` and setting
+// ZEN_NATIVE_ONLY=random restores the native tier.
+//
+// A well-known portable 31-bit additive LCG (Schrage's method) backs every
+// generator. All intermediates stay below 2^31, so the arithmetic is exact in
+// double precision — no drift, deterministic per seed.
+ZEN_PURE = true
+import time
+
+let _M = 2147483647
+let _A = 48271
+let _Q = 44488
+let _R = 3399
+let _state = 0.0
+
+let _reseed = fn() {
+    _state = int(time.now() * 1000000) % _M
+    if _state == 0 { _state = 1 }
+}
+
+let seed = fn(n) {
+    if n != null {
+        _state = int(n) % _M
+    } else {
+        _reseed()
+    }
+    if _state == 0 { _state = 1 }
+    return null
+}
+
+_reseed()
+
+// Uniform float in [0, 1).
+let random = fn() {
+    let hi = int(_state / _Q)
+    let lo = _state % _Q
+    let t = _A * lo - _R * hi
+    if t < 0 { t = t + _M }
+    _state = t
+    return _state / _M
+}
+
+// int(a, b) with a <= b allowed in either order; inclusive both ends.
+let randint = fn(a, b) {
+    if a == b {
+        return a
+    }
+    let lo = a < b ? a : b
+    let hi = a < b ? b : a
+    return lo + int(random() * (hi - lo + 1))
+}
+
+// randrange(stop) / randrange(start, stop) / randrange(start, stop, step).
+let randrange = fn(start, stop = null, step = null) {
+    if stop == null {
+        stop = start
+        start = 0
+    }
+    if step == null { step = 1 }
+    if step == 0 {
+        throw "random.randrange step must be non-zero"
+    }
+    let span = (stop - start) / step
+    if span < 0 { span = 0 }
+    let count = int(span)
+    if span > count { count = count + 1 }
+    if count == 0 {
+        throw "random.randrange empty range"
+    }
+    return start + int(random() * count) * step
+}
+
+let choice = fn(items) {
+    if len(items) == 0 {
+        throw "random.choice expects a non-empty list"
+    }
+    return items[int(random() * len(items))]
+}
+
+let choices = fn(items, k) {
+    if k == null { k = 1 }
+    if len(items) == 0 {
+        throw "random.choices expects non-empty sequence"
+    }
+    let out = []
+    let _i = 0
+    while _i < k {
+        out.push(items[int(random() * len(items))])
+        _i += 1
+    }
+    return out
+}
+
+// sample(sequence, k): draw k distinct order-randomized elements.
+let sample = fn(items, k) {
+    let pool = []
+    for item in items { pool.push(item) }
+    let n = len(pool)
+    let _i = 0
+    while _i < n {
+        let j = _i + int(random() * (n - _i))
+        let tmp = pool[_i]
+        pool[_i] = pool[j]
+        pool[j] = tmp
+        _i += 1
+    }
+    let out = []
+    let _j = 0
+    while _j < k {
+        out.push(pool[_j])
+        _j += 1
+    }
+    return out
+}
+
+// shuffle(list): Fisher-Yates; returns the shuffled list.
+let shuffle = fn(items) {
+    let n = len(items)
+    let _i = 0
+    while _i < n {
+        let j = _i + int(random() * (n - _i))
+        let tmp = items[_i]
+        items[_i] = items[j]
+        items[j] = tmp
+        _i += 1
+    }
+    return items
+}
+
+let uniform = fn(a, b) {
+    let lo = a < b ? a : b
+    let hi = a < b ? b : a
+    return random() * (hi - lo) + lo
+}
+
+let hex = fn(k = null) {
+    if k == null { k = 16 }
+    let table = "0123456789abcdef"
+    let out = ""
+    let _i = 0
+    while _i < k {
+        out += table[int(random() * 16)]
+        _i += 1
+    }
+    return out
+}

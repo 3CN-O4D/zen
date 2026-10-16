@@ -1,0 +1,36 @@
+# String methods
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+var s = "Hello, World"
+check(s.upper() == "HELLO, WORLD", "upper")
+check(s.lower() == "hello, world", "lower")
+import string as stringmod
+check(stringmod.title("hi there") == "Hi There", "string.title module fn")
+check(s.length() == 12, "length")
+check(s.contains("World"), "contains true")
+check(!s.contains("Nope"), "contains false")
+check(s.startswith("Hell"), "startswith")
+check(s.endswith("rld"), "endswith")
+check(s.replace("o", "0") == "Hell0, W0rld", "replace all")
+check(stringmod.count(s, "l") == 3, "string.count module fn")
+check(s.find("World") == 7, "find")
+check(s.find("zzz") == -1, "find missing")
+check("a,b,c".split(",").length() == 3, "split count")
+check("a,b,c".split(",")[1] == "b", "split element")
+check("  pad  ".strip() == "pad", "strip both")
+check(stringmod.zfill("42", 5) == "00042", "string.zfill module fn")
+check("7".to_num() + 1 == 8, "to_num int")
+check("2.5".to_num() * 2 == 5.0, "to_num float")
+check("ab"[1] == "b", "index")
+check(s.substring(7, 12) == "World", "substring")
+check("x" * 3 == "xxx", "repeat via *")
+
+# is-checks
+
+if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

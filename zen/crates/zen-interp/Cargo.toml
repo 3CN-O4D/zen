@@ -1,0 +1,15 @@
+[package]
+name = "zen-interp"
+version = "3.0.0"
+edition = "2021"
+description = "Zen M3 tree-walking reference interpreter (differential oracle)"
+license = "MIT"
+
+[dependencies]
+zen-syntax = { path = "../zen-syntax" }
+zen-vm = { path = "../zen-vm" }
+indexmap = { workspace = true }
+
+[dev-dependencies]
+zen-cli = { path = "../zen-cli" }
+zen-compiler = { path = "../zen-compiler" }
