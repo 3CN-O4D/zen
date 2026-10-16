@@ -4,7 +4,7 @@ All notable changes to Zen. Releases ship via the
 [Build & Release workflow](.github/workflows/release.yml) on `v*` tags
 (Linux x86_64/aarch64/armv7/armv6, macOS aarch64/x86_64, Windows x86_64).
 
-## [Unreleased]
+## [2.4.0] — 2026-10-16
 
 ### Changed — rust-like diagnostics and error vocabulary (engine)
 
