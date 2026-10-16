@@ -120,12 +120,40 @@ so an `extends errors.Error` class can be used as a `catch` type.
 
 ## The default (uncaught) behavior
 
-Uncaught errors stop the program with a `zen:` message:
+Uncaught errors stop the program with a rustc-style diagnostic: message,
+`--> file:line:col`, source snippet with a caret, and `= help:` / `= note:`
+suggestions:
 
 ```
 $ zen bad.z
-zen: dictionary has no key: b
+error: dictionary has no member: `b`
+ --> bad.z:2:0
+  |
+2 | print d.b
+  | ^~~~~~~~~
+  |
+  = note:  list indices start at 0, not 1
 ```
+
+Caught errors (`catch as e`) always see the plain message string — the
+rendering above only happens at the top-level boundary.
+
+## Modules, dicts, functions, objects
+
+Zen differentiates its data types in error messages:
+
+| Mistake | Message |
+|---------|---------|
+| `sqlite.open_memory()` (typo for `openMemory`) | ``module `sqlite` has no function: `open_memory` `` + did-you-mean |
+| `data.nope()` on a user dict | ``dictionary has no method: `nope` `` |
+| `data.nope` on a user dict | ``dictionary has no member: `nope` `` |
+| `f()` where `f` holds `5` | ``cannot call `f`: value of type `int` is not a function `` |
+| `nosuchfn()` | ``undefined function: `nosuchfn` `` |
+
+`typeof` reports the vocabulary directly: `"function"` for functions,
+`"object"` for class instances, `"dict"` for dicts. Modules are dicts whose
+functions are native or Zen-defined — the error layer just knows their names,
+so a miss on one says `module`, never `dictionary`.
 
 `exit(code)` terminates with a status code; `SystemExit` (thrown) has the same
 effect.

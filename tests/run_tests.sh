@@ -35,8 +35,28 @@ cleanup() {
     if [ "$FTP_STARTED" = "1" ] && [ -n "$FTP_PID" ]; then
         kill "$FTP_PID" 2>/dev/null
     fi
+    if [ "$TLS_STARTED" = "1" ] && [ -n "$TLS_PID" ]; then
+        kill "$TLS_PID" 2>/dev/null
+    fi
 }
 trap cleanup EXIT
+
+TLS_PID=""
+TLS_STARTED=0
+if nc -z 127.0.0.1 2443 2>/dev/null; then
+    echo "mock tls: already running (reusing)"
+else
+    setsid nohup python3 "$ROOT/tests/mock_tls.py" > /tmp/zen_test/zen_suite_tls.log 2>&1 < /dev/null &
+    TLS_PID=$!
+    TLS_STARTED=1
+    # Wait for the mock server to accept connections (up to ~6s).
+    for _ in $(seq 1 30); do
+        if nc -z 127.0.0.1 2443 2>/dev/null; then
+            break
+        fi
+        sleep 0.2
+    done
+fi
 
 pass=0; fail=0; failed_cases=""
 for f in "$ROOT"/tests/cases/*.z; do

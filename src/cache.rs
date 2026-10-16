@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 const MAGIC: &[u8; 4] = b"ZENC";
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 const MAX_DEPTH: usize = 64;
 
 /// Stable opcode <-> u16 mapping. The enum's memory layout must never be
@@ -409,6 +409,11 @@ fn write_cf(w: &mut Writer, cf: &CompiledFunction) -> bool {
         w.u16(inst.arg2);
         w.u16(inst.arg3);
     }
+    // FORMAT 3: one source line per instruction (parallel array).
+    w.u32(cf.lines.len() as u32);
+    for line in &cf.lines {
+        w.u32(*line);
+    }
     w.u32(cf.constants.len() as u32);
     for c in &cf.constants {
         if !write_value(w, c, 0) {
@@ -443,6 +448,13 @@ fn read_cf(r: &mut Reader) -> Option<CompiledFunction> {
     for _ in 0..c_n {
         constants.push(read_value(r, 0)?);
     }
+    // FORMAT 3: line table (absent in older caches, which fail the FORMAT
+    // check before reaching here).
+    let l_n = r.u32()? as usize;
+    let mut lines = Vec::with_capacity(l_n.min(1 << 20));
+    for _ in 0..l_n {
+        lines.push(r.u32()?);
+    }
     Some(CompiledFunction {
         name,
         params,
@@ -451,6 +463,7 @@ fn read_cf(r: &mut Reader) -> Option<CompiledFunction> {
         local_count,
         instructions,
         constants,
+        lines,
     })
 }
 

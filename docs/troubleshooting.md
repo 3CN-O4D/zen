@@ -89,8 +89,8 @@ Reading a missing dict key or list index **throws** (it does not return
 `null`):
 
 ```zen
-print({a: 1}.b)     # zen: dictionary has no member: `b`
-print([1, 2][5])    # zen: list index out of bounds
+print({a: 1}.b)     # error: dictionary has no member: `b`
+print([1, 2][5])    # error: list index out of bounds
 ```
 
 Use `.get(key)` (returns `null`) or the `??` operator for safe access:
@@ -104,7 +104,20 @@ if ({a:1}.len > 0) { ... }
 
 ```zen
 var x = 5
-print(x())          # zen: undefined function: x
+print(x())          # error: cannot call `x`: value of type `int` is not a function
+print(nosuchfn())   # error: undefined function: `nosuchfn`
+```
+
+## Nested imports do not re-export names
+
+If module A imports module B, entry files using A must still import B
+themselves when B's functions execute — transitive names are not visible
+to the entry. Missing ones fail with `undefined function` at the call site,
+not at the import:
+
+```zen
+import tlssweep
+import tlscheck   # required: tlssweep calls tlscheck internally
 ```
 
 ## `len()` is a function; `.len` is a property

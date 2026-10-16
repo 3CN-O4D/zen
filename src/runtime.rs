@@ -31,6 +31,32 @@ fn suggest_name(target: &str, candidates: &[&str], max_dist: usize) -> Option<St
     best.map(|(name, _)| name)
 }
 
+/// Builtin methods callable on ANY dict, even when the dict has no member by
+/// that name (handled by `dict_method` / the `invoke_member` fast paths). A
+/// miss for any OTHER name is a genuine member/function miss, which is where
+/// the module-aware error applies.
+const DICT_METHODS: &[&str] = &[
+    "has", "containsKey", "has_key", "contains", "get", "keys", "values",
+    "update", "merge", "length", "len", "put", "clear", "count", "invert",
+    "pick", "omit",
+];
+
+/// "did you mean …? available: …" hint shared by member-access and
+/// member-call misses. `noun` reads "members" for dicts, "functions" for
+/// modules. Compiler-internal namespaced keys (`mod::func`) are hidden:
+/// they are not callable syntax.
+fn member_hint(name: &str, keys: &[&str], noun: &str) -> String {
+    suggest_name(name, keys, 4)
+        .map(|s| format!("\nnote: did you mean `{s}`? available {noun}: {}", keys.iter().take(8).copied().collect::<Vec<_>>().join(", ")))
+        .unwrap_or_else(|| {
+            if !keys.is_empty() {
+                format!("\nnote: available {noun}: {}", keys.iter().take(8).copied().collect::<Vec<_>>().join(", "))
+            } else {
+                String::new()
+            }
+        })
+}
+
 fn op_symbol(op: &Kind) -> &'static str {
     match op {
         Kind::Plus => "+",
@@ -1450,6 +1476,15 @@ impl Parser {
     }
     fn current(&self) -> &Token {
         &self.tokens[self.pos]
+    }
+    /// Position of the token the parser stopped at — the failure site after
+    /// a parse error, since parsing aborts immediately. `(0, 0)` when the
+    /// position is unavailable; the renderer then omits the snippet.
+    fn fail_pos(&self) -> (usize, usize) {
+        match self.tokens.get(self.pos) {
+            Some(t) => (t.line, t.col),
+            None => (0, 0),
+        }
     }
     fn check(&self, kind: Kind) -> bool {
         Self::same(&self.current().kind, &kind)
@@ -3459,6 +3494,13 @@ pub struct Vm {
     locked: ahash::AHashSet<String>,
     file: String,
     lines: Vec<String>,
+    /// Source position of the statement/instruction currently executing
+    /// (statement granularity). Set by the tree-walk `exec` loop and the
+    /// bytecode loop from the compiler's line tables; read when formatting
+    /// runtime failures. `(0, 0)` means unknown — the renderer then omits
+    /// the snippet rather than pointing at the wrong line.
+    err_line: usize,
+    err_col: usize,
     stack: Vec<String>,
     current_class: Option<String>,
     current_method: Option<String>,
@@ -3581,6 +3623,8 @@ impl Vm {
             locked: ahash::AHashSet::new(),
             file: "<string>".into(),
             lines: Vec::new(),
+            err_line: 0,
+            err_col: 0,
             stack: vec!["<module>".into()],
             current_class: None,
             current_method: None,
@@ -4350,6 +4394,12 @@ impl Vm {
         // qr module (pure-Rust QR code generation)
         crate::qr::init_qr_module(self);
 
+        // x509 module (offline certificate inspection)
+        crate::x509::init_x509_module(self);
+
+        // tls module (live certificate fetching)
+        crate::tls::init_tls_module(self);
+
         // sqlite module (bundled embedded SQLite)
         crate::sqlite::init_sqlite_module(self);
 
@@ -4426,7 +4476,7 @@ impl Vm {
         crate::ffi::init_ffi_module(self);
 
         // Register all core native functions eagerly
-            const NATIVES: [&str; 578] = [
+              const NATIVES: [&str; 580] = [
             "math_sin",
             "math_cos",
             "socket_open",
@@ -4715,6 +4765,8 @@ impl Vm {
             "qr_render",
             "qr_version",
             "qr_dimension",
+            "x509_parse_pem",
+            "tls_fetch",
             "sqlite_open",
             "sqlite_open_memory",
             "sqlite_close",
@@ -5663,7 +5715,8 @@ Expr::Index(obj, idx) => {
                             Value::Function(n) | Value::NativeFunction(n) => n.clone(),
                             other => {
                                 return Err(format!(
-                                    "cannot call {other}: value is not a function"
+                                    "cannot call {other}: value of type `{}` is not a function",
+                                    other.type_name()
                                 ))
                             }
                         };
@@ -5726,6 +5779,20 @@ Expr::Index(obj, idx) => {
             }
         }
     }
+    /// Which module owns this exact dict, if any. A dict counts as a module
+    /// only when it is Arc-identical to a dict global bound under a
+    /// registered module name — ordinary user dicts never match, even when
+    /// a variable shares a module's name (shadowing rebinds the global, so
+    /// identity fails). This is what lets `sqlite.openMemory()` report
+    /// "module `sqlite` has no function" instead of the generic dict error,
+    /// while `data.openMemory()` on a user dict keeps the dict message.
+    fn module_owner(&self, dict: &Arc<indexmap::IndexMap<String, Value>>) -> Option<String> {
+        self.module_names.iter().find(|k| {
+            self.vars.get(*k).is_some_and(|v| {
+                matches!(v, Value::Dict(m) if Arc::as_ptr(m) == Arc::as_ptr(dict))
+            })
+        }).cloned()
+    }
     fn member(&self, object: Value, name: &str) -> Result<Value, String> {
         match object {
             Value::Dict(values) => values
@@ -5739,32 +5806,11 @@ Expr::Index(obj, idx) => {
                     }
                 })
                 .ok_or_else(|| {
-                    // Hide compiler-internal namespaced keys (`mod::func`)
-                    // from user-facing suggestions; they are not callable syntax.
                     let keys: Vec<&str> = values.keys().map(|s| s.as_str())
                         .filter(|k| !k.contains("::"))
                         .collect();
-                    let hint = suggest_name(name, &keys, 4)
-                        .map(|s| format!("\nnote: did you mean `{}`? available: {}", s, keys.iter().take(8).copied().collect::<Vec<_>>().join(", ")))
-                        .unwrap_or_else(|| {
-                            if !keys.is_empty() {
-                                format!("\nnote: available members: {}", keys.iter().take(8).copied().collect::<Vec<_>>().join(", "))
-                            } else {
-                                String::new()
-                            }
-                        });
-                    // If this exact dict is a registered module bound in vars
-                    // under its module name, report a module-flavored error
-                    // instead of a generic dictionary one (`sys.argv` typo ->
-                    // "module `sys` has no member"). Requiring both Arc
-                    // identity and a registered module name avoids false
-                    // positives from ordinary user dicts at top level.
-                    let owner = self.module_names.iter().find(|k| {
-                        self.vars.get(*k).is_some_and(|v| {
-                            matches!(v, Value::Dict(m) if Arc::as_ptr(m) == Arc::as_ptr(&values))
-                        })
-                    });
-                    match owner {
+                    let hint = member_hint(name, &keys, "members");
+                    match self.module_owner(&values) {
                         Some(m) => format!(
                             "module `{m}` has no member or function: `{name}`{}",
                             hint
@@ -6529,7 +6575,7 @@ Expr::Index(obj, idx) => {
                 }
                 Ok(Value::Dict(Arc::new(out)))
             }
-            _ => Err(format!("dictionary has no method: {method}")),
+            _ => Err(format!("dictionary has no method: `{method}`")),
         }
     }
     fn call_super_method(&mut self, parent_name: String, method_name: String, function: Function, mut values: Vec<Value>) -> Result<Value, String> {
@@ -7113,10 +7159,13 @@ Expr::Index(obj, idx) => {
         // Propagate the import chain so nested circular imports are caught.
         module_vm.loading = self.loading.clone();
         module_vm.loading.push(canon_str.clone());
-        let parse_err = |e: &str| {
-            format!("\x1b[1;31merror\x1b[0m\x1b[1m[{}]\x1b[0m\n \x1b[1;34m-->\x1b[0m {}:1\n  \x1b[1;34m|\x1b[0m\n  \x1b[1;31m= {}\x1b[0m", e, path, e)
-        };
-        module_vm.exec_source_cached(path, &source, &parse_err)?;
+        // Failures render against the MODULE vm (its file, lines, position)
+        // before crossing the import boundary — the entry VM never
+        // re-renders (rendering is idempotent), so snippets always belong to
+        // the file that actually failed.
+        module_vm
+            .exec_source_cached(path, &source)
+            .map_err(|e| module_vm.render_error(&e))?;
         // Wire module-level variables into the bytecode module functions that
         // reference them. A module's top-level `let` bindings live ONLY in the
         // module dict, but compiled bodies resolve free names against the
@@ -7323,6 +7372,7 @@ Expr::Index(obj, idx) => {
                             local_count: (bc.local_count as usize + added) as u16,
                             instructions,
                             constants: bc.constants.clone(),
+                            lines: bc.lines.clone(),
                         };
                         let mut captured = function.captured.clone();
                         let mut effective = function.effective_captured.clone();
@@ -8136,6 +8186,25 @@ Expr::Index(obj, idx) => {
 if name.contains("::") && !self.functions.contains_key(name) {
             return Err(format!("undefined function: `{name}`"));
         }
+        // A variable with this name exists but holds no callable: name the
+        // type instead of claiming the function is undefined (`let f = 5`
+        // then `f()` means "`f` is an int", not "no `f`").
+        if let Some(v) = self
+            .locals
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
+            .or_else(|| self.vars.get(name).cloned())
+        {
+            let v = deref_cell(&v);
+            if !matches!(v, Value::Function(_) | Value::NativeFunction(_)) {
+                return Err(format!(
+                    "cannot call `{name}`: value of type `{}` is not a function",
+                    v.type_name()
+                ));
+            }
+        }
         Err(format!("undefined function: `{name}`"))
     }
     /// Push an iterative VM frame for a dynamic function-value call instead of
@@ -8268,6 +8337,13 @@ if name.contains("::") && !self.functions.contains_key(name) {
             }
             let inst = cur.instructions[ip];
             ip += 1;
+            // Line table positions the failure for the diagnostic renderer.
+            // Column info does not survive compilation; the caret points at
+            // the line start and the snippet carries the meaning.
+            if let Some(line) = cur.lines.get(ip - 1) {
+                self.err_line = *line as usize;
+                self.err_col = 0;
+            }
             match inst.opcode {
                 Opcode::Pop => {
                     stack.pop();
@@ -9010,6 +9086,17 @@ Value::Function(fname) => {
                             _ => {}
                         }
                     }
+                    // Same courtesy as the tree-walk `call()`: a variable
+                    // with this name exists but holds no callable.
+                    if let Some(val) = self.get_var(name.as_str()) {
+                        let val = crate::runtime::deref_cell(&val);
+                        if !matches!(val, Value::Function(_) | Value::NativeFunction(_)) {
+                            return Err(format!(
+                                "cannot call `{name}`: value of type `{}` is not a function",
+                                val.type_name()
+                            ));
+                        }
+                    }
                     return Err(format!("undefined function: `{name}`"));
                 }
                 Opcode::CallValue => {
@@ -9047,7 +9134,8 @@ Value::Function(fname) => {
                         }
                         other => {
                             return Err(format!(
-                                "cannot call {other}: value is not a function"
+                                "cannot call {other}: value of type `{}` is not a function",
+                                other.type_name()
                             ))
                         }
                     }
@@ -10473,6 +10561,21 @@ if let Some((fbc, fip, fbase, fnew_base, fstack_len)) = frames.pop() {
                         _ => {}
                     }
                 }
+                // A miss for a non-builtin name on a module dict is a
+                // wrong-function error, not a wrong-method error:
+                // `sqlite.openMemory()` names the module and suggests real
+                // functions instead of claiming a dictionary has methods.
+                if !DICT_METHODS.contains(&method) {
+                    if let Some(owner) = self.module_owner(&dict) {
+                        let keys: Vec<&str> = dict.keys().map(|s| s.as_str())
+                            .filter(|k| !k.contains("::"))
+                            .collect();
+                        return Err(format!(
+                            "module `{owner}` has no function: `{method}`{}",
+                            member_hint(method, &keys, "functions")
+                        ));
+                    }
+                }
                 match method {
                     "length" | "len" => return Ok(Value::Number(dict.len() as f64)),
                     "has" | "containsKey" | "has_key" | "contains" => {
@@ -10678,6 +10781,10 @@ self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone
             if !matches!(prev_flow, Flow::Normal) {
                 return Ok(prev_flow);
             }
+            // Remember where we are: a failure inside this statement renders
+            // with this span (see `Vm::render_runtime_error`).
+            self.err_line = stmt.line;
+            self.err_col = stmt.col;
             match self.exec_one(stmt) {
                 Ok(f) => prev_flow = f,
                 Err(e) if e == INTERNAL_THROW_SENTINEL => {
@@ -10746,16 +10853,25 @@ self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone
         &mut self,
         path: &str,
         source: &str,
-        fmt_parse_err: &dyn Fn(&str) -> String,
     ) -> Result<Flow, String> {
         if let Some(funcs) = crate::cache::load(path, source) {
             return self.exec_compiled(funcs);
         }
 
-        let tokens = lex(source).map_err(|e| fmt_parse_err(&e.to_string()))?;
-        let program = Parser::new(tokens)
-            .program()
-            .map_err(|e| fmt_parse_err(&e.to_string()))?;
+        // Lex/parse failures render here, where the path and source are
+        // known — so module imports attribute snippets to the module's own
+        // file, not the entry file. Eval failures stay raw: the caller's
+        // VM (whose file/lines/position they belong to) renders them.
+        let lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
+        let tokens = lex(source).map_err(|e| format_lex_error(path, &lines, &e.to_string()))?;
+        let mut parser = Parser::new(tokens);
+        let program = match parser.program() {
+            Ok(program) => program,
+            Err(e) => {
+                let (line, col) = parser.fail_pos();
+                return Err(format_runtime_error(path, &lines, line, col, &e));
+            }
+        };
         match crate::bytecode::compile_program(&program) {
             Ok(funcs) => {
                 crate::cache::store(path, source, &funcs);
@@ -10771,11 +10887,17 @@ self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone
     }
     /// Tree-walk staging for differential runs: exec the module without
     /// compiling to bytecode (used by `ZEN_NO_BC` on the file-exec path).
-    fn exec_source_tree(&mut self, source: &str, fmt_parse_err: &dyn Fn(&str) -> String) -> Result<Flow, String> {
-        let tokens = lex(source).map_err(|e| fmt_parse_err(&e.to_string()))?;
-        let program = Parser::new(tokens)
-            .program()
-            .map_err(|e| fmt_parse_err(&e.to_string()))?;
+    fn exec_source_tree(&mut self, source: &str, file: &str) -> Result<Flow, String> {
+        let lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
+        let tokens = lex(source).map_err(|e| format_lex_error(file, &lines, &e.to_string()))?;
+        let mut parser = Parser::new(tokens);
+        let program = match parser.program() {
+            Ok(program) => program,
+            Err(e) => {
+                let (line, col) = parser.fail_pos();
+                return Err(format_runtime_error(file, &lines, line, col, &e));
+            }
+        };
         let result = self.exec(&program);
         self.drain_pending_error_classes();
         result
@@ -11645,8 +11767,14 @@ self.capture_frames.push(function.effective_captured.iter().map(|(k, _)| k.clone
         self.thrown_values.push(value);
         INTERNAL_THROW_SENTINEL.to_string()
     }
-    fn error_info(&self, value: &Value) -> (String, String) {
-        match value {
+    /// Render a plain runtime failure against this VM's own file, lines,
+    /// and last-executed position. Idempotent: already-formatted errors
+    /// (from a nested module VM) pass through untouched, so each error is
+    /// rendered exactly once, by the VM whose source it belongs to.
+    fn render_error(&self, msg: &str) -> String {
+        format_runtime_error(&self.file, &self.lines, self.err_line, self.err_col, msg)
+    }
+    fn error_info(&self, value: &Value) -> (String, String) {        match value {
             Value::Dict(map) => (
                 map.get("type").map(|v| v.to_string()).unwrap_or_else(|| "Error".into()),
                 map.get("message")
@@ -16004,6 +16132,8 @@ fn native_for(name: &str) -> NativeFunc {
         "qr_render" => |args| crate::qr::qr_render(&args),
         "qr_version" => |args| crate::qr::qr_version(&args),
         "qr_dimension" => |args| crate::qr::qr_dimension(&args),
+        "x509_parse_pem" => |args| crate::x509::x509_parse_pem(&args),
+        "tls_fetch" => |args| crate::tls::tls_fetch(&args),
         "sqlite_open" => |args| crate::sqlite::sqlite_open(&args),
         "sqlite_open_memory" => |args| crate::sqlite::sqlite_open_memory(&args),
         "sqlite_close" => |args| crate::sqlite::sqlite_close(&args),
@@ -18391,25 +18521,40 @@ pub fn run(source: &str) -> Result<(), String> {
 pub fn run_named(source: &str, file: &str) -> Result<(), String> {
     let mut vm = Vm::new();
     vm.file = file.into();
-    vm.lines = source.lines().map(|l| l.to_string()).collect();
+    let lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
+    vm.lines = lines.clone();
     if let Some(prelude) = find_std_file("browser.z") {
         let psource = std::fs::read_to_string(&prelude)
             .map_err(|e| format!("cannot read prelude {prelude}: {e}"))?;
-        vm.exec_source_cached(&prelude, &psource, &|e| e.to_string())?;
+        vm.exec_source_cached(&prelude, &psource)?;
     }
     let flow = if file == "<string>" {
-        let tokens = lex(source)?;
-        let program = Parser::new(tokens).program()?;
-        vm.exec_module(&program)?
+        let tokens = lex(source).map_err(|e| format_lex_error(file, &lines, &e.to_string()))?;
+        let mut parser = Parser::new(tokens);
+        let program = match parser.program() {
+            Ok(program) => program,
+            Err(e) => {
+                let (line, col) = parser.fail_pos();
+                return Err(format_runtime_error(file, &lines, line, col, &e));
+            }
+        };
+        vm.exec_module(&program).map_err(|e| vm.render_error(&e))?
     } else {
         // Seed cycle detection so importing the entry file errors cleanly.
         if let Ok(canon) = std::fs::canonicalize(file) {
             vm.loading.push(canon.to_string_lossy().into_owned());
         }
-        if std::env::var("ZEN_NO_BC").is_ok() {
-            vm.exec_source_tree(source, &|e| e.to_string())?
+        let inner = if std::env::var("ZEN_NO_BC").is_ok() {
+            vm.exec_source_tree(source, file)
         } else {
-            vm.exec_source_cached(file, source, &|e| e.to_string())?
+            vm.exec_source_cached(file, source)
+        };
+        // Eval failures render against THIS vm (entry file, entry lines,
+        // entry position). Nested modules render their own before the
+        // error crosses the import boundary, and rendering is idempotent.
+        match inner {
+            Ok(flow) => flow,
+            Err(e) => return Err(vm.render_error(&e)),
         }
     };
     match flow {
@@ -18495,7 +18640,20 @@ fn format_unhandled(
 
     // ── Annotation footer ────────────────────────────────────────────────────
     out.push_str("  \x1b[1;34m|\x1b[0m\n");
+    out.push_str(&error_footer(msg, &lines));
 
+    out.push_str(&format!(
+        "  \x1b[1;31m= {}: {}\x1b[0m\n",
+        ty, msg
+    ));
+    out
+}
+
+/// Keyword-driven `= help:` / `= note:` footer shared by every diagnostic
+/// renderer (unhandled throws AND plain runtime failures). Kept in one place
+/// so both paths suggest the same way.
+fn error_footer(msg: &str, lines: &[String]) -> String {
+    let mut out = String::new();
     // Suggestion for common error patterns
     let lower_msg = msg.to_lowercase();
     if lower_msg.contains("undefined") || lower_msg.contains("not defined") || lower_msg.contains("unknown variable") {
@@ -18544,10 +18702,66 @@ fn format_unhandled(
         out.push_str("  \x1b[1;33m= help:\x1b[0m verify the type with typeof(value) before calling methods\n");
     }
 
-    out.push_str(&format!(
-        "  \x1b[1;31m= {}: {}\x1b[0m\n",
-        ty, msg
-    ));
+    // Module function miss: the message already carries a did-you-mean hint
+    // plus the available functions, so just orient toward the vocabulary —
+    // modules have functions, dicts have members, objects have fields.
+    if lower_msg.contains("has no function") {
+        out.push_str("  \x1b[1;33m= note:\x1b[0m  modules expose functions (`mod.name(...)`), dicts expose members, objects expose fields\n");
+    }
+    if lower_msg.contains("has no member") && !lower_msg.contains("module") {
+        out.push_str("  \x1b[1;33m= help:\x1b[0m verify the type with typeof(value) before accessing members\n");
+    }
+    if lower_msg.contains("is not a function") {
+        out.push_str("  \x1b[1;33m= help:\x1b[0m only functions and methods are callable — check typeof(callee)\n");
+    }
+    out
+}
+
+/// Marker every formatted diagnostic starts with. Boundaries use it to avoid
+/// double-formatting an error that a nested module VM already rendered.
+const DIAG_MARKER: &str = "\x1b[1;31merror";
+
+fn is_formatted(msg: &str) -> bool {
+    msg.starts_with(DIAG_MARKER)
+}
+
+/// Lexer failures already lead with `line:col:` — reuse that position for
+/// the snippet instead of reporting blind.
+fn format_lex_error(file: &str, lines: &[String], msg: &str) -> String {
+    if is_formatted(msg) {
+        return msg.to_string();
+    }
+    let mut parts = msg.splitn(3, ':');
+    if let (Some(l), Some(c)) = (parts.next(), parts.next()) {
+        if let (Ok(line), Ok(col)) = (l.trim().parse::<usize>(), c.trim().parse::<usize>()) {
+            return format_runtime_error(file, lines, line, col, msg);
+        }
+    }
+    format_runtime_error(file, lines, 0, 0, msg)
+}
+
+/// rustc-style rendering for a plain runtime failure: header, `-->`
+/// location, source snippet with caret, then the shared help footer.
+/// `line == 0` (or out of range) omits the snippet rather than pointing at
+/// the wrong line; the message and footer still print.
+fn format_runtime_error(file: &str, lines: &[String], line: usize, col: usize, msg: &str) -> String {
+    if is_formatted(msg) {
+        return msg.to_string();
+    }
+    let first = msg.lines().next().unwrap_or(msg);
+    let rest: Vec<&str> = msg.lines().skip(1).collect();
+    let mut out = String::new();
+    out.push_str(&format!("{DIAG_MARKER}\x1b[0m: {first}\n"));
+    out.push_str(&format!(" \x1b[1;34m-->\x1b[0m {file}:{line}:{col}\n"));
+    out.push_str("  \x1b[1;34m|\x1b[0m\n");
+    if line > 0 && line <= lines.len() {
+        out.push_str(&render_context(lines, line, col, 2));
+        out.push_str("  \x1b[1;34m|\x1b[0m\n");
+    }
+    for extra in rest {
+        out.push_str(&format!("  \x1b[1;34m|\x1b[0m {extra}\n"));
+    }
+    out.push_str(&error_footer(msg, lines));
     out
 }
 
@@ -20738,11 +20952,19 @@ fn levenshtein(a: &str, b: &str) -> usize {
     matrix[a_len][b_len]
 }
 
-/// Parse and validate a program without executing it.
-pub fn check(source: &str) -> Result<(), String> {
-    let tokens = lex(source)?;
-    Parser::new(tokens).program()?;
-    Ok(())
+/// Parse and validate a program from a named file, rendering failures
+/// rustc-style against its source.
+pub fn check_named(source: &str, file: &str) -> Result<(), String> {
+    let lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
+    let tokens = lex(source).map_err(|e| format_lex_error(file, &lines, &e.to_string()))?;
+    let mut parser = Parser::new(tokens);
+    match parser.program() {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let (line, col) = parser.fail_pos();
+            Err(format_runtime_error(file, &lines, line, col, &e))
+        }
+    }
 }
 
 /// Lint a program, returning a list of human-readable warnings.

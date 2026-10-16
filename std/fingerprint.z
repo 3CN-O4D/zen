@@ -1,0 +1,114 @@
+# fingerprint.z — offline service/banner fingerprinting.
+#
+# Turns banners you already collected (`nmap.service`, `socket.recv_text`,
+# HTTP `Server` headers) into product/version guesses. Matching is
+# deliberately conservative: unknown input yields `{product: "unknown"}`
+# rather than a fabricated version.
+#
+# Only test systems you own or are authorized to audit.
+
+func _hit(product, version, confidence, reason) {
+    return {product: product, version: version, confidence: confidence, reason: reason}
+}
+
+func _token_after(s, marker) {
+    let i = s.find(marker)
+    if i < 0 { return "" }
+    let rest = s.substring(i + len(marker), len(s))
+    var out = ""
+    for c in list(rest) {
+        if c == " " or c == "," or c == ";" or c == "\r" or c == "\n" or c == "(" { break }
+        out += c
+    }
+    return out
+}
+
+func _ssh(b) {
+    # "SSH-2.0-OpenSSH_9.6p1 Ubuntu-1": protocol version, then software token.
+    let rest = b.substring(4, len(b))
+    let dash = rest.find("-")
+    if dash < 0 { return _hit("ssh", "", "low", "SSH banner without software token") }
+    var token = rest.substring(dash + 1, len(rest))
+    let sp = token.find(" ")
+    if sp > 0 { token = token.substring(0, sp) }
+    let parts = token.split("_")
+    if len(parts) == 2 {
+        return _hit(parts[0].lower(), parts[1], "high", "SSH banner product token")
+    }
+    return _hit(token.lower(), "", "medium", "SSH banner without version token")
+}
+
+func _ftp(b) {
+    if b.contains("vsFTPd") {
+        return _hit("vsftpd", _token_after(b, "vsFTPd "), "high", "FTP banner marker")
+    }
+    if b.contains("ProFTPD") {
+        return _hit("proftpd", _token_after(b, "ProFTPD "), "high", "FTP banner marker")
+    }
+    if b.contains("Pure-FTPd") {
+        return _hit("pure-ftpd", "", "medium", "FTP banner marker")
+    }
+    if b.contains("FileZilla") {
+        return _hit("filezilla-server", _token_after(b, "FileZilla Server "), "medium", "FTP banner marker")
+    }
+    return _hit("ftp", "", "low", "220 greeting with no known product marker")
+}
+
+func _smtp(b) {
+    if b.contains("Postfix") {
+        return _hit("postfix", "", "medium", "SMTP greeting marker")
+    }
+    if b.contains("Exim") {
+        return _hit("exim", _token_after(b, "Exim "), "medium", "SMTP greeting marker")
+    }
+    if b.contains("Sendmail") {
+        return _hit("sendmail", _token_after(b, "Sendmail "), "medium", "SMTP greeting marker")
+    }
+    if b.contains("Microsoft ESMTP") {
+        return _hit("exchange", "", "medium", "SMTP greeting marker")
+    }
+    return _hit("smtp", "", "low", "220 greeting with no known product marker")
+}
+
+func _http(b) {
+    if b.contains("Apache/") {
+        return _hit("apache", _token_after(b, "Apache/"), "high", "Server header token")
+    }
+    if b.contains("nginx/") {
+        return _hit("nginx", _token_after(b, "nginx/"), "high", "Server header token")
+    }
+    if b.contains("Microsoft-IIS/") {
+        return _hit("iis", _token_after(b, "Microsoft-IIS/"), "high", "Server header token")
+    }
+    if b.contains("lighttpd/") {
+        return _hit("lighttpd", _token_after(b, "lighttpd/"), "high", "Server header token")
+    }
+    if b.contains("openresty/") {
+        return _hit("openresty", _token_after(b, "openresty/"), "high", "Server header token")
+    }
+    if b.contains("gunicorn/") {
+        return _hit("gunicorn", _token_after(b, "gunicorn/"), "high", "Server header token")
+    }
+    return _hit("http", "", "low", "no known server token")
+}
+
+func service(banner) {
+    let b = str(banner).strip()
+    if b.startswith("SSH-") {
+        return _ssh(b)
+    }
+    if b.startswith("220") {
+        if b.contains("FTP") or b.contains("FileZilla") or b.contains("vsFTPd") or b.contains("ProFTPD") or b.contains("Pure-FTPd") {
+            return _ftp(b)
+        }
+        return _smtp(b)
+    }
+    if b.contains("Apache/") or b.contains("nginx/") or b.contains("Microsoft-IIS/") or b.contains("lighttpd/") or b.contains("openresty/") or b.contains("gunicorn/") or b.startswith("HTTP/") {
+        return _http(b)
+    }
+    return _hit("unknown", "", "none", "no known product marker")
+}
+
+func http_server(value) {
+    return service(value)
+}

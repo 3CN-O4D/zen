@@ -1,0 +1,49 @@
+# opsec.z — low-profile scanning helpers.
+#
+# Jittered delays, nmap-style timing templates, and rotating benign request
+# headers. These reduce scan noise against systems you are authorized to
+# audit; they are not evasion tooling for anyone else's systems.
+#
+# Only test systems you own or are authorized to audit.
+
+func timing_delay(template) {
+    # Minutes per probe, nmap -T0..-T5 style. Higher templates scan faster
+    # and louder; default (normal) balances the two.
+    if template == 0 { return 3000 }
+    if template == 1 { return 1000 }
+    if template == 2 { return 500 }
+    if template == 4 { return 80 }
+    if template == 5 { return 30 }
+    return 250
+}
+
+func jitter(base_ms, pct = 25) {
+    let span = int(base_ms * pct / 100)
+    if span <= 0 { return int(base_ms) }
+    return int(base_ms) - span + random.randint(0, span * 2)
+}
+
+func pause(base_ms, pct = 25) {
+    time.sleep(jitter(base_ms, pct) / 1000.0)
+    return true
+}
+
+let _UAS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+]
+
+func user_agent() {
+    return random.choice(_UAS)
+}
+
+func request_headers() {
+    let langs = ["en-US,en;q=0.9", "en-GB,en;q=0.8", "de-DE,de;q=0.9,en;q=0.7"]
+    return {
+        "User-Agent": user_agent(),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": random.choice(langs),
+    }
+}

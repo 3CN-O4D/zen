@@ -80,10 +80,13 @@ nav:
     - crypto: modules/crypto.md
     - datetime: modules/datetime.md
     - threading: modules/threading.md
+    - tls: modules/tls.md
     - WhatsApp: modules/wa.md
+    - x509: modules/x509.md
   - Standard Library:
     - Overview: stdlib/overview.md
     - argparser: stdlib/argparser.md
+    - audit: stdlib/audit.md
     - base64: stdlib/base64.md
     - binascii: stdlib/binascii.md
     - bisect: stdlib/bisect.md
@@ -91,11 +94,14 @@ nav:
     - calendar: stdlib/calendar.md
     - collections: stdlib/collections.md
     - copy: stdlib/copy.md
+    - codec: stdlib/codec.md
     - ffmpeg: stdlib/ffmpeg.md
+    - fingerprint: stdlib/fingerprint.md
     - fractions: stdlib/fractions.md
     - functools: stdlib/functools.md
     - glob: stdlib/glob.md
     - hashlib: stdlib/hashlib.md
+    - hashid: stdlib/hashid.md
     - hydra: stdlib/hydra.md
     - heapq: stdlib/heapq.md
     - ini: stdlib/ini.md
@@ -105,17 +111,22 @@ nav:
     - math: stdlib/math.md
     - nmap: stdlib/nmap.md
     - operator: stdlib/operator.md
+    - opsec: stdlib/opsec.md
     - pathlib: stdlib/pathlib.md
     - pprint: stdlib/pprint.md
     - random: stdlib/random.md
+    - report: stdlib/report.md
     - requests: stdlib/requests.md
     - shutil: stdlib/shutil.md
+    - scandiff: stdlib/scandiff.md
     - soup: stdlib/soup.md
     - statistics: stdlib/statistics.md
     - string: stdlib/string.md
     - sys: stdlib/sys.md
     - tempfile: stdlib/tempfile.md
+    - tlssweep: stdlib/tlssweep.md
     - textwrap: stdlib/textwrap.md
+    - tlscheck: stdlib/tlscheck.md
     - threading: stdlib/threading.md
     - uuid: stdlib/uuid.md
   - Editor Setup:
@@ -128,6 +139,7 @@ nav:
     - Scraping: examples/scraping.md
     - Automation: examples/automation.md
     - APIs: examples/apis.md
+  - Security Auditing: cybersec.md
   - CLI Reference: cli.md
   - Grammar: grammar.md
   - Troubleshooting: troubleshooting.md

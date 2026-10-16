@@ -1,0 +1,70 @@
+# tlscheck.z — certificate findings from parsed X.509 data.
+#
+# Turns `x509.parse_pem` output into report-ready findings (expiry, weak
+# signatures, short keys, hostname mismatch, self-signed). Offline: it never
+# opens a connection — feed it PEM you already hold. Live handshakes need a
+# TLS connector (a later milestone).
+#
+# Only test systems you own or are authorized to audit.
+
+import x509
+import fs
+
+func _finding(severity, title, detail, remediation) {
+    return {severity: severity, title: title, detail: detail, evidence: "", remediation: remediation}
+}
+
+func assess(cert, host = null) {
+    var out = []
+    let now = int(time.now())
+    let left_days = int((cert["not_after_epoch"] - now) / 86400)
+    if cert["not_after_epoch"] < now {
+        out.push(_finding("critical", "certificate expired",
+            "Not valid after " + cert["not_after"] + ".",
+            "Replace the certificate immediately."))
+    } elif left_days < 30 {
+        out.push(_finding("high", "certificate expires soon",
+            "Expires in " + str(left_days) + " days (" + cert["not_after"] + ").",
+            "Renew before the expiry date; automate renewal if possible."))
+    } elif left_days < 90 {
+        out.push(_finding("medium", "certificate expiry approaching",
+            "Expires in " + str(left_days) + " days (" + cert["not_after"] + ").",
+            "Schedule renewal."))
+    }
+    if cert["sig_algo"] == "md5WithRSAEncryption" or cert["sig_algo"] == "sha1WithRSAEncryption" or cert["sig_algo"] == "sha1WithRSA" or cert["sig_algo"] == "ecdsaWithSHA1" {
+        out.push(_finding("high", "weak signature algorithm",
+            "Signed with " + cert["sig_algo"] + ".",
+            "Reissue with SHA-256 or stronger."))
+    }
+    if cert["key_algo"] == "rsa" and cert["key_bits"] < 2048 {
+        out.push(_finding("high", "short RSA key",
+            "RSA-" + str(cert["key_bits"]) + " is below the 2048-bit minimum.",
+            "Reissue with at least RSA-2048."))
+    }
+    if host != null {
+        var covered = false
+        for name in cert["san"] {
+            if name == host { covered = true }
+        }
+        if len(cert["san"]) == 0 and cert["subject"].contains("CN=" + host) { covered = true }
+        if not covered {
+            out.push(_finding("medium", "hostname not covered",
+                "Certificate does not list " + host + " in SAN/CN.",
+                "Reissue with the correct SAN entries."))
+        }
+    }
+    if cert["subject"] == cert["issuer"] and not cert["is_ca"] {
+        out.push(_finding("low", "self-signed leaf",
+            "Subject matches issuer on a non-CA certificate.",
+            "Expected for lab/test hosts; use a trusted CA in production."))
+    }
+    return out
+}
+
+func from_pem(pem, host = null) {
+    return assess(x509.parse_pem(pem), host)
+}
+
+func from_file(path, host = null) {
+    return from_pem(fs.read(path), host)
+}

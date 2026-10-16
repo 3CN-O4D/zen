@@ -186,6 +186,11 @@ pub struct CompiledFunction {
     pub local_count: u16,
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,
+    /// Source line per instruction (parallel to `instructions`; 0 = unknown).
+    /// Recorded from `Stmt.line` at compile time so runtime failures render
+    /// rustc-style diagnostics without touching the instruction encoding or
+    /// the hot interpreter loop beyond one indexed load per step.
+    pub lines: Vec<u32>,
 }
 
 struct LoopCtx {
@@ -198,6 +203,12 @@ struct LoopCtx {
 struct FunctionCompiler {
     instructions: Vec<Instruction>,
     constants: Vec<Value>,
+    /// Source line per emitted instruction (parallel to `instructions`).
+    lines: Vec<u32>,
+    /// Line of the statement currently being compiled; stamped onto every
+    /// instruction `emit` produces, so one hook in `compile_stmt` covers
+    /// all 100+ emit sites.
+    cur_line: u32,
     str_consts: HashMap<String, u16>,
     num_consts: HashMap<u64, u16>,
     slots: HashMap<String, u16>,
@@ -279,6 +290,8 @@ impl FunctionCompiler {
         FunctionCompiler {
             instructions: Vec::new(),
             constants: Vec::new(),
+            lines: Vec::new(),
+            cur_line: 0,
             str_consts: HashMap::new(),
             num_consts: HashMap::new(),
             slots,
@@ -299,6 +312,7 @@ impl FunctionCompiler {
             local_count: self.next_slot,
             instructions: std::mem::take(&mut self.instructions),
             constants: std::mem::take(&mut self.constants),
+            lines: std::mem::take(&mut self.lines),
         }
     }
 
@@ -308,6 +322,7 @@ impl FunctionCompiler {
         }
         let idx = self.instructions.len();
         self.instructions.push(Instruction::new(opcode, arg1, arg2, arg3));
+        self.lines.push(self.cur_line);
         idx
     }
 
@@ -405,6 +420,7 @@ impl FunctionCompiler {
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+        self.cur_line = stmt.line as u32;
         match &stmt.kind {
             StmtKind::Let(target, e, is_const) => match target {
                 LetTarget::Var(n) => {

@@ -54,6 +54,8 @@ mod wa_signal;
 mod wa_signal_session;
 mod qr;
 mod sqlite;
+mod x509;
+mod tls;
 mod pm;
 mod runtime;
 mod state;
@@ -62,11 +64,20 @@ mod ffi;
 
 use std::{env, process};
 
-fn usage() -> String {
-    format!(
+fn usage() -> String {    format!(
         "Zen native runtime {}\n\nUsage:\n  zen run <file.z>\n  zen <file.z>\n  zen -e <source>\n  zen --version\n\nCommands:\n  zen run <file.z>            execute a script\n  zen check <file.z>          parse and validate a script without running it\n  zen lint <file.z>           report suspicious patterns and errors\n  zen repl                    start an interactive session\n\nPackage manager:\n  zen pm init [name]          initialize a new module (creates zen.json + main.z)\n  zen pm install <spec>       install: owner/repo, url, .z file, or local directory\n  zen pm install --force <spec>   reinstall\n  zen pm install -r <freeze.txt>  install from freeze file\n  zen pm list\n  zen pm freeze\n  zen pm remove <name>\n  zen pm info <name>\n  zen pm verify <name>            check sha256 against source\n  zen pm pack <dir>               build publishable tarball\n  zen pm publish <dir> <git-remote>",
         env!("CARGO_PKG_VERSION")
     )
+}
+
+/// Print a top-level failure: already-rendered diagnostics go out verbatim,
+/// plain internal errors keep the `zen: ` prefix.
+fn eprint_error(e: &str) {
+    if e.starts_with("\x1b[1;31merror") {
+        eprintln!("{e}");
+    } else {
+        eprintln!("zen: {e}");
+    }
 }
 
 fn main() {
@@ -192,7 +203,7 @@ fn main() {
                     }
                     Ok(())
                 } else {
-                    match runtime::check(&source) {
+                    match runtime::check_named(&source, &file) {
                         Ok(()) => {
                             println!("ok");
                             Ok(())
@@ -206,7 +217,7 @@ fn main() {
         match result {
             Ok(()) => {}
             Err(e) => {
-                eprintln!("zen: {e}");
+                eprint_error(&e);
                 process::exit(1);
             }
         }
@@ -237,7 +248,7 @@ fn main() {
     {
         Ok(()) => {}
         Err(error) => {
-            eprintln!("zen: {error}");
+            eprint_error(&error.to_string());
             process::exit(1);
         }
     }

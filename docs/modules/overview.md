@@ -60,6 +60,7 @@ All of the following are global dicts — no import required.
 | `cryptography` | Fernet symmetric encryption | `cryptography.fernet.encrypt(...)` |
 | `hashlib` | Hashing (sha256, md5, sha1, ...) | `hashlib.sha256("data")` |
 | `uuid` | UUID generation | `uuid.uuid4()` |
+| `x509` | Offline certificate inspection | `x509.parse_pem(pem)["subject"]` |
 
 ### Files & paths
 
@@ -94,6 +95,7 @@ All of the following are global dicts — no import required.
 | `telnet` | Telnet client | `telnet.connect("host")` |
 | `dns` | DNS resolver | `dns.resolve("example.com")` |
 | `ssh` | SSH/SCP wrapper | `ssh.run("host", "ls")` |
+| `tls` | Live TLS certificate fetching | `tls.fetch("example.com", 443)` |
 
 ### System / security / automation
 
@@ -176,7 +178,8 @@ print(datetime.weekday(now))
 - **Importing a non-existent module** → `module not found`. Only registered
   natives, `std/*.z`, and local files are resolvable.
 - **Forgetting modules are dicts** — `fs.read` is `fs` (a dict) indexed by
-  `"read"`. Missing methods surface as `dictionary has no method: X`.
+  `"read"`. Missing functions surface as ``module `fs` has no function: `X` ``
+  with a did-you-mean hint (plain dicts say `dictionary has no method`).
 - **Including the same file twice** — `include` re-executes the file (no
   caching), which can cause redefinition errors in large projects.
 
