@@ -92,11 +92,6 @@ pub static EXPLANATIONS: &[Explanation] = &[
         body: "A name is read before anything binds it. Unlike the runtime NameError (Z0404), this fires at compile time when the compiler can prove the name is unknown.\n\nBad:\n    print total   # never declared\n\nGood:\n    var total = 0\n    print total\n\nAlso check spelling, and import the module that defines it.",
     },
     Explanation {
-        code: "Z0302",
-        title: "redeclared variable",
-        body: "The same name is declared twice in one scope. Assign without `var`/`let` to update an existing binding.\n\nBad:\n    var x = 1\n    var x = 2\n\nGood:\n    var x = 1\n    x = 2",
-    },
-    Explanation {
         code: "Z0303",
         title: "cannot assign to constant",
         body: "`const` bindings are frozen at declaration. If the value must change, declare it with `var` instead.\n\nBad:\n    const limit = 10\n    limit = 20\n\nGood:\n    var limit = 10\n    limit = 20",
@@ -110,11 +105,6 @@ pub static EXPLANATIONS: &[Explanation] = &[
         code: "Z0305",
         title: "continue outside of loop",
         body: "`continue` only makes sense inside `for`/`while` — it means \"skip to the next iteration\", and there is no iteration here.",
-    },
-    Explanation {
-        code: "Z0306",
-        title: "return outside of function",
-        body: "A bare `return` at the top level of a file has nowhere to return to. Top-level `return` is only valid in `zen -e` and the REPL; in a file, wrap the code in `func main()` or just let the value be the program's result.",
     },
     Explanation {
         code: "Z0307",

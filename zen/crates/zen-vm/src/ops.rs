@@ -101,7 +101,7 @@ pub fn arith(op: Arith, l: Value, r: Value) -> VmResult<Value> {
             return Ok(new_set(out));
         }
     }
-    if op == Arith::Add && (l.is_string() || r.is_string()) {
+    if op == Arith::Add && l.is_string() && r.is_string() {
         return string_add(l, r);
     }
     if op == Arith::Mul {

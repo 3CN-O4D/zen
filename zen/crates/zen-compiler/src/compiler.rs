@@ -162,6 +162,9 @@ struct Compiler<'a> {
     /// or `continue` that leaves them must retire their handlers, otherwise a
     /// dead handler would outrank a live one further out.
     try_depth: usize,
+    /// Nesting depth of function compilation; 0 means we are at module scope
+    /// and a `return` statement is invalid.
+    fn_depth: usize,
     /// `try_depth` where each enclosing loop was entered, innermost last. A jump
     /// out of a loop only retires the handlers established inside it.
     loop_try_bases: Vec<usize>,
@@ -181,6 +184,7 @@ impl<'a> Compiler<'a> {
             module_globals: Vec::new(),
             module_global_map: std::collections::HashMap::new(),
             try_depth: 0,
+            fn_depth: 0,
             loop_try_bases: Vec::new(),
             star_globals: Vec::new(),
         }
@@ -774,6 +778,7 @@ impl<'a> Compiler<'a> {
         if self.children.len() > u8::MAX as usize {
             return Err(CompileError::TooManyConstants { span });
         }
+        self.fn_depth += 1;
         let idx = self.children.len() as u8;
         self.children.push(placeholder_proto());
 
@@ -848,6 +853,7 @@ impl<'a> Compiler<'a> {
             }
         }
         let frame = self.funcs.pop().expect("function frame");
+        self.fn_depth = self.fn_depth.saturating_sub(1);
         self.try_depth = saved_try_depth;
         self.loop_try_bases = saved_loop_try_bases;
         let descriptors = frame.resolver.pending_upvalues.clone();

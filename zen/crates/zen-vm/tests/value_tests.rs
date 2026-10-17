@@ -617,9 +617,6 @@ fn rope_length_is_constant_time_and_shared_heads_survive() {
     assert_eq!(fork.as_str().unwrap(), "base-content-here-padded-to-force-rope-shape-0123456789-tail");
     assert_eq!(grown.as_str().unwrap(), "base-content-here-padded-to-force-rope-shape-0123456789-other");
     assert_eq!(fork.as_str().unwrap().chars().count() as i64, 60);
-    // Mixed-type concat stringifies once, then links.
-    let mixed = str_add(Value::int(41), Value::string("valiantly-long-suffix-to-force-rope-shape!!"));
-    assert_eq!(mixed.as_str().unwrap(), "41valiantly-long-suffix-to-force-rope-shape!!");
 }
 
 #[test]

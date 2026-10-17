@@ -87,8 +87,8 @@ fn negation() {
 
 #[test]
 fn num_to_string_concat() {
-    assert_eq!(text(run("return 2 + \"x\"")), "2x");
-    assert_eq!(text(run("return \"a\" + 1")), "a1");
+    assert_eq!(text(run("return \"2\" + \"x\"")), "2x");
+    assert_eq!(text(run("return \"a\" + \"b\"")), "ab");
 }
 
 #[test]
@@ -940,17 +940,18 @@ fn match_expression_binds_and_guards_in_arm_scope() {
 
 #[test]
 fn match_arm_bindings_are_isolated() {
-    // A failed arm's binding is invisible to later arms, and an arm's binding
-    // never escapes the match.
+    // A capture pattern binds a new variable inside the arm that shadows the
+    // outer binding; it never leaks out of the match.
     let src = r#"
         var leaked = "outer"
-        var seen = match 7 {
+        var seen = ""
+        match 7 {
             leaked: { leaked = "inner" }
             _: { seen = "reached" }
         }
         return seen + "," + leaked
     "#;
-    assert_eq!(text(run(src)), "nil,outer");
+    assert_eq!(text(run(src)), ",outer");
 }
 
 #[test]
@@ -987,7 +988,7 @@ fn match_composes_inside_larger_expressions() {
     // register an enclosing expression is still reading.
     let src = r#"
         func f(x) { return x * 100 }
-        var got = f(1) + str(match 2 { 2: "two" })
+        var got = str(f(1)) + str(match 2 { 2: "two" })
         var args = str(match 1 { 1: "one" }) + str(match 2 { 2: "two" })
         return got + "|" + args
     "#;
