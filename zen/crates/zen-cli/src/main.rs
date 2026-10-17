@@ -15,7 +15,14 @@ use std::process;
 
 fn main() {
     if let Err(e) = cli::run() {
-        eprintln!("{e}");
+        // Rustc-style diagnostics carry their own header/span/notes — print
+        // them verbatim. Plain messages get the `zen:` prefix so every
+        // failure is clearly from the tool, never a bare fragment.
+        if e.starts_with("\x1b[1;31merror") {
+            eprintln!("{e}");
+        } else {
+            eprintln!("zen: {e}");
+        }
         process::exit(1);
     }
 }

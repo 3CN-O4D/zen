@@ -151,6 +151,11 @@ fn ensure_python_deps(entry: &str, linked: &linker::LinkedProgram) -> Result<(),
 fn explain_command(args: &[String]) -> Result<(), String> {
     use crate::explain::{band_members, lookup, normalize, rust_redirect, EXPLANATIONS};
     let arg = args.first().map(String::as_str).unwrap_or("");
+    // No code at all: show the full registry instead of a usage error — the
+    // most useful default for a discovery-oriented command.
+    if arg.is_empty() {
+        return explain_command(&["--list".to_string()]);
+    }
     if arg == "--list" || arg == "list" {
         println!("Zen error codes (see `zen explain <code>` for detail):\n");
         let mut band = String::new();
@@ -181,8 +186,7 @@ fn explain_command(args: &[String]) -> Result<(), String> {
         return Err(format!(
             "usage: zen explain <code> (e.g. `zen explain Z0308`); `zen explain --list` shows all codes"
         ));
-    };
-    match lookup(&canonical) {
+    };    match lookup(&canonical) {
         Some(e) => {
             println!("error[{code}]: {title}\n", code = e.code, title = e.title);
             println!("{}", e.body);
