@@ -72,7 +72,8 @@ pub fn link(entry_path: impl AsRef<Path>) -> Result<LinkedProgram, String> {
     let entry_path = entry_path.as_ref();
     let display = entry_path.to_string_lossy().to_string();
     let source =
-        fs::read_to_string(entry_path).map_err(|e| format!("cannot read {}: {}", display, e))?;
+        fs::read_to_string(entry_path)
+            .map_err(|e| format!("Z0325: cannot read {}: {}", display, e))?;
     link_program(display, source, Some(entry_path), &HashMap::new())
 }
 
@@ -124,7 +125,7 @@ pub fn link_program(
                     modules.push((name, unit.clone()));
                     continue;
                 }
-                return Err(format!("module '{name}' not found"));
+                return Err(format!("Z0324: module '{name}' not found"));
             }
         };
         let module = compile_source(&path, &src)?;

@@ -201,6 +201,16 @@ pub static EXPLANATIONS: &[Explanation] = &[
         title: "attempt to divide by zero (static)",
         body: "The `check` pass found a division (or modulo) by a literal `0` — provably wrong before the program ever runs. This is distinct from Z0406, the *runtime* divide-by-zero for values only known at runtime.\n\nBad:\n    var x = 10 / 0\n\nGood:\n    var x = 10 / d   # check d != 0 first if it can be zero",
     },
+    Explanation {
+        code: "Z0324",
+        title: "module not found",
+        body: "The linker could not resolve an `import`ed module to a source file. Check the spelling, make sure the file is on the import path (entry directory, then `std/`, then project root), and that the filename matches the module name exactly.\n\nBad:\n    import nonexistent\n\nGood:\n    import fs\n    import ./local_module",
+    },
+    Explanation {
+        code: "Z0325",
+        title: "cannot read source file",
+        body: "The linker found the module path but could not read the file — usually a permissions issue or a stale path. Check the file exists and is readable.\n\nBad:\n    import /root/secret.z   # permission denied\n\nGood:\n    import ./config   # readable relative file",
+    },
     // ── Z04: runtime ──────────────────────────────────────────────────
     Explanation {
         code: "Z0401",
@@ -286,6 +296,17 @@ pub static EXPLANATIONS: &[Explanation] = &[
         code: "Z0417",
         title: "cannot cross the Python boundary",
         body: "Only nil, bool, int, float, string, bytes, and flat lists/dicts of those cross by value (tuples arrive as lists); dict keys must be strings. Everything else — instances, closures — either travels as an opaque handle or is rejected outright, never silently coerced.\n\nBad:\n    json.dumps({1: \"a\"})   # int key\n    json.dumps(my_func)    # closures cannot cross\n\nGood:\n    json.dumps({\"1\": \"a\"})",
+    },
+    // ── Z05: command line ───────────────────────────────────────────────
+    Explanation {
+        code: "Z0501",
+        title: "usage error",
+        body: "The command was invoked with the wrong arguments. See `zen help` for the full command list, or `zen explain --list` for every error code.\n\nBad:\n    zen run          # missing file argument\n\nGood:\n    zen run script.z\n    zen explain Z0308",
+    },
+    Explanation {
+        code: "Z0502",
+        title: "unknown command",
+        body: "The subcommand is not recognized. Run `zen help` to see every available command.\n\nBad:\n    zen frobnicate\n\nGood:\n    zen run script.z\n    zen explain Z0308\n    zen repl",
     },
 ];
 

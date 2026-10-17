@@ -21,13 +21,13 @@ pub fn run() -> Result<(), String> {
         "run" => run_command(&args[1..]),
         "-m" => {
             if args.len() < 2 {
-                return Err("usage: zen -m <module> [args...]".into());
+                return Err(format!("Z0501: usage: zen -m <module> [args...]"));
             }
             run_module_as_main(&args[1], &args[2..])
         }
         "-e" => {
             if args.len() < 2 {
-                return Err("usage: zen -e <code>".into());
+                return Err(format!("Z0501: usage: zen -e <code>"));
             }
             run_source(&args[1])
         }
@@ -48,7 +48,7 @@ pub fn run() -> Result<(), String> {
             println!("zen 3.0.0");
             Ok(())
         }
-        _ => Err(format!("unknown command: {}", args[0])),
+        _ => Err(format!("Z0502: unknown command: {}", args[0])),
     }
 }
 
@@ -110,9 +110,29 @@ fn zen_string_literal(s: &str) -> String {
     out
 }
 
+/// Format a top-level error for display. Rustc-style diagnostics (ANSI
+/// escape prefix) print verbatim; Z-coded errors print as
+/// `error[Z####]: message`; everything else gets the `zen:` prefix.
+/// Callers pass raw error strings (possibly `Z####: message` prefixed);
+/// this is applied exactly once in [`main`](crate::main::main).
+pub fn format_error(e: &str) -> String {
+    if e.starts_with("\x1b[1;31merror") {
+        e.to_string()
+    } else if let Some(rest) = e.strip_prefix('Z') {
+        // Z-coded error: `Z0324: module 'foo' not found` →
+        // `error[Z0324]: module 'foo' not found`
+        let code_end = rest.find(':').map_or(rest.len(), |i| i);
+        let code = &rest[..code_end];
+        let message = rest[code_end..].trim_start_matches(':').trim_start();
+        format!("error[Z{code}]: {message}")
+    } else {
+        format!("zen: {e}")
+    }
+}
+
 fn run_command(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
-        return Err("usage: zen run <file>".into());
+        return Err(format!("Z0501: usage: zen run <file>"));
     }
     let linked = linker::link(&args[0])?;
     ensure_python_deps(&args[0], &linked)?;
@@ -269,7 +289,8 @@ fn attach_python(_vm: &mut Vm) {}
 /// file, so the linker's path-based module search applies unchanged.
 fn run_source(code: &str) -> Result<(), String> {
     let path = std::env::temp_dir().join(format!("zen_eval_{}.z", std::process::id()));
-    std::fs::write(&path, code).map_err(|e| format!("-e: {e}"))?;
+    std::fs::write(&path, code)
+        .map_err(|e| format!("Z0325: cannot write temp file: {e}"))?;
     let result = run_command(&[path.to_string_lossy().into_owned()]);
     let _ = std::fs::remove_file(&path);
     result
@@ -277,10 +298,11 @@ fn run_source(code: &str) -> Result<(), String> {
 
 fn check_command(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
-        return Err("usage: zen check <file>".into());
+        return Err(format!("Z0501: usage: zen check <file>"));
     }
-    let source =
-        std::fs::read_to_string(&args[0]).map_err(|e| format!("cannot read {}: {e}", args[0]))?;
+    let source = std::fs::read_to_string(&args[0]).map_err(|e| {
+        format!("Z0325: cannot read {}: {e}", args[0])
+    })?;
     // Static checks that need only the AST (division by a literal zero).
     crate::check::check_source(&args[0], &source)?;
     // Full compile: undefined names, structural errors, unresolved imports.
@@ -303,17 +325,18 @@ fn lint_command(args: &[String]) -> Result<(), String> {
             }
             other => {
                 if path.is_some() {
-                    return Err("usage: zen lint [--strict] <file>".into());
+                    return Err(format!("Z0501: usage: zen lint [--strict] <file>"));
                 }
                 path = Some(other.to_string());
             }
         }
     }
     let Some(path) = path else {
-        return Err("usage: zen lint [--strict] <file>".into());
+        return Err(format!("Z0501: usage: zen lint [--strict] <file>"));
     };
-    let source =
-        std::fs::read_to_string(&path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let source = std::fs::read_to_string(&path).map_err(|e| {
+        format!("Z0325: cannot read {path}: {e}")
+    })?;
     let warnings = crate::lint::lint_source(&path, &source)?;
     if warnings.is_empty() {
         println!("{}: no warnings", path);
@@ -342,7 +365,9 @@ fn build_command(args: &[String]) -> Result<(), String> {
                 i += 1;
                 output = Some(
                     args.get(i)
-                        .ok_or("usage: zen build <file> [-o out]")?
+                        .ok_or_else(|| {
+                            format!("Z0501: usage: zen build <file> [-o out]")
+                        })?
                         .clone(),
                 );
             }
@@ -353,7 +378,7 @@ fn build_command(args: &[String]) -> Result<(), String> {
             }
             other => {
                 if source.is_some() {
-                    return Err("usage: zen build <file> [-o out]".into());
+                    return Err(format!("Z0501: usage: zen build <file> [-o out]"));
                 }
                 source = Some(other.to_string());
             }
@@ -361,7 +386,7 @@ fn build_command(args: &[String]) -> Result<(), String> {
         i += 1;
     }
     let Some(source) = source else {
-        return Err("usage: zen build <file> [-o out]".into());
+        return Err(format!("Z0501: usage: zen build <file> [-o out]"));
     };
     let output = output.unwrap_or_else(|| default_output_name(&source));
     crate::build::build(&source, &output)
@@ -396,7 +421,9 @@ fn test_command(args: &[String]) -> Result<(), String> {
                 jobs = args
                     .get(i)
                     .and_then(|s| s.parse().ok())
-                    .ok_or("usage: zen test [filter...] [--jobs N]")?;
+                    .ok_or_else(|| {
+                        format!("Z0501: usage: zen test [filter...] [--jobs N]")
+                    })?;
             }
             "--help" | "-h" => {
                 println!("usage: zen test [filter...] [--jobs N]");
@@ -409,7 +436,7 @@ fn test_command(args: &[String]) -> Result<(), String> {
     }
     let failures = crate::test_runner::run_tests(&filter, jobs)?;
     if failures > 0 {
-        return Err(format!("{failures} test(s) failed"));
+        return Err(format!("Z0501: {failures} test(s) failed"));
     }
     Ok(())
 }
@@ -429,11 +456,11 @@ fn fmt_command(args: &[String]) -> Result<(), String> {
         }
     }
     if paths.is_empty() {
-        return Err("usage: zen fmt [--check] <file|dir>...".into());
+        return Err(format!("Z0501: usage: zen fmt [--check] <file|dir>..."));
     }
     let files = crate::fmt::collect_files(&paths)?;
     if files.is_empty() {
-        return Err("fmt: no .z files found".into());
+        return Err(format!("Z0501: fmt: no .z files found"));
     }
     if check {
         let mut dirty = Vec::new();
