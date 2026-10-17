@@ -106,11 +106,14 @@ fn attaching_a_tier_precedes_an_explicit_return() {
         "json",
         "ZEN_PURE = true\n\
          \n\
-         let n = 5\n\
+         func init() {\n\
+         \x20   let n = 5\n\
+         \x20   if n > 1 {\n\
+         \x20\x20   return\n\
+         \x20   }\n\
+         }\n\
          \n\
-         if n > 1 {\n\
-         \x20   return\n\
-         }\n",
+         let n = 5\n",
     );
     let entry = s.entry("main.z", "import json\nprint(json.n)\n");
 

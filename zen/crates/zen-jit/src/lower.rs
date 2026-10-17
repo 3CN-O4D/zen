@@ -389,6 +389,10 @@ struct Lower<'a, 'b> {
     /// OSR entry header: when `Some(h)`, load the full window and start at
     /// the loop-header block `h` instead of falling through at pc 0.
     osr_entry: Option<usize>,
+    /// True when `regs[i]` holds a raw i64 (unboxed int) instead of a
+    /// NaN-boxed u64. Unboxed values skip sign_extend48/encode_int on
+    /// arithmetic and are only boxed at call/return/memory boundaries.
+    unboxed: Vec<bool>,
 }
 
 impl<'a, 'b> Lower<'a, 'b> {
@@ -537,6 +541,7 @@ impl<'a, 'b> Lower<'a, 'b> {
             feedback: &snap.feedback,
             ic_slots: &snap.ic_slots,
             osr_entry,
+            unboxed: vec![false; max_reg],
         })
     }
 
@@ -689,7 +694,8 @@ impl<'a, 'b> Lower<'a, 'b> {
         let rb = self.rbase();
         for i in 0..self.max_reg {
             if let Ok(v) = self.reg(i) {
-                self.b.ins().store(MemFlagsData::new(), v, rb, (i * 8) as i32);
+                let boxed = self.box_val(v, Some(i));
+                self.b.ins().store(MemFlagsData::new(), boxed, rb, (i * 8) as i32);
             }
         }
     }
@@ -698,6 +704,32 @@ impl<'a, 'b> Lower<'a, 'b> {
 
     fn iconst(&mut self, bits: u64) -> ClValue {
         self.b.ins().iconst(types::I64, bits as i64)
+    }
+
+    // ── unboxed integer helpers ───────────────────────────────────────────
+
+    /// True when register `i` holds a raw i64 (unboxed int) instead of a
+    /// NaN-boxed u64.
+    fn is_unboxed(&self, i: usize) -> bool {
+        self.unboxed.get(i).copied().unwrap_or(false)
+    }
+
+    /// Mark register `i` as holding a raw i64 (unboxed) or NaN-boxed u64.
+    fn set_unboxed_flag(&mut self, i: usize, val: bool) {
+        if i < self.unboxed.len() {
+            self.unboxed[i] = val;
+        }
+    }
+
+    /// If register `i` holds an unboxed raw i64, NaN-box it as an int. If it
+    /// is already boxed, return it unchanged.
+    fn box_val(&mut self, v: ClValue, reg_idx: Option<usize>) -> ClValue {
+        if let Some(i) = reg_idx {
+            if self.is_unboxed(i) {
+                return self.encode_int(v);
+            }
+        }
+        v
     }
 
     fn truthy(&mut self, v: ClValue) -> ClValue {
@@ -953,7 +985,8 @@ impl<'a, 'b> Lower<'a, 'b> {
             }
             Opcode::Return => {
                 let v = self.reg(a)?;
-                self.b.ins().store(MemFlagsData::new(), v, self.p_out, 0);
+                let boxed = self.box_val(v, Some(a));
+                self.b.ins().store(MemFlagsData::new(), boxed, self.p_out, 0);
                 let zero = self.b.ins().iconst(types::I32, 0);
                 self.b.ins().return_(&[zero]);
                 self.terminated = true;
@@ -966,12 +999,15 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn set(&mut self, a: usize, v: ClValue) {
         if a < self.regs.len() {
             self.regs[a] = v;
+            self.set_unboxed_flag(a, false);
         }
     }
 
     fn lower_arith(&mut self, pc: usize, a: usize, b: usize, c: usize, op: Opcode) -> Result<(), String> {
         let l = self.reg(b)?;
         let r = self.reg(c)?;
+        // Tag checks are only needed for non-int_only paths; int_only skips
+        // them entirely (feedback guarantees int operands).
         let gl = self.is_int(l);
         let gr = self.is_int(r);
         let gnl = self.is_number(l);
@@ -2068,14 +2104,16 @@ impl<'a, 'b> Lower<'a, 'b> {
         // (native or interpreter) reads them from memory.
         let rb = self.rbase();
         let callee_v = self.reg(first - 1)?;
+        let callee_boxed = self.box_val(callee_v, Some(first - 1));
         self.b
             .ins()
-            .store(MemFlagsData::new(), callee_v, rb, ((first - 1) * 8) as i32);
+            .store(MemFlagsData::new(), callee_boxed, rb, ((first - 1) * 8) as i32);
         for i in 0..argc {
             let v = self.reg(first + i)?;
+            let boxed = self.box_val(v, Some(first + i));
             self.b
                 .ins()
-                .store(MemFlagsData::new(), v, rb, ((first + i) * 8) as i32);
+                .store(MemFlagsData::new(), boxed, rb, ((first + i) * 8) as i32);
         }
 
         let cont = self.ensure_block(pc + 1);
