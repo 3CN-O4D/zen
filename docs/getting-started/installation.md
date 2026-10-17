@@ -23,8 +23,22 @@ wget https://github.com/3CN-O4D/zen/releases/latest/download/zen_<version>_amd64
 sudo dpkg -i zen_<version>_amd64.deb
 sudo apt-get install -f  # fix any missing dependencies
 
-# Verify
+# Verify (binary + stdlib land in /usr/bin and /usr/share/zen)
 zen --version
+```
+
+Architectures: `amd64` (x86_64), `arm64` (aarch64), `armhf` (ARMv7),
+`armel` (ARMv6) — pick the matching `zen_<version>_<arch>.deb`.
+
+### Linux / macOS tarball
+
+Each release also ships `zen-<os>-<arch>.tar.gz` with the binary plus the
+standard library. Extract and run the bundled installer:
+
+```bash
+tar xzf zen-linux-x86_64.tar.gz
+cd zen-linux-x86_64
+sudo ./install.sh            # PREFIX=/opt/zen ./install.sh to relocate
 ```
 
 ### Fedora / RHEL (`.rpm`)

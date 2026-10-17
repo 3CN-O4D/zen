@@ -278,7 +278,57 @@ ZEDEOF
     log "Installed Zed config -> $zed_config/languages/zen.json"
 }
 
-# ─── Nano ─────────────────────────────────────────────────────────────────
+# ─── Opencode ─────────────────────────────────────────────────────────────
+setup_opencode() {
+    echo ""
+    echo "── Opencode ──"
+
+    local opencode_config="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+    if [ ! -d "$opencode_config" ]; then
+        warn "Opencode config directory not found at $opencode_config"
+        return
+    fi
+
+    log "Found Opencode config at $opencode_config"
+
+    # Opencode uses VS Code extensions - we can symlink or copy the VS Code extension
+    local ext_dir="$opencode_config/extensions"
+    local zen_ext_dir="$ext_dir/zen-language"
+    mkdir -p "$zen_ext_dir/syntaxes"
+    mkdir -p "$zen_ext_dir"
+
+    cp "$EDITOR_DIR/vscode/package.json" "$zen_ext_dir/"
+    cp "$EDITOR_DIR/vscode/language-configuration.json" "$zen_ext_dir/"
+    cp "$EDITOR_DIR/vscode/syntaxes/zen.tmLanguage.json" "$zen_ext_dir/syntaxes/"
+
+    log "Installed Zen syntax for Opencode -> $zen_ext_dir"
+}
+
+# ─── Gemini CLI ───────────────────────────────────────────────────────────
+setup_gemini() {
+    echo ""
+    echo "── Gemini CLI ──"
+
+    local gemini_config="${XDG_CONFIG_HOME:-$HOME/.config}/gemini"
+    if [ ! -d "$gemini_config" ]; then
+        warn "Gemini CLI config directory not found at $gemini_config"
+        return
+    fi
+
+    log "Found Gemini CLI config at $gemini_config"
+
+    # Gemini CLI may use VS Code extensions or have its own extension mechanism
+    local ext_dir="$gemini_config/extensions"
+    local zen_ext_dir="$ext_dir/zen-language"
+    mkdir -p "$zen_ext_dir/syntaxes"
+    mkdir -p "$zen_ext_dir"
+
+    cp "$EDITOR_DIR/vscode/package.json" "$zen_ext_dir/"
+    cp "$EDITOR_DIR/vscode/language-configuration.json" "$zen_ext_dir/"
+    cp "$EDITOR_DIR/vscode/syntaxes/zen.tmLanguage.json" "$zen_ext_dir/syntaxes/"
+
+    log "Installed Zen syntax for Gemini CLI -> $zen_ext_dir"
+}
 setup_nano() {
     echo ""
     echo "── Nano ──"
@@ -343,6 +393,8 @@ main() {
             setup_emacs
             setup_zed
             setup_nano
+            setup_opencode
+            setup_gemini
             setup_tree_sitter
             ;;
         vscode)   setup_all_vscode ;;
@@ -352,8 +404,10 @@ main() {
         emacs)    setup_emacs ;;
         zed)      setup_zed ;;
         nano)     setup_nano ;;
+        opencode) setup_opencode ;;
+        gemini)   setup_gemini ;;
         *)
-            echo "Usage: $0 [all|vscode|vim|helix|sublime|emacs|zed|nano]"
+            echo "Usage: $0 [all|vscode|vim|helix|sublime|emacs|zed|nano|opencode|gemini]"
             exit 1
             ;;
     esac
