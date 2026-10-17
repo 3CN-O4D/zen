@@ -40,7 +40,7 @@ Highlights:
 Engine docs live in [`zen/docs/`](zen/docs/) (blueprint, principles,
 architecture, milestones).
 
-## The 2.x stable line
+## The 2.x stable line (deprecated)
 
 Location: repo root (current: `v2.4.0`). Install from the `.deb` in
 [releases](https://github.com/3CN-O4D/zen/releases):
@@ -51,6 +51,10 @@ zen --version
 ```
 
 Or from source (`./build.sh install`; other flows in [`scripts/`](scripts/)).
+
+> ⚠️ **Deprecated:** The 2.x line is in maintenance mode. All new development
+> happens in the `zen/` workspace (3.0). Use 2.x only for existing
+> deployments; new projects should start with 3.0.
 
 ```zen
 # batteries included, natives need no import
