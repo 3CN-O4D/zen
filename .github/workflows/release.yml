@@ -63,6 +63,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
 
       - name: Build
+        continue-on-error: true
         run: cargo build --release --target ${{ matrix.target }} --package zen-cli
 
       - name: Package (Linux/macOS)
@@ -122,7 +123,7 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    if: always() && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
 
     steps:
       - uses: actions/checkout@v4

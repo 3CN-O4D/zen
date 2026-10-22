@@ -397,7 +397,7 @@ pub fn dispatch(id: u16, args: &[Value], output: &mut String) -> VmResult<Option
             if r == -1 {
                 return Err(syserr("lseek"));
             }
-            Value::int_promote(r)
+            Value::int_promote(r as i64)
         }
         ID_DUP => {
             let fd = fd_arg(args, 0)?;
@@ -616,7 +616,7 @@ pub fn dispatch(id: u16, args: &[Value], output: &mut String) -> VmResult<Option
                 .ok_or_else(|| VmError::type_mismatch("number", secs_v))?;
             let req = libc::timespec {
                 tv_sec: secs as libc::time_t,
-                tv_nsec: ((secs - (secs as i64 as f64)) * 1e9) as i64,
+                tv_nsec: ((secs - (secs as i64 as f64)) * 1e9) as _,
             };
             let mut rem: libc::timespec = unsafe { std::mem::zeroed() };
             if unsafe { libc::nanosleep(&req, &mut rem) } == -1 {
@@ -1072,7 +1072,7 @@ pub fn dispatch(id: u16, args: &[Value], output: &mut String) -> VmResult<Option
             if r == -1 {
                 return Err(syserr("sysconf"));
             }
-            Value::int_promote(r)
+            Value::int_promote(r as i64)
         }
         ID_TIMES => {
             let mut t: libc::tms = unsafe { std::mem::zeroed() };
@@ -1213,7 +1213,7 @@ fn sys_syscall(args: &[Value]) -> VmResult<Value> {
     if r == -1 {
         return Err(syserr("syscall"));
     }
-    Ok(Value::int_promote(r))
+    Ok(Value::int_promote(r as i64))
 }
 
 fn getsizeof(v: Value) -> Value {
