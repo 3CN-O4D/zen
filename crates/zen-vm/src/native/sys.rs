@@ -24,6 +24,7 @@ use crate::gc::{new_dict, new_list};
 use crate::native::{host_module_mixed, HostExport};
 use crate::ops::string_arg;
 use crate::value::{DictKey, Value};
+use crate::native::platform::*;
 
 // ── id map ──────────────────────────────────────────────────────────────────
 //

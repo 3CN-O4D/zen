@@ -18,15 +18,16 @@ use crate::value::{DictKey, Tag, Value};
 use std::cell::RefCell;
 
 pub mod crypto;
+pub mod platform;
 pub(crate) mod sqlite;
 pub(crate) mod qr;
 pub(crate) mod wa;
 pub(crate) mod ffmpeg;
 pub(crate) mod hydra;
 pub(crate) mod std_tiers;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod sys;
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
 pub(crate) mod sys_stub;
 pub(crate) mod ffi;
 pub(crate) mod socket;
@@ -624,9 +625,9 @@ pub fn native_modules() -> HashMap<String, ModuleUnit> {
         ("wa", wa::module()),
         ("ffmpeg", ffmpeg::module()),
         ("hydra", hydra::module()),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         ("sys", sys::module()),
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
         ("sys", sys_stub::module()),
     ];
     let mut map: HashMap<String, ModuleUnit> =

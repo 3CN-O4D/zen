@@ -1,26 +1,22 @@
-//! Stub sys module for non-Linux platforms.
+//! Stub sys module for Windows.
 //!
-//! The full `sys` module exposes raw POSIX/Linux syscalls that are not
-//! available on all platforms. This stub provides the same API surface
-//! (dispatch, module) but returns "not supported" for every call.
+//! The full `sys` module exposes raw POSIX/Linux system calls that are not
+//! available on Windows. This stub provides the same API surface (dispatch, module)
+//! but returns "not supported" for every call, allowing the code to compile.
 
 use crate::bytecode::ModuleUnit;
 use crate::errors::{VmError, VmResult};
 use crate::value::Value;
 
-pub const ID_SCAL: u16 = 400;
-
 pub fn dispatch(_id: u16, _args: &[Value], _output: &mut String) -> VmResult<Option<Value>> {
-    Err(VmError::NativeError(
-        "sys module is not supported on this platform".into(),
-    ))
+    Err(VmError::NativeError("sys module is not supported on Windows".into()))
 }
 
 pub fn module() -> ModuleUnit {
-    // Build a minimal empty module unit
     use crate::bytecode::{FunctionProto, Instruction, ModuleUnit, Opcode};
     use std::cell::RefCell;
     use std::sync::OnceLock;
+    
     let main = FunctionProto {
         name: "<module>".to_string(),
         params: Vec::new(),
