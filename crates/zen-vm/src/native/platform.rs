@@ -2,6 +2,7 @@
 //!
 //! Provides cross-platform implementations of system calls using Rust's
 //! standard library where possible, falling back to raw libc syscalls on Linux/macOS.
+//! Windows uses windows-sys crate for native APIs.
 //! Platform is resolved at compile time via `#[cfg]` - no runtime overhead.
 
 use std::ffi::{CStr, CString};
@@ -13,14 +14,80 @@ use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 #[cfg(target_os = "windows")]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle};
 
-use crate::errors::{VmError, VmResult};
-use crate::value::Value;
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use libc;
 
 #[cfg(target_os = "windows")]
-use std::os::windows::fs::OpenOptionsExt;
+use windows_sys::Win32::Foundation::*;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::IO::*;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Threading::*;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::SystemServices::*;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Storage::FileSystem::*;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::ProcessStatus::*;
+
+use crate::errors::{VmError, VmResult};
+use crate::value::Value;
+
+// ── Windows constants (subset of libc equivalents) ────────────────────────
+
+#[cfg(target_os = "windows")]
+mod windows_consts {
+    use windows_sys::Win32::Foundation::*;
+    use windows_sys::Win32::System::IO::*;
+    use windows_sys::Win32::Storage::FileSystem::*;
+    
+    // File access flags (O_* equivalents)
+    pub const O_RDONLY: i32 = GENERIC_READ as i32;
+    pub const O_WRONLY: i32 = GENERIC_WRITE as i32;
+    pub const O_RDWR: i32 = (GENERIC_READ | GENERIC_WRITE) as i32;
+    pub const O_CREAT: i32 = 0x00000100; // FILE_CREATE
+    pub const O_TRUNC: i32 = 0x00000200; // FILE_TRUNCATE_EXISTING
+    pub const O_APPEND: i32 = 0x00000400; // FILE_APPEND_DATA
+    
+    // File share modes
+    pub const FILE_SHARE_READ: u32 = 0x00000001;
+    pub const FILE_SHARE_WRITE: u32 = 0x00000002;
+    pub const FILE_SHARE_DELETE: u32 = 0x00000004;
+    
+    // Creation dispositions
+    pub const OPEN_EXISTING: u32 = 3;
+    pub const CREATE_NEW: u32 = 1;
+    pub const CREATE_ALWAYS: u32 = 2;
+    pub const OPEN_ALWAYS: u32 = 4;
+    pub const TRUNCATE_EXISTING: u32 = 5;
+    
+    // File attributes
+    pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+    pub const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x08000000;
+    pub const FILE_FLAG_RANDOM_ACCESS: u32 = 0x10000000;
+    
+    // Seek methods
+    pub const FILE_BEGIN: u32 = 0;
+    pub const FILE_CURRENT: u32 = 1;
+    pub const FILE_END: u32 = 2;
+    
+    // Process
+    pub const PROCESS_ALL_ACCESS: u32 = 0x001F0FFF;
+    
+    // Wait
+    pub const INFINITE: u32 = 0xFFFFFFFF;
+    pub const WAIT_OBJECT_0: u32 = 0;
+    pub const WAIT_TIMEOUT: u32 = 258;
+    
+    // Signals (limited on Windows)
+    pub const SIGTERM: i32 = 15;
+    pub const SIGKILL: i32 = 9;
+    pub const SIGINT: i32 = 2;
+}
+
+// Re-export for platform-specific use
+#[cfg(target_os = "windows")]
+use windows_consts::*;
 
 // ── File operations ────────────────────────────────────────────────────────
 
@@ -46,23 +113,51 @@ pub fn open(path: &str, flags: i32, mode: u32) -> VmResult<i32> {
     #[cfg(target_os = "windows")]
     {
         use std::fs::OpenOptions;
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
         
         let mut opts = OpenOptions::new();
-        let access = if flags & libc::O_RDWR as i32 != 0 {
-            0x000F0000 // GENERIC_READ | GENERIC_WRITE
-        } else if flags & libc::O_WRONLY as i32 != 0 {
-            0x00040000 // GENERIC_WRITE
+        let mut access = 0u32;
+        let mut share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+        let mut creation = OPEN_EXISTING;
+        
+        if flags & O_RDWR as i32 != 0 {
+            access = GENERIC_READ | GENERIC_WRITE;
+        } else if flags & O_WRONLY as i32 != 0 {
+            access = GENERIC_WRITE;
         } else {
-            0x00080000 // GENERIC_READ
+            access = GENERIC_READ;
+        }
+        
+        if flags & O_CREAT as i32 != 0 {
+            if flags & O_TRUNC as i32 != 0 {
+                creation = CREATE_ALWAYS;
+            } else {
+                creation = OPEN_ALWAYS;
+            }
+        }
+        if flags & O_TRUNC as i32 != 0 {
+            creation = TRUNCATE_EXISTING;
+        }
+        
+        let c_path: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+        
+        let handle = unsafe {
+            CreateFileW(
+                c_path.as_ptr(),
+                access,
+                share,
+                std::ptr::null_mut(),
+                creation,
+                FILE_ATTRIBUTE_NORMAL,
+                HANDLE(0),
+            )
         };
         
-        let mut opts = OpenOptions::new();
-        opts.access_mode(access);
-        if flags & 0x00000100 != 0 { opts.create(true); } // O_CREAT
-        if flags & 0x00000200 != 0 { opts.truncate(true); } // O_TRUNC
-        
-        let file = opts.open(path).map_err(|e| VmError::NativeError(format!("open: {e}")))?;
-        Ok(file.into_raw_handle() as i32)
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(syserr("open"));
+        }
+        Ok(handle as i32)
     }
 }
 
@@ -78,9 +173,11 @@ pub fn close(fd: i32) -> VmResult<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        let handle = fd as *mut std::ffi::c_void;
-        let file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
-        drop(file);
+        use windows_sys::Win32::Foundation::*;
+        let result = unsafe { CloseHandle(HANDLE(fd as *mut _)) };
+        if result == 0 {
+            return Err(syserr("close"));
+        }
         Ok(())
     }
 }
@@ -97,12 +194,23 @@ pub fn read(fd: i32, buf: &mut [u8]) -> VmResult<usize> {
     }
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::io::FromRawHandle;
-        let handle = fd as *mut std::ffi::c_void;
-        let mut file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
-        let result = file.read(buf).map_err(|e| VmError::NativeError(format!("read: {e}")))?;
-        std::mem::forget(file);
-        Ok(result)
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        
+        let mut bytes_read: u32 = 0;
+        let result = unsafe {
+            ReadFile(
+                HANDLE(fd as *mut _),
+                buf.as_mut_ptr() as *mut _,
+                buf.len() as u32,
+                &mut bytes_read,
+                std::ptr::null_mut(),
+            )
+        };
+        if result == 0 {
+            return Err(syserr("read"));
+        }
+        Ok(bytes_read as usize)
     }
 }
 
@@ -118,12 +226,23 @@ pub fn write(fd: i32, buf: &[u8]) -> VmResult<usize> {
     }
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::io::FromRawHandle;
-        let handle = fd as *mut std::ffi::c_void;
-        let mut file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
-        let result = file.write(buf).map_err(|e| VmError::NativeError(format!("write: {e}")))?;
-        std::mem::forget(file);
-        Ok(result)
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        
+        let mut bytes_written: u32 = 0;
+        let result = unsafe {
+            WriteFile(
+                HANDLE(fd as *mut _),
+                buf.as_ptr() as *const _,
+                buf.len() as u32,
+                &mut bytes_written,
+                std::ptr::null_mut(),
+            )
+        };
+        if result == 0 {
+            return Err(syserr("write"));
+        }
+        Ok(bytes_written as usize)
     }
 }
 
@@ -139,18 +258,35 @@ pub fn lseek(fd: i32, offset: i64, whence: i32) -> VmResult<i64> {
     }
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::io::FromRawHandle;
-        let handle = fd as *mut std::ffi::c_void;
-        let mut file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
-        let pos = match whence {
-            0 => SeekFrom::Start(offset as u64),
-            1 => SeekFrom::Current(offset),
-            2 => SeekFrom::End(offset),
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        
+        let mut distance_low = offset as u32;
+        let mut distance_high = (offset >> 32) as i32;
+        
+        let move_method = match whence {
+            0 => FILE_BEGIN,
+            1 => FILE_CURRENT,
+            2 => FILE_END,
             _ => return Err(VmError::ValueError("invalid whence".into())),
         };
-        let result = file.seek(pos).map_err(|e| VmError::NativeError(format!("lseek: {e}")))?;
-        std::mem::forget(file);
-        Ok(result as i64)
+        
+        let new_pos = unsafe {
+            SetFilePointer(
+                HANDLE(fd as *mut _),
+                distance_low,
+                &mut distance_high,
+                move_method,
+            )
+        };
+        
+        if new_pos == INVALID_SET_FILE_POINTER {
+            let err = unsafe { GetLastError() };
+            if err != 0 {
+                return Err(syserr("lseek"));
+            }
+        }
+        Ok(((distance_high as i64) << 32) | (new_pos as i64))
     }
 }
 
@@ -166,7 +302,25 @@ pub fn dup(fd: i32) -> VmResult<i32> {
     }
     #[cfg(target_os = "windows")]
     {
-        Err(VmError::NativeError("dup not implemented on Windows".into()))
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::System::Threading::*;
+        
+        let mut new_handle = HANDLE(0);
+        let result = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                HANDLE(fd as *mut _),
+                GetCurrentProcess(),
+                &mut new_handle,
+                0,
+                FALSE,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if result == 0 {
+            return Err(syserr("dup"));
+        }
+        Ok(new_handle.0 as i32)
     }
 }
 
@@ -182,7 +336,25 @@ pub fn dup2(oldfd: i32, newfd: i32) -> VmResult<i32> {
     }
     #[cfg(target_os = "windows")]
     {
-        Err(VmError::NativeError("dup2 not implemented on Windows".into()))
+        // On Windows, close newfd first if valid, then dup oldfd to newfd
+        let _ = close(newfd);
+        let mut new_handle = HANDLE(0);
+        let result = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                HANDLE(oldfd as *mut _),
+                GetCurrentProcess(),
+                &mut new_handle,
+                0,
+                FALSE,
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if result == 0 {
+            return Err(syserr("dup2"));
+        }
+        // Note: We can't easily force the handle to a specific value on Windows
+        Ok(new_handle.0 as i32)
     }
 }
 
@@ -198,7 +370,24 @@ pub fn pipe() -> VmResult<(i32, i32)> {
     }
     #[cfg(target_os = "windows")]
     {
-        Err(VmError::NativeError("pipe not implemented on Windows".into()))
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        
+        let mut read_handle = HANDLE(0);
+        let mut write_handle = HANDLE(0);
+        let sa = std::ptr::null_mut();
+        let result = unsafe {
+            CreatePipe(
+                &mut read_handle,
+                &mut write_handle,
+                sa,
+                0,
+            )
+        };
+        if result == 0 {
+            return Err(syserr("pipe"));
+        }
+        Ok((read_handle.0 as i32, write_handle.0 as i32))
     }
 }
 
@@ -223,7 +412,7 @@ pub fn getpid() -> i32 {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     { unsafe { libc::getpid() } }
     #[cfg(target_os = "windows")]
-    { std::process::id() as i32 }
+    { (unsafe { GetCurrentProcessId() }) as i32 }
 }
 
 /// Get PPID
@@ -285,7 +474,19 @@ pub fn kill(pid: i32, sig: i32) -> VmResult<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        Err(VmError::NativeError("kill not implemented on Windows".into()))
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::System::Threading::*;
+        
+        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid as u32) };
+        if handle == HANDLE(0) {
+            return Err(syserr("kill"));
+        }
+        let result = unsafe { TerminateProcess(handle, 1) };
+        unsafe { CloseHandle(handle) };
+        if result == 0 {
+            return Err(syserr("kill"));
+        }
+        Ok(())
     }
 }
 
@@ -534,11 +735,34 @@ pub fn ftruncate(fd: i32, length: i64) -> VmResult<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::io::FromRawHandle;
-        let handle = fd as *mut std::ffi::c_void;
-        let mut file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
-        file.set_len(length as u64).map_err(|e| VmError::NativeError(format!("ftruncate: {e}")))?;
-        std::mem::forget(file);
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        
+        let mut distance_low = length as u32;
+        let mut distance_high = (length >> 32) as i32;
+        
+        let old_pos = unsafe { SetFilePointer(HANDLE(fd as *mut _), 0, std::ptr::null_mut(), FILE_CURRENT) };
+        if old_pos == INVALID_SET_FILE_POINTER {
+            let err = unsafe { GetLastError() };
+            if err != 0 {
+                return Err(syserr("ftruncate"));
+            }
+        }
+        
+        let new_pos = unsafe { SetFilePointer(HANDLE(fd as *mut _), length as u32, &mut ((length >> 32) as i32), FILE_BEGIN) };
+        if new_pos == INVALID_SET_FILE_POINTER {
+            let err = unsafe { GetLastError() };
+            if err != 0 {
+                return Err(syserr("ftruncate"));
+            }
+        }
+        
+        let result = unsafe { SetEndOfFile(HANDLE(fd as *mut _)) };
+        if result == 0 {
+            return Err(syserr("ftruncate"));
+        }
+        
+        unsafe { SetFilePointer(HANDLE(fd as *mut _), old_pos, std::ptr::null_mut(), FILE_BEGIN) };
         Ok(())
     }
 }
@@ -553,11 +777,13 @@ pub fn fsync(fd: i32) -> VmResult<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::io::FromRawHandle;
-        let handle = fd as *mut std::ffi::c_void;
-        let mut file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
-        file.flush().map_err(|e| VmError::NativeError(format!("fsync: {e}")))?;
-        std::mem::forget(file);
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        
+        let result = unsafe { FlushFileBuffers(HANDLE(fd as *mut _)) };
+        if result == 0 {
+            return Err(syserr("fsync"));
+        }
         Ok(())
     }
 }
@@ -615,7 +841,32 @@ pub fn waitpid(pid: i32, options: i32) -> VmResult<(i32, i32)> {
     }
     #[cfg(target_os = "windows")]
     {
-        Err(VmError::NativeError("waitpid not available on Windows".into()))
+        use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::System::Threading::*;
+        
+        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid as u32) };
+        if handle == HANDLE(0) {
+            return Err(syserr("waitpid"));
+        }
+        
+        let mut exit_code: u32 = 0;
+        let result = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+        if result == 0 {
+            unsafe { CloseHandle(handle) };
+            return Err(syserr("waitpid"));
+        }
+        
+        if exit_code == STILL_ACTIVE {
+            // Process still running, wait for it
+            let wait_result = unsafe { WaitForSingleObject(HANDLE(handle), INFINITE) };
+            if wait_result == WAIT_OBJECT_0 {
+                let mut exit_code: u32 = 0;
+                unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+            }
+        }
+        
+        unsafe { CloseHandle(handle) };
+        Ok((pid, exit_code as i32))
     }
 }
 

@@ -43,6 +43,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 qrcode = "0.14"
 libc = "0.2"
 libffi = "3.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_System_ProcessStatus", "Win32_System_SystemServices"] }
 libloading = "0.8"
 # CPython embedding for `pymport` (opt-in: needs libpython at build AND run
 # time). Off by default so every other build stays hermetic.
