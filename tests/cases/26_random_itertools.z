@@ -110,7 +110,7 @@ check(_seen["1"] == 1 && _seen["8"] == 1, "shuffle keeps elements")
 
 check(rd.hex(8).length() == 8, "hex length")
 check(rd.hex().length() == 16, "hex default length")
-check(str(rd.seed(42)) == "null", "seed returns null")
+check(str(rd.seed(42)) == "nil", "seed returns null")
 
 // Pure tier is deterministic under a fixed seed (native seed is a no-op).
 rd.seed(1234)

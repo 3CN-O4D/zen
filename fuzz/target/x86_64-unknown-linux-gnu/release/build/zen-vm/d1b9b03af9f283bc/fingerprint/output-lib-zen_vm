@@ -1,0 +1,1 @@
+{"$message_type":"unused_extern","lint_level":"force-warn","unused_extern_names":["aes_gcm","ahash","argon2","base64","chacha20poly1305","dashmap","ed25519_dalek","hyper","jsonwebtokens","pkcs8","rand","rsa","rustls","tokio","totp_rs","webpki_roots","x25519_dalek","x509_parser","zen_syntax"]}

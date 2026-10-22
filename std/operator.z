@@ -51,8 +51,21 @@ let or_ = fn(a, b) { return a or b }
 let xor = fn(a, b) {
     return a != b
 }
-let not_ = fn(a) { return not a }
-let truth = fn(a) { return not not a }
+let _truth_py = fn(a) {
+    // Python's `bool(a)`: nil/false, zero, and empties are falsey; everything
+    // else is truthy. Zen's own `not` treats `0` as truthy, so mirror Python
+    // explicitly here rather than leaning on `not not a`.
+    if a == null { return false }
+    if typeof a == "bool" { return a }
+    if typeof a == "int" or typeof a == "float" { return a != 0 }
+    let t = typeof a
+    if t == "string" or t == "list" or t == "dict" or t == "bytes" {
+        return len(a) > 0
+    }
+    return true
+}
+let not_ = fn(a) { return not _truth_py(a) }
+let truth = fn(a) { return _truth_py(a) }
 
 let is_ = fn(a, b) { return a == b }
 let is_not = fn(a, b) { return a != b }

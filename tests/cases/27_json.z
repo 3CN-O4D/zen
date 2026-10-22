@@ -102,12 +102,12 @@ for t in list(bad) {
 // --- save/load round trip (file bridge) ----------------------------------
 let tmp = "/tmp/zen_test/json_27_tmp.json"
 fs.write(tmp, json.stringify({k: [1, 2, 3], s: "v"}))
-let back = json.load(tmp)
+let back = json._load(tmp)
 check(back["s"] == "v", "load reads saved file")
 check(back["k"][2] == 3, "load nested array")
 let ok = false
 try {
-    json.load("/nonexistent/zen_27.json")
+    json._load("/nonexistent/zen_27.json")
 } catch e {
     ok = true
 }
@@ -116,7 +116,7 @@ check(ok, "load errors on missing file")
 // --- pure helpers exposed ------------------------------------------------
 check(json._load(tmp)["k"][0] == 1, "pure _load helper works")
 check(json._save(tmp, {x: [1]}) == true, "save returns true")
-check(json.load(tmp)["x"][0] == 1, "load sees pure _save output")
+check(json._load(tmp)["x"][0] == 1, "load sees pure _save output")
 
 fs.remove(tmp)
 

@@ -1,57 +1,82 @@
-"""Minimal mock FTP server for testing. Listens on 127.0.0.1:2121, creds admin/s3cret99."""
+#!/usr/bin/env python3
+"""Minimal FTP server for the Zen corpus (tests/cases/09_socket_hydra.z).
+
+Listens on 127.0.0.1:2121 and accepts exactly one credential pair:
+admin / s3cret99.  Any other password is rejected with a 530 reply, which is
+what the hydra module uses to classify an attempt as a failure.
+
+Usage:  python3 tests/mock_ftp.py [port]
+"""
+
 import socket
+import sys
 import threading
 
-HOST, PORT = "127.0.0.1", 2121
-USER, PASS = "admin", "s3cret99"
+HOST = "127.0.0.1"
+USER = "admin"
+PASSWORD = "s3cret99"
+BANNER = b"220 Zen mock FTP server ready.\r\n"
 
-def handle(conn, addr):
+
+def reply(conn, line: bytes) -> None:
+    conn.sendall(line + b"\r\n")
+
+
+def handle(conn: socket.socket) -> None:
+    conn.sendall(BANNER)
+    user = None
+    buf = b""
     try:
-        conn.sendall(b"220 MockFTP ready\r\n")
-        user_ok = False
-        buf = b""
+        conn.settimeout(10)
         while True:
-            data = conn.recv(1024)
-            if not data:
-                break
-            buf += data
-            while b"\r\n" in buf:
-                line, buf = buf.split(b"\r\n", 1)
-                cmd = line.decode(errors="replace").strip()
-                verb = cmd.split(" ")[0].upper() if cmd else ""
-                if verb == "USER":
-                    user_ok = cmd.split(" ", 1)[1] == USER if len(cmd) > 5 else False
-                    conn.sendall(b"331 Password required\r\n")
-                elif verb == "PASS":
-                    ok = user_ok and len(cmd) > 5 and cmd.split(" ", 1)[1] == PASS
-                    conn.sendall(b"230 Login successful\r\n" if ok else b"530 Login incorrect\r\n")
-                elif verb == "QUIT":
-                    conn.sendall(b"221 Bye\r\n")
-                    conn.close()
+            while b"\r\n" not in buf:
+                chunk = conn.recv(4096)
+                if not chunk:
                     return
-                elif verb in ("PWD", "SYST", "TYPE", "CWD", "PASV"):
-                    conn.sendall(b"257 \"/\" is current directory\r\n" if verb == "PWD" else b"200 OK\r\n")
-                elif verb == "LIST" or verb == "NLST":
-                    conn.sendall(b"150 Here comes the listing\r\n226 Transfer done\r\n")
+                buf += chunk
+            line, buf = buf.split(b"\r\n", 1)
+            text = line.decode("utf-8", "replace")
+            cmd = text.split(" ", 1)[0].upper()
+            if cmd == "USER":
+                user = text[5:] if len(text) > 5 else ""
+                reply(conn, b"331 Password required")
+            elif cmd == "PASS":
+                pw = text[5:] if len(text) > 5 else ""
+                if user == USER and pw == PASSWORD:
+                    reply(conn, b"230 User logged in")
                 else:
-                    conn.sendall(b"502 Not implemented\r\n")
-    except Exception:
+                    reply(conn, b"530 Login incorrect")
+            elif cmd == "QUIT":
+                reply(conn, b"221 Goodbye")
+                return
+            else:
+                reply(conn, b"500 Command not understood")
+    except (OSError, socket.timeout):
         pass
     finally:
         try:
             conn.close()
-        except Exception:
+        except OSError:
             pass
 
-def main():
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((HOST, PORT))
-    srv.listen(8)
-    print(f"MockFTP listening on {HOST}:{PORT}", flush=True)
-    while True:
-        conn, addr = srv.accept()
-        threading.Thread(target=handle, args=(conn, addr), daemon=True).start()
+
+def main() -> None:
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 2121
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((HOST, port))
+    server.listen(16)
+    sys.stderr.write(f"mock_ftp listening on {HOST}:{port}\n")
+    sys.stderr.flush()
+    try:
+        while True:
+            conn, _ = server.accept()
+            threading.Thread(target=handle, args=(conn,), daemon=True).start()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.close()
+
 
 if __name__ == "__main__":
     main()

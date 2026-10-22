@@ -1,6 +1,0 @@
-/target
-/site
-.zencache/
-*.zeno
-**/__pycache__/
-.venv/

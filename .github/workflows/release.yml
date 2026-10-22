@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --package zen-cli
 
       - name: Package (Linux/macOS)
         if: runner.os != 'Windows'

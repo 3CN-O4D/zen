@@ -1,119 +1,139 @@
-# Zen — a fast native scripting language
+# Zen — a fast, native scripting language
 
 [![release](https://img.shields.io/github/v/release/3CN-O4D/zen)](https://github.com/3CN-O4D/zen/releases)
 [![build](https://img.shields.io/github/actions/workflow/status/3CN-O4D/zen/release.yml)](https://github.com/3CN-O4D/zen/actions)
-[![license](https://img.shields.io/github/license/3CN-O4D/zen)](https://github.com/3CN-O4D/zen/blob/main/Cargo.toml)
+[![license](https://img.shields.io/github/license/3CN-O4D/zen)](https://github.com/3CN-O4D/zen/blob/main/LICENSE)
 
-The flagship is the **3.0 engine** (`zen/` workspace): a Cranelift JIT
-(steady-state 10×+ over CPython-class interpreters), embedded-Python
-interop via `pymport`, and Rust-grade coded diagnostics (`zen explain`).
-The **2.x line** (repo root) is the stable shippable product: single static
-binary, rich module set, and an offline-first security auditing toolkit.
-
-```bash
-# 3.0 engine: Python interop in three lines
-pymport json
-print json.dumps({"a": 1})     # {"a": 1}
-```
-
-## The 3.0 engine (flagship, alpha)
-
-Location: [`zen/`](zen/) workspace — `zen-syntax`, `zen-vm`, `zen-interp`,
-`zen-compiler`, `zen-jit`, `zen-cli` (tagged `v3.0.0-alpha.0`).
+Zen 3.0 is a fast, native scripting language with a Python-flavoured syntax,
+Cranelift JIT, embedded-Python interop (`pymport`), and Rust-grade coded
+diagnostics (`zen explain`). It ships as a single static binary with a
+batteries-included stdlib.
 
 ```bash
-cd zen
-cargo build -p zen-cli --bin zen --all-features
-ZEN_JIT=1 ./target/debug/zen run app.z   # JIT tier on
-./target/debug/zen explain Z0416        # every error code documented
+# Build from source
+cargo build --release --package zen-cli --bin zen --all-features
+./target/release/zen run app.z
+./target/release/zen explain Z0416        # every error code documented
 ```
 
-Highlights:
+## Highlights
 
 | Capability | Details |
 |------------|---------|
 | JIT | Cranelift backend, monomorphic inline caches, OSR/deopt, call-site caches |
 | `pymport` | `import` Python modules (stdlib, venv, project-local `.py`) with value marshalling and chained tracebacks |
-| Errors | Coded diagnostics (`Z01xx–Z04xx`), `zen explain`, Python tracebacks chained under Zen frames |
-| Discipline | 46/46 suites green in default and `--all-features` builds; no commits of red code |
+| Errors | Coded diagnostics (`Z01xx–Z05xx`), `zen explain`, Python tracebacks chained under Zen frames |
+| Diagnostics | Rust-style error codes, help messages, source spans |
+| Stdlib | HTTP, files, regex, JSON, threading, sockets, crypto, SQLite, and more |
+| REPL | Interactive REPL with `zen` (no args) |
+| Concurrency | Rayon, crossbeam channels, threads, atomic operations |
 
-Engine docs live in [`zen/docs/`](zen/docs/) (blueprint, principles,
-architecture, milestones).
-
-## The 2.x stable line (deprecated)
-
-Location: repo root (current: `v2.4.0`). Install from the `.deb` in
-[releases](https://github.com/3CN-O4D/zen/releases):
+## Quick start
 
 ```bash
-sudo dpkg -i zen_2.4.0_amd64.deb
-zen --version
+# Run a script
+zen run hello.z
+
+# Start REPL
+zen
+
+# Explain an error code
+zen explain Z0401
+
+# Type-check a file
+zen check app.z
 ```
 
-Or from source (`./build.sh install`; other flows in [`scripts/`](scripts/)).
+## Installation
 
-> ⚠️ **Deprecated:** The 2.x line is in maintenance mode. All new development
-> happens in the `zen/` workspace (3.0). Use 2.x only for existing
-> deployments; new projects should start with 3.0.
+### From release binaries
+
+Download the latest release from the [Releases page](https://github.com/3CN-O4D/zen/releases).
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo dpkg -i zen_3.0.0_amd64.deb
+```
+
+**Linux/macOS (tarball):**
+```bash
+tar xzf zen-linux-x86_64.tar.gz
+cd zen-linux-x86_64
+sudo ./install.sh
+```
+
+**Windows:**
+Extract the zip and add `zen.exe` to your PATH.
+
+### From source
+
+```bash
+git clone https://github.com/3CN-O4D/zen.git
+cd zen
+cargo build --release --package zen-cli --bin zen --all-features
+# Binary at: target/release/zen
+```
+
+## Language overview
 
 ```zen
-# batteries included, natives need no import
-var resp = http.get("https://api.github.com/zen")
-print(resp.status)                    # 200
+# Variables and functions
+let x = 42
+func greet(name) {
+    print("Hello, " + name)
+}
+greet("world")
 
-import hashid                          # pure-Zen stdlib (43 modules)
-print hashid.likely("900150983cd24fb0d6963f7d28e17f72")  # md5
+# Containers
+let nums = [1, 2, 3, 4, 5]
+let total = sum(nums)
+print(total)  # 15
+
+# File I/O
+let f = open("data.txt", "r")
+print(f.read(100))
+f.close()
+
+# With statement (auto-scoping)
+with open("data.txt", "r") as f {
+    print(f.read(100))
+}
+
+# Python interop
+pymport json
+let data = json.loads('{"a": 1}')
+print(data.a)  # 1
+
+# Error handling
+try {
+    let x = 1 / 0
+} catch (e) {
+    print("Error: " + e)
+}
 ```
 
-Uncaught failures render rustc-style diagnostics (`--> file:line:col`,
-snippet, caret, `= help:`), and modules get their own error vocabulary
-(``module `sqlite` has no function `` — never "dictionary has no method").
-
-### Security auditing toolkit (2.x)
-
-Offline-first recon, certificate inspection, and audit reporting — see
-[Security Auditing](docs/cybersec.md). Authorized audits only.
-
-| Module | Role |
-|--------|------|
-| `hashid`, `codec`, `fingerprint` | hash ID, text transforms, banner fingerprinting |
-| `x509`, `tls`/`tlssweep`, `tlscheck` | cert parse, live fetch, expiry/weakness grading |
-| `scandiff`, `opsec`, `audit`, `report` | scan diffing, low-profile helpers, audit framework, reports |
-
-## Repository layout
+## Project structure
 
 ```
-.                    2.x product line (releases v2.x)
-├── src/             native runtime: http, socket, crypto, tls, x509, …
-├── std/             pure-Zen standard library (*.z, imported by name)
-├── tests/cases/     black-box suites → tests/run_tests.sh
-├── docs/            MkDocs documentation
-└── zen/             3.0 engine workspace (releases v3.x) ← flagship
-    └── crates/      syntax, vm, interp, compiler, jit, cli
+crates/
+  zen-syntax/     # Lexer, parser, AST
+  zen-vm/         # Bytecode VM, value system, native dispatch
+  zen-interp/     # Tree-walking reference interpreter
+  zen-compiler/   # AST → bytecode compiler
+  zen-jit/        # Cranelift JIT backend
+  zen-cli/        # CLI, REPL, diagnostics
+docs/             # Architecture and design docs
+std/              # Standard library (.z files)
+tests/            # Integration test cases
+benchmarks/       # Performance benchmarks
 ```
 
-Both `zen` binaries share a name; the 3.0 one is built from `zen/`
-(`target/debug/zen`), the 2.x one installs to `/usr/bin/zen`.
+## Documentation
 
-## Develop
-
-```bash
-# 3.0 engine
-cd zen && cargo test --workspace --all-features
-
-# 2.x line
-cargo build                                  # → ./target/debug/zen
-bash tests/run_tests.sh                      # black-box suites (+ mock FTP/TLS)
-ZEN_NO_BC=1 bash tests/run_tests.sh          # same suites, tree-walk engine
-mkdocs build --strict                        # docs must build warning-free
-```
-
-## Releases
-
-SemVer, one namespace, two lines: `v2.x` tracks the stable product,
-`v3.x` tracks the engine (`v3.0.0-alpha.0` cut). Tag `vX.Y.Z`, push, and CI
-builds the platform artifacts.
+Engine docs live in [`docs/`](docs/) (blueprint, principles,
+architecture, syntax, value system, lexer, parser, bytecode, VM,
+memory, JIT, FFI handles, concurrency, networking, roadmap, pymport).
 
 ## License
 
-MIT — see `license` in [`Cargo.toml`](Cargo.toml).
+MIT

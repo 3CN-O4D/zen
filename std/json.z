@@ -45,30 +45,24 @@ let _skip_ws = fn() {
 
 let _number = fn() {
     let start = _i
-    let has_dot = false
+    let is_float = false
     while _i < _n {
         let c = _s[_i]
         let o = c.ord()
         if c == "e" || c == "E" || c == "+" || c == "-" || c == "." || (o >= 48 && o <= 57) {
-            if c == "." { has_dot = true }
+            if c == "." || c == "e" || c == "E" { is_float = true }
             _i += 1
         } else {
             break
         }
     }
     let text = _s[start:_i]
-    if has_dot {
+    if is_float {
         try {
             return float(text)
         } catch e {
             throw "invalid JSON number"
         }
-    }
-    let _j = 0
-    while _j < len(text) {
-        let c = text[_j]
-        if c == "e" || c == "E" { throw "invalid JSON number" }
-        _j += 1
     }
     try {
         return int(text)
@@ -253,7 +247,7 @@ let stringify = fn(v, indent = null) {
     }
     if type(v) == "dict" {
         let parts = []
-        for kv in list(v) {
+        for kv in v.items() {
             parts.push("\"" + _esc(kv[0]) + "\":" + stringify(kv[1], null))
         }
         return "{" + parts.join(",") + "}"
@@ -271,7 +265,7 @@ let _pretty2 = fn(v, depth) {
     if type(v) == "dict" {
         if len(v) == 0 { return "{}" }
         let parts = []
-        for kv in list(v) {
+        for kv in v.items() {
             parts.push(_pad(depth + 1) + "\"" + _esc(kv[0]) + "\": " + _pretty2(kv[1], depth + 1))
         }
         return "{\n" + parts.join(",\n") + "\n" + _pad(depth) + "}"
@@ -292,5 +286,6 @@ let _load = fn(path) {
 }
 
 let _save = fn(path, value) {
-    return fs.write(path, stringify(value, null))
+    fs.write(path, stringify(value, null))
+    return true
 }

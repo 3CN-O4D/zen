@@ -2,6 +2,11 @@
 # Every command shells out via os.execute and returns {ok, code, stdout,
 # stderr}; media helpers include {out, width, height, duration}.
 
+import fs
+import uuid
+import json
+import os
+
 func _q(s) {
     return "'" + s.replace("'", "'\\''") + "'"
 }

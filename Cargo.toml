@@ -1,65 +1,61 @@
-[package]
-name = "zen"
-version = "2.4.0"
+[workspace]
+resolver = "2"
+members = [
+    "crates/zen-syntax",
+    "crates/zen-vm",
+    "crates/zen-interp",
+    "crates/zen-compiler",
+    "crates/zen-jit",
+    "crates/zen-cli",
+    "benchmarks",
+]
+
+[workspace.package]
+version = "3.0.0"
 edition = "2021"
-description = "Native Rust runtime for the Zen language"
+rust-version = "1.95"
 license = "MIT"
+repository = "https://github.com/3CN-O4D/zen"
+description = "Zen: a fast, stable systems and scripting language"
 
-[[bin]]
-name = "zen"
-path = "src/main.rs"
+[workspace.dependencies]
+# ── Internal ────────────────────────────────────────────────────────────────
+zen-syntax = { path = "crates/zen-syntax" }
+zen-vm = { path = "crates/zen-vm" }
+zen-compiler = { path = "crates/zen-compiler" }
+zen-jit = { path = "crates/zen-jit" }
 
-[dependencies]
-ahash = "=0.8.10"
+# ── Concurrency (Milestone 10) ─────────────────────────────────────────────
+rayon = "1.12"
+crossbeam-channel = "0.5.17"
+parking_lot = "0.12.5"
+dashmap = "6"
+
+# ── Networking (Milestone 10) ──────────────────────────────────────────────
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "io-util", "sync", "macros"] }
+hyper = "1"
+rustls = "0.23"
+
+# ── Util ───────────────────────────────────────────────────────────────────
 indexmap = "2"
-base64 = "0.23.1"
-base32 = "0.5"
-rustyline = "15"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-flate2 = "1"
-libc = "0.2"
-get_if_addrs = "0.5.3"
-hmac = "0.12"
-md-5 = "0.10"
-rand = "0.9"
-regex = "1"
-reqwest = { version = "0.13.4", features = ["blocking", "json", "stream"] }
-serde_json = "1.0.151"
-sha1 = "0.10"
-sha2 = "0.10"
-sha3 = "0.10"
-blake2 = "0.10"
-pbkdf2 = "0.12"
-aes = "0.8"
-aes-gcm = "0.10"
-cbc = "0.1"
-ed25519-dalek = "2"
-curve25519-dalek = "4"
-uuid = { version = "1", features = ["v1", "v3", "v4", "v5"] }
-tar = "0.4"
-websocket = "0.27"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-native-tls = "0.2"
-qrcode = "0.14.1"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
-libloading = "0.8"
-libffi = "3.2"
+ahash = "0.8"
+rustyline = "18"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+thiserror = "1"
+phf = "0.11"
+serde = { version = "1", features = ["derive"] }
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+debug = 1              # keep symbols; JIT profiling needs them
+panic = "unwind"       # NOT abort — see docs/01-principles.md §4
+overflow-checks = true # NOT off — see docs/01-principles.md §4
 
-[package.metadata.deb]
-maintainer = "zen-lang"
-copyright = "2025 zen-lang contributors"
-extended-description = "Zen is a fast, expression-oriented programming language with an ergonomic syntax, native Rust runtime, and powerful built-ins (http, crypto, socket, mqtt, hydra, wa, and more)."
-section = "devel"
-priority = "optional"
-depends = ["libc6", "libssl3 | libssl1.1 | libssl1.0", "libffi8"]
-recommends = ["nodejs"]
-assets = [
-    ["target/release/zen", "usr/bin/zen", "755"],
-    ["std/*", "usr/share/zen/std/", "644"],
-]
+# Benchmarks must be built this way or the numbers are meaningless.
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1

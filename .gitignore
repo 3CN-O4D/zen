@@ -1,60 +1,6 @@
-# Build artifacts
-/target/
-dist/
-build/
-*.pyz
-.zencache
-
-# Editor / IDE
-*.swp
-*.swo
-*~
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Build artifacts
-/target/
-dist/
-*.tar.gz
-*.deb
-*.zip
-*.deb
-zen_*.deb
-zen-*.tar.gz
-zen_*.deb
-*.deb
-zen_*.deb
-
-# Python (legacy)
-venv/
-__pycache__/
-*.pyc
-*.pyo
-
-# Local data
-*.log
-wa_auth/
-betika_data/
-test_img_dir/
-test_zen_dir/
-moi_pdfs/
-monalisa_images/
-
-# nested 3.0.0 rewrite workspace (tracked; only build/scratch junk excluded)
-zen/target/
-zen/fuzz/
-zen/scratch_mod/
-zen/crash-*
-zen/leak-*
-# accidental nmap output dump
-J
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+/target
+/site
+.zencache/
+*.zeno
+**/__pycache__/
+.venv/

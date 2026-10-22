@@ -18,7 +18,7 @@ let utf8_bytes = fn(cp) {
     return [0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)]
 }
 
-let is_cont = fn(b) { b >= 0x80 and b <= 0xBF }
+let is_cont = fn(b) { return b >= 0x80 and b <= 0xBF }
 
 let str_from_bytes = fn(bl) {
     let out = ""

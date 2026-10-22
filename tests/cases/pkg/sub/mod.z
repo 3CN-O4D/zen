@@ -1,3 +1,11 @@
-# Fixture package module used by 10_import_forms.z
-func hello() { return "pkg-hello" }
-func util() { return "pkg-util" }
+// Fixture for the dotted-import suite (tests/cases/10_import_forms.z).
+// The suite's runner would normally materialise this next to the test; it is
+// checked in here so `pkg.sub.mod` resolves without external setup.
+
+func hello() {
+    return "pkg-hello"
+}
+
+func util() {
+    return "pkg-util"
+}

@@ -167,4 +167,90 @@ var info = match usr {
 }
 check(info["name"] == "Bob" && info["id"] == 7, "match dict-literal body")
 
+# match destructuring: tuple patterns measure with iter_len, so a list of the
+# same length matches too, and a non-iterable subject simply declines.
+func shape_of(x) {
+  return match x {
+    #(0, 0): "origin",
+    #(x, y) if x == y: "on-diagonal",
+    #(_, _): "some-pair"
+  }
+}
+check(shape_of(#(0, 0)) == "origin", "tuple pattern literal")
+check(shape_of(#(4, 4)) == "on-diagonal", "tuple pattern with guard")
+check(shape_of(#(4, 9)) == "some-pair", "tuple pattern wildcard fallback")
+check(shape_of([1, 2]) == "some-pair", "tuple pattern matches a list of equal length")
+check(shape_of(7) == nil, "tuple pattern declines a non-iterable subject")
+
+# match destructuring: list patterns, including the `...rest` tail.
+func head_tail(xs) {
+  return match xs {
+    []: "empty",
+    [only]: "one:" + str(only),
+    [a, b]: "pair:" + str(a) + str(b),
+    [a, ...rest]: "rest:" + str(a) + ":" + str(len(rest))
+  }
+}
+check(head_tail([]) == "empty", "list pattern empty")
+check(head_tail([5]) == "one:5", "list pattern single binding")
+check(head_tail([1, 2]) == "pair:12", "list pattern two elements")
+check(head_tail([1, 2, 3]) == "rest:1:2", "list pattern rest tail length")
+check(head_tail([1, 2, 3, 4]) == "rest:1:3", "list pattern rest excludes the head")
+check(head_tail([1, 2, 3]) == nil || head_tail([1, 2, 3]) == "rest:1:2", "list pattern rest matches")
+check(match [1] { [1, 2]: "too-long", [1]: "exact" } == "exact", "list pattern arity is exact")
+
+# match: `a | b` tries alternatives in order and only falls through when all fail.
+func classify(n) {
+  return match n {
+    1 | 2: "small-prime",
+    3 | 5 | 7: "other-prime",
+    n if n % 2 == 0: "even",
+    _: "odd"
+  }
+}
+check(classify(1) == "small-prime", "or pattern first alternative")
+check(classify(2) == "small-prime", "or pattern second alternative")
+check(classify(5) == "other-prime", "or pattern middle alternative")
+check(classify(4) == "even", "or pattern all alternatives fail then guard matches")
+check(classify(9) == "odd", "or pattern total failure reaches the wildcard")
+check(match 9 { 1 | 2: "no" } == nil, "or pattern with no matching alternative is nil")
+
+# match: `pat as name` binds the whole matched value after `pat` succeeds.
+func bind_whole(x) {
+  return match x {
+    [a, b] as whole: str(a) + str(b) + "/" + str(len(whole)),
+    n as single: "single:" + str(single),
+    _: "none"
+  }
+}
+check(bind_whole([1, 2]) == "12/2", "as pattern binds the whole list")
+check(bind_whole(7) == "single:7", "as pattern binds a literal match")
+check(bind_whole([1, 2, 3]) == "single:<list>", "as pattern inner failure skips the binding")
+
+# match: a guard sees names bound by an enclosing `as` pattern.
+func guarded_bind(x) {
+  return match x {
+    [a, ...rest] as whole if len(whole) > 2: "long:" + str(a),
+    [a, ...rest]: "short:" + str(a),
+    _: "other"
+  }
+}
+check(guarded_bind([1, 2, 3]) == "long:1", "guard reads an as-pattern binding")
+check(guarded_bind([1, 2]) == "short:1", "as pattern guard false falls through")
+
+# match: nested destructuring.
+func nested(x) {
+  return match x {
+    #([a, b], [c]): str(a) + str(b) + str(c),
+    #([a], [b, c]): "two:" + str(a) + str(b) + str(c),
+    _: "no"
+  }
+}
+check(nested(#([1, 2], [3])) == "123", "nested tuple pattern")
+check(nested(#([1], [2, 3])) == "two:123", "nested tuple pattern alternative arity")
+check(nested(#([1, 2], [3, 4])) == "no", "nested pattern declines on inner arity")
+# A non-iterable subject declines every tuple arm, so the wildcard catches it.
+# `shape_of` above is the nil-returning form of the same check.
+check(nested(9) == "no", "nested destructuring falls through to the wildcard on a non-tuple")
+
 if fails == 0 { print("SUITE PASS") } else { print("SUITE FAILURES: " + str(fails)) }

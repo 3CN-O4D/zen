@@ -1,0 +1,5 @@
+/home/bard/Desktop/zen/zen/fuzz/target/release/build/thiserror/c13e0823ba2b816c/out/build_script_build.d: /home/bard/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/build.rs
+
+/home/bard/Desktop/zen/zen/fuzz/target/release/build/thiserror/c13e0823ba2b816c/out/build_script_build: /home/bard/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/build.rs
+
+/home/bard/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/build.rs:

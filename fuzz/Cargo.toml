@@ -1,0 +1,45 @@
+[package]
+name = "zen-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# The fuzz crate uses nightly-only sanitizer flags, so it is kept out of the
+# main workspace by declaring its own (empty) workspace here.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.zen-vm]
+path = "../crates/zen-vm"
+
+[dependencies.zen-compiler]
+path = "../crates/zen-compiler"
+
+[dependencies.zen-interp]
+path = "../crates/zen-interp"
+
+[[bin]]
+name = "value_fuzz"
+path = "fuzz_targets/value_fuzz.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "interp_fuzz"
+path = "fuzz_targets/interp_fuzz.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "vm_fuzz"
+path = "fuzz_targets/vm_fuzz.rs"
+test = false
+bench = false
+doc = false
