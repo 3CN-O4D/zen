@@ -4,6 +4,8 @@
 [![build](https://img.shields.io/github/actions/workflow/status/3CN-O4D/zen/release.yml)](https://github.com/3CN-O4D/zen/actions)
 [![license](https://img.shields.io/github/license/3CN-O4D/zen)](https://github.com/3CN-O4D/zen/blob/main/LICENSE)
 
+<img src="assets/logo.svg" width="200" alt="Zen logo" align="right"/>
+
 Zen 3.0 is a fast, native scripting language with a Python-flavoured syntax,
 Cranelift JIT, embedded-Python interop (`pymport`), and Rust-grade coded
 diagnostics (`zen explain`). It ships as a single static binary with a
@@ -123,6 +125,7 @@ crates/
   zen-jit/        # Cranelift JIT backend
   zen-cli/        # CLI, REPL, diagnostics
 docs/             # Architecture and design docs
+assets/           # Brand assets (logo, icons)
 std/              # Standard library (.z files)
 tests/            # Integration test cases
 benchmarks/       # Performance benchmarks

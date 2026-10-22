@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="zenGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="50%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+    <filter id="zenShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Background container (optional, for use on any background) -->
+  <rect width="1024" height="1024" fill="none"/>
+
+  <!-- Enso circle (Zen circle) - incomplete, brush-stroke feel -->
+  <path d="M 512 160
+           A 352 352 0 0 1 864 512
+           A 352 352 0 0 1 512 864
+           A 160 160 0 0 0 160 512
+           A 160 160 0 0 0 512 160"
+        fill="none" stroke="url(#zenGradient)" stroke-width="70" stroke-linecap="round"/>
+
+  <!-- Stylized Z inside the enso -->
+  <path d="M 300 280
+           L 724 280
+           L 300 512
+           L 724 744
+           L 300 744"
+        fill="none" stroke="#ffffff" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Glow behind the Z -->
+  <path d="M 300 280
+           L 724 280
+           L 300 512
+           L 724 744
+           L 300 744"
+        fill="none" stroke="#3b82f6" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" opacity="0.35"/>
+
+  <!-- Small accent dot (the "zen point") -->
+  <circle cx="512" cy="512" r="44" fill="#10b981"/>
+
+  <!-- Wordmark: ZEN -->
+  <text x="512" y="905" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="bold"
+        fill="#1e3a8a" text-anchor="middle" letter-spacing="6">ZEN</text>
+
+  <!-- Subtitle -->
+  <text x="512" y="975" font-family="Arial, Helvetica, sans-serif" font-size="28"
+        fill="#64748b" text-anchor="middle">native scripting language</text>
+</svg>
