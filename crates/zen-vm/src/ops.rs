@@ -1120,7 +1120,12 @@ pub fn native_call(id: u16, args: &[Value], output: &mut String) -> VmResult<Val
             if let Some(v) = crate::native::hydra::dispatch(other, args)? {
                 return Ok(v);
             }
+            #[cfg(target_os = "linux")]
             if let Some(v) = crate::native::sys::dispatch(other, args, output)? {
+                return Ok(v);
+            }
+            #[cfg(not(target_os = "linux"))]
+            if let Some(v) = crate::native::sys_stub::dispatch(other, args, output)? {
                 return Ok(v);
             }
             crate::native::std_tiers::dispatch(other, args)

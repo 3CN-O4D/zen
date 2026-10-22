@@ -24,7 +24,10 @@ pub(crate) mod wa;
 pub(crate) mod ffmpeg;
 pub(crate) mod hydra;
 pub(crate) mod std_tiers;
+#[cfg(target_os = "linux")]
 pub(crate) mod sys;
+#[cfg(not(target_os = "linux"))]
+pub(crate) mod sys_stub;
 pub(crate) mod ffi;
 pub(crate) mod socket;
 pub(crate) mod dns;
@@ -621,7 +624,10 @@ pub fn native_modules() -> HashMap<String, ModuleUnit> {
         ("wa", wa::module()),
         ("ffmpeg", ffmpeg::module()),
         ("hydra", hydra::module()),
+        #[cfg(target_os = "linux")]
         ("sys", sys::module()),
+        #[cfg(not(target_os = "linux"))]
+        ("sys", sys_stub::module()),
     ];
     let mut map: HashMap<String, ModuleUnit> =
         table.into_iter().map(|(n, u)| (n.to_string(), u)).collect();
