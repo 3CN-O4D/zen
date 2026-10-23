@@ -84,8 +84,8 @@ Each test directory has a `requirements.txt`:
 
 ```bash
 cd book-v2/tests/pymport
-../../../../target/release/zen py-sync
-../../../../target/release/zen run 03_bs4_third_party.z
+../../../target/release/zen py-sync
+../../../target/release/zen run 03_bs4_third_party.z
 ```
 
 `py-sync` creates `.zen_venv/` beside the requirements file and `zen run`
