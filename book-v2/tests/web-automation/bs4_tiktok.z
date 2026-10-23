@@ -1,0 +1,77 @@
+import requests
+import fs
+import time
+pymport bs4
+pymport json
+pymport urllib.request
+pymport socket
+
+# requests/urllib have no default timeout; avoid hanging forever.
+socket.setdefaulttimeout(45)
+
+let UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0 Safari/537.36"
+let VIDEO = "6718335390845095173"
+let url = "https://www.tiktok.com/embed/v2/" + VIDEO
+
+let _ = fs.mkdirs("out")
+let out = "out/tiktok_bs4.mp4"
+
+# TikTok's edge intermittently answers 503 to non-browser clients. Retry
+# with backoff instead of failing the example on the first response.
+let fetch = fn(u) {
+    let attempt = 0
+    let resp = null
+    while attempt < 6 {
+        resp = requests.get(u, {
+            "headers": {
+                "User-Agent": UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.tiktok.com/"
+            },
+            "timeout": 40
+        })
+        if resp["status_code"] == 200 {
+            return resp
+        }
+        print("http " + str(resp["status_code"]) + " (attempt " + str(attempt + 1) + "), retrying...")
+        time.sleep(3 * (attempt + 1))
+        attempt += 1
+    }
+    return resp
+}
+
+print("fetching " + url)
+let resp = fetch(url)
+print("status: " + str(resp["status_code"]) + " bytes: " + str(len(resp["text"])))
+if resp["status_code"] != 200 {
+    print("giving up: TikTok kept returning " + str(resp["status_code"]))
+    exit(1)
+}
+
+let soup = bs4.BeautifulSoup(resp["text"], "html.parser")
+let tag = soup.find("script", {"id": "__FRONTITY_CONNECT_STATE__"})
+if tag == null {
+    print("no state script")
+    exit(1)
+}
+
+let data = json.loads(tag.string)
+let page = data["source"]["data"]["/embed/v2/" + VIDEO]
+let item = page["videoData"]["itemInfos"]
+let author = page["videoData"]["authorInfos"]
+let music = page["videoData"]["musicInfos"]
+let video_url = item["video"]["urls"][0]
+
+print("id: " + item["id"])
+print("desc: " + item["text"])
+print("author: @" + author["uniqueId"] + " (" + author["nickName"] + ")")
+print("music: " + music["musicName"])
+print("plays: " + str(item["playCount"]))
+print("likes: " + str(item["diggCount"]))
+print("comments: " + str(item["commentCount"]))
+print("shares: " + str(item["shareCount"]))
+print("mp4: " + video_url[0:80] + "...")
+
+urllib.request.urlretrieve(video_url, out)
+print("downloaded: " + out + " (" + str(fs.size(out)) + " bytes)")

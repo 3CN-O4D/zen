@@ -1,0 +1,14 @@
+pymport os
+pymport math
+pymport sys as pysys
+
+print("cwd: " + os.getcwd())
+print("joined: " + os.path.join("book-v2", "tests"))
+print("basename: " + os.path.basename("book-v2/tests/web-automation/bs4_tiktok.z"))
+print("floor: " + str(math.floor(3.9)))
+print("sqrt: " + str(math.sqrt(81.0)))
+print("pi: " + str(math.pi))
+
+# sys.version is a plain Python string; split() returns a Python list.
+let parts = pysys.version.split(" ")
+print("python: " + parts[0])

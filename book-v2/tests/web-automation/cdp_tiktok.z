@@ -1,0 +1,337 @@
+// CDP over raw sockets: drive headless Chromium from Zen with no libraries.
+//
+// 1. launch Chromium with --remote-debugging-port via pymport subprocess
+// 2. GET /json/list over plain TCP, read until Content-Length
+// 3. WebSocket upgrade (RFC 6455) with a base64 key
+// 4. send masked text frames (sys.write_bytes on the socket fd)
+// 5. Page.navigate + poll Runtime.evaluate for TikTok's rehydration JSON
+//
+// Run from this directory:
+//   PYTHONPATH=... ZEN_NO_PY_BOOTSTRAP=1 zen run cdp_tiktok.z
+import socket
+import sys
+import json
+import time
+import fs
+pymport subprocess
+import base64
+import bytes
+
+let PORT = 9223
+let PROFILE = "out/cdp-profile"
+let VIDEO = "6718335390845095173"
+let VIDEO_PAGE = "https://www.tiktok.com/@scout2015/video/" + VIDEO
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+let HEX = "0123456789abcdef"
+
+let to_hex = fn(bs) {
+    let out = ""
+    for b in bs {
+        out += HEX[b >> 4] + HEX[b & 15]
+    }
+    return out
+}
+
+# WebSocket client frames must be masked. The masked payload is arbitrary
+# binary, so it goes out through sys.write_bytes(fd, hex); socket.send would
+# re-encode high bytes as UTF-8 and corrupt the frame.
+let ws_send = fn(sock, text) {
+    let payload = []
+    for ch in list(text) {
+        for b in bytes.utf8_bytes(ch.ord()) {
+            payload.push(b)
+        }
+    }
+    let mask = [0x37, 0xA1, 0x0C, 0xF2]
+    let masked = []
+    let i = 0
+    while i < len(payload) {
+        masked.push(payload[i] ^ mask[i % 4])
+        i += 1
+    }
+    let frame = [0x81]
+    let n = len(masked)
+    if n < 126 {
+        frame.push(0x80 | n)
+    } elif n < 65536 {
+        frame.push(0x80 | 126)
+        frame.push((n >> 8) & 255)
+        frame.push(n & 255)
+    } else {
+        frame.push(0x80 | 127)
+        let k = 7
+        while k >= 0 {
+            frame.push((n >> (8 * k)) & 255)
+            k -= 1
+        }
+    }
+    for b in mask {
+        frame.push(b)
+    }
+    for b in masked {
+        frame.push(b)
+    }
+    sys.write_bytes(socket.fileno(sock), to_hex(frame))
+}
+
+let recv_exact = fn(sock, n) {
+    let out = []
+    while len(out) < n {
+        let chunk = list(socket.recv(sock, n - len(out)))
+        if len(chunk) == 0 {
+            throw "websocket closed"
+        }
+        for b in chunk {
+            out.push(b)
+        }
+    }
+    return out
+}
+
+let ws_read = fn(sock) {
+    let h = recv_exact(sock, 2)
+    let opcode = h[0] & 0x0F
+    let masked = (h[1] & 0x80) != 0
+    let n = h[1] & 0x7F
+    if n == 126 {
+        let e = recv_exact(sock, 2)
+        n = e[0] * 256 + e[1]
+    } elif n == 127 {
+        let e = recv_exact(sock, 8)
+        n = 0
+        for b in e {
+            n = n * 256 + b
+        }
+    }
+    let mask = []
+    if masked {
+        mask = recv_exact(sock, 4)
+    }
+    let data = recv_exact(sock, n)
+    if masked {
+        let i = 0
+        while i < len(data) {
+            data[i] = data[i] ^ mask[i % 4]
+            i += 1
+        }
+    }
+    return {"opcode": opcode, "data": data}
+}
+
+let cdp_call = fn(sock, id, method, params) {
+    ws_send(sock, json.stringify({
+        "id": id,
+        "method": method,
+        "params": params
+    }))
+    let pending = []
+    while true {
+        let f = ws_read(sock)
+        if f["opcode"] == 8 {
+            throw "websocket closed by peer"
+        }
+        if f["opcode"] == 9 {
+            continue
+        }
+        if f["opcode"] == 1 or f["opcode"] == 0 {
+            for b in f["data"] {
+                pending.push(b)
+            }
+            let text = bytes.str_from_bytes(pending)
+            try {
+                let msg = json.parse(text)
+                if msg.get("id", 0) == id {
+                    return msg
+                }
+                pending = []
+            } catch {
+                # fragmented frame: keep collecting
+            }
+        }
+    }
+}
+
+# ── 1. launch Chromium with the DevTools endpoint ─────────────────────────
+
+let _ = fs.mkdirs("out")
+let _ = fs.rmtree(PROFILE)
+let cmd = "chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage "
+cmd += "--remote-debugging-port=" + str(PORT) + " "
+cmd += "--user-data-dir=" + PROFILE + " about:blank"
+let argv = cmd.split(" ")
+let none = null
+let browser = subprocess.Popen(argv, -1, none, none, none, -3)
+print("chromium pid " + str(browser.pid) + " on port " + str(PORT))
+
+try {
+    # ── 2. discover the page target over plain HTTP ───────────────────────
+
+    let raw = ""
+    let tries = 0
+    let connected = false
+    while tries < 100 {
+        let probe = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+        socket.settimeout(probe, 10)
+        try {
+            socket.connect(probe, "127.0.0.1", PORT)
+            connected = true
+            socket.close(probe)
+            break
+        } catch {
+            socket.close(probe)
+            time.sleep(0.2)
+            tries += 1
+        }
+    }
+    if !connected {
+        throw "devtools endpoint never came up"
+    }
+
+    let request = "GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:" + str(PORT) + "\r\nConnection: close\r\n\r\n"
+    let hattempt = 0
+    while hattempt < 20 {
+        let http = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+        socket.settimeout(http, 20)
+        try {
+            socket.connect(http, "127.0.0.1", PORT)
+            socket.send(http, request)
+            raw = ""
+            while true {
+                try {
+                    let chunk = socket.recv_text(http, 8192)
+                    if len(chunk) == 0 {
+                        break
+                    }
+                    raw += chunk
+                } catch {
+                    break
+                }
+                # DevTools may keep the connection open despite
+                # Connection: close, so stop at Content-Length, not EOF.
+                if raw.contains("\r\n\r\n") {
+                    let head = raw.split("\r\n\r\n")[0]
+                    let got = len(raw.split("\r\n\r\n")[1])
+                    let want = 0
+                    for line in head.split("\r\n") {
+                        if line.starts_with("Content-Length:") {
+                            want = int(line.split(":")[1])
+                        }
+                    }
+                    if want == 0 or got >= want {
+                        break
+                    }
+                }
+            }
+            socket.close(http)
+            if raw.contains("200") {
+                break
+            }
+        } catch {
+            socket.close(http)
+        }
+        time.sleep(0.5)
+        hattempt += 1
+    }
+    if raw == "" {
+        throw "no http response from devtools"
+    }
+
+    let body = raw.split("\r\n\r\n")[1]
+    let targets = json.parse(body)
+    let ws_url = ""
+    let target_id = ""
+    for t in targets {
+        if t["type"] == "page" {
+            ws_url = t["webSocketDebuggerUrl"]
+            target_id = t["id"]
+            break
+        }
+    }
+    if ws_url == "" {
+        throw "no page target found"
+    }
+    print("target " + target_id)
+
+    # ── 3. WebSocket upgrade ──────────────────────────────────────────────
+
+    let key = base64.encode("0123456789abcdef")
+    let ws = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+    socket.settimeout(ws, 60)
+    socket.connect(ws, "127.0.0.1", PORT)
+    let upgrade = "GET /devtools/page/" + target_id + " HTTP/1.1\r\n"
+    upgrade += "Host: 127.0.0.1:" + str(PORT) + "\r\n"
+    upgrade += "Upgrade: websocket\r\n"
+    upgrade += "Connection: Upgrade\r\n"
+    upgrade += "Sec-WebSocket-Key: " + key + "\r\n"
+    upgrade += "Sec-WebSocket-Version: 13\r\n\r\n"
+    socket.send(ws, upgrade)
+    let handshake = ""
+    while !handshake.contains("\r\n\r\n") {
+        handshake += socket.recv_text(ws, 1024)
+    }
+    print("handshake: " + handshake.split("\r\n")[0])
+    if !handshake.contains("101") {
+        throw "websocket upgrade failed"
+    }
+
+    # ── 4. navigate, then evaluate JS until the payload exists ────────────
+
+    let nav = cdp_call(ws, 1, "Page.navigate", {"url": VIDEO_PAGE})
+    print("navigate: " + str(nav.get("result", {})))
+
+    let expr = """
+(() => {
+  const el = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
+  if (!el) return JSON.stringify({ok: false, title: document.title});
+  const d = JSON.parse(el.textContent);
+  const it = d.__DEFAULT_SCOPE__['webapp.video-detail'].itemInfo.itemStruct;
+  return JSON.stringify({
+    ok: true,
+    title: document.title,
+    id: it.id,
+    desc: it.desc,
+    author: it.author.uniqueId,
+    plays: it.stats.playCount,
+    likes: it.stats.diggCount,
+    comments: it.stats.commentCount,
+    playAddr: it.video.playAddr
+  });
+})()
+"""
+
+    let info = null
+    let eattempt = 0
+    while eattempt < 15 {
+        time.sleep(2)
+        let reply = cdp_call(ws, 100 + eattempt, "Runtime.evaluate", {
+            "expression": expr,
+            "returnByValue": true
+        })
+        let value = reply["result"]["result"]["value"]
+        let parsed = json.parse(value)
+        if parsed["ok"] == true {
+            info = parsed
+            break
+        }
+        eattempt += 1
+    }
+
+    if info == null {
+        # Throw instead of exit so the `finally` block shuts Chromium down.
+        throw "no payload (challenge page)"
+    }
+
+    print("title: " + info["title"])
+    print("id: " + info["id"])
+    print("author: @" + info["author"])
+    print("plays: " + str(info["plays"]) + " likes: " + str(info["likes"]))
+    print("desc: " + info["desc"])
+    print("playAddr: " + info["playAddr"][0:90] + "...")
+
+    socket.close(ws)
+} finally {
+    browser.terminate()
+    print("chromium stopped")
+}

@@ -1,0 +1,5 @@
+.venv/
+**/.zen_venv/
+**/out/
+__pycache__/
+*.pyc

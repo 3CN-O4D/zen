@@ -1,0 +1,74 @@
+import fs
+import time
+pymport mechanicalsoup
+pymport json
+pymport builtins
+pymport socket
+
+# requests/urllib have no default timeout; avoid hanging forever.
+socket.setdefaulttimeout(45)
+
+let UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0 Safari/537.36"
+let VIDEO = "6718335390845095173"
+let embed = "https://www.tiktok.com/embed/v2/" + VIDEO
+
+let _ = fs.mkdirs("out")
+let out = "out/tiktok_ms.mp4"
+
+let browser = mechanicalsoup.StatefulBrowser()
+# Give the session browser-like headers; MechanicalSoup otherwise sends
+# python-requests' default User-Agent, which TikTok often rate-limits.
+browser.session.headers.update({
+    "User-Agent": UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.tiktok.com/"
+})
+
+let resp = browser.open(embed)
+let attempt = 0
+while resp.status_code != 200 && attempt < 6 {
+    print("http " + str(resp.status_code) + " (attempt " + str(attempt + 1) + "), retrying...")
+    time.sleep(3 * (attempt + 1))
+    resp = browser.open(embed)
+    attempt += 1
+}
+
+print("opened: " + browser.get_url())
+print("status: " + str(resp.status_code) + " bytes: " + str(len(resp.text)))
+if resp.status_code != 200 {
+    print("giving up: TikTok kept returning " + str(resp.status_code))
+    exit(1)
+}
+
+let soup = browser.page
+let tag = soup.find("script", {"id": "__FRONTITY_CONNECT_STATE__"})
+if tag == null {
+    print("no state script")
+    exit(1)
+}
+
+let data = json.loads(tag.string)
+let page = data["source"]["data"]["/embed/v2/" + VIDEO]
+let item = page["videoData"]["itemInfos"]
+let author = page["videoData"]["authorInfos"]
+let video_url = item["video"]["urls"][0]
+
+print("id: " + item["id"])
+print("author: @" + author["uniqueId"] + " (" + author["nickName"] + ")")
+print("plays: " + str(item["playCount"]) + " likes: " + str(item["diggCount"]))
+
+# MechanicalSoup keeps a requests.Session for us: reuse it for the CDN fetch.
+let bin = browser.session.get(video_url)
+print("cdn status: " + str(bin.status_code) + " bytes: " + str(len(bin.content)))
+if bin.status_code != 200 {
+    print("giving up: CDN returned " + str(bin.status_code))
+    exit(1)
+}
+
+# Python bytes -> file. Native fs.write_binary takes a string, so binary
+# media is written through CPython's own file object.
+let f = builtins.open(out, "wb")
+f.write(bin.content)
+f.close()
+print("downloaded: " + out + " (" + str(fs.size(out)) + " bytes)")

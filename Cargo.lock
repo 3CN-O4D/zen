@@ -2581,6 +2581,7 @@ dependencies = [
  "tokio",
  "totp-rs",
  "webpki-roots",
+ "windows-sys 0.61.2",
  "x25519-dalek",
  "x509-parser",
  "zen-compiler",

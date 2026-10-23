@@ -238,7 +238,7 @@ let stringify = fn(v, indent = null) {
     }
     if type(v) == "null" { return "null" }
     if type(v) == "bool" { if v { return "true" } return "false" }
-    if type(v) == "int" || type(v) == "float" { return "" + v }
+    if type(v) == "int" || type(v) == "float" { return str(v) }
     if type(v) == "string" { return "\"" + _esc(v) + "\"" }
     if type(v) == "list" {
         let parts = []

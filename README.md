@@ -4,7 +4,7 @@
 [![build](https://img.shields.io/github/actions/workflow/status/3CN-O4D/zen/release.yml)](https://github.com/3CN-O4D/zen/actions)
 [![license](https://img.shields.io/github/license/3CN-O4D/zen)](https://github.com/3CN-O4D/zen/blob/main/LICENSE)
 
-<img src="assets/logo.svg" width="200" alt="Zen logo" align="right"/>
+<img src="assets/logo-terminal.png" width="200" alt="Zen logo" align="right"/>
 
 Zen 3.0 is a fast, native scripting language with a Python-flavoured syntax,
 Cranelift JIT, embedded-Python interop (`pymport`), and Rust-grade coded
@@ -125,6 +125,7 @@ crates/
   zen-jit/        # Cranelift JIT backend
   zen-cli/        # CLI, REPL, diagnostics
 docs/             # Architecture and design docs
+book-v2/          # "Zen for Dummies" book + runnable test suite
 assets/           # Brand assets (logo, icons)
 std/              # Standard library (.z files)
 tests/            # Integration test cases
@@ -136,6 +137,20 @@ benchmarks/       # Performance benchmarks
 Engine docs live in [`docs/`](docs/) (blueprint, principles,
 architecture, syntax, value system, lexer, parser, bytecode, VM,
 memory, JIT, FFI handles, concurrency, networking, roadmap, pymport).
+
+The book *Zen for Dummies* is in [`book-v2/`](book-v2/), and every chapter's
+code is runnable. Start with the self-contained test suite:
+
+```bash
+cd book-v2/tests
+./setup.sh
+./run-all.sh                 # hermetic pymport tests
+./run-all.sh --network       # + live web-automation examples
+```
+
+See [`book-v2/tests/README.md`](book-v2/tests/README.md) for requirements and
+the full test matrix, and [`book-v2/interop/42-pymport-python-interoperability.md`](book-v2/interop/42-pymport-python-interoperability.md)
+for the pymport chapter.
 
 ## License
 

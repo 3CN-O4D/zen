@@ -1,0 +1,127 @@
+import fs
+import time
+import requests
+pymport selenium.webdriver as webdriver
+pymport selenium.webdriver.chrome.options as options
+pymport bs4
+pymport json
+pymport urllib.request
+pymport socket
+
+socket.setdefaulttimeout(45)
+
+let VIDEO = "6718335390845095173"
+let UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0 Safari/537.36"
+let url = "https://www.tiktok.com/@scout2015/video/" + VIDEO
+
+let _ = fs.mkdirs("out")
+let out = "out/tiktok_selenium.mp4"
+
+# Quit the browser and stop the chromedriver service. The embedded
+# interpreter exits immediately, so this must happen before exit().
+let close_browser = fn(d) {
+    d.quit()
+    try {
+        d.service.stop()
+    } catch {
+        # already stopped
+    }
+}
+
+let opts = options.Options()
+opts.add_argument("--headless=new")
+opts.add_argument("--no-sandbox")
+opts.add_argument("--disable-dev-shm-usage")
+opts.add_argument("--disable-gpu")
+opts.add_argument("--window-size=1280,900")
+opts.add_argument("--mute-audio")
+
+print("launching chromium...")
+let driver = webdriver.Chrome(opts)
+driver.set_page_load_timeout(60)
+
+print("navigating to " + url)
+try {
+    driver.get(url)
+} catch as e {
+    print("navigation warning: " + str(e))
+}
+
+# The page renders its data after the WAF/JS boot; poll for the payload.
+let src = ""
+let tries = 0
+while tries < 15 {
+    src = driver.page_source
+    if src.contains("__UNIVERSAL_DATA_FOR_REHYDRATION__") {
+        break
+    }
+    time.sleep(2)
+    tries += 1
+}
+print("title: " + driver.title)
+print("page bytes: " + str(len(src)) + " (polls: " + str(tries) + ")")
+
+let soup = bs4.BeautifulSoup(src, "html.parser")
+let tag = soup.find("script", {"id": "__UNIVERSAL_DATA_FOR_REHYDRATION__"})
+if tag == null {
+    print("no rehydration payload - TikTok served a challenge")
+    close_browser(driver)
+    exit(1)
+}
+
+let data = json.loads(tag.string)
+let item = data["__DEFAULT_SCOPE__"]["webapp.video-detail"]["itemInfo"]["itemStruct"]
+let stats = item["stats"]
+let author = item["author"]
+
+print("id: " + item["id"])
+print("desc: " + item["desc"])
+print("author: @" + author["uniqueId"] + " (" + author["nickname"] + ")")
+print("plays: " + str(stats["playCount"]) + " likes: " + str(stats["diggCount"]))
+print("comments: " + str(stats["commentCount"]) + " shares: " + str(stats["shareCount"]))
+
+# The video-detail page exposes a signed playAddr that the CDN rejects
+# outside the player. The embed route serves an unsigned CDN URL over plain
+# HTTP, so fetch that page separately after Selenium has done the hard part.
+print("fetching embed route for an unsigned mp4 url...")
+let embed = "https://www.tiktok.com/embed/v2/" + VIDEO
+let embed_headers = {
+    "User-Agent": UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.tiktok.com/"
+}
+let eresp = null
+let eretry = 0
+while eretry < 6 {
+    eresp = requests.get(embed, {"headers": embed_headers, "timeout": 40})
+    if eresp["status_code"] == 200 {
+        break
+    }
+    print("embed http " + str(eresp["status_code"]) + " (attempt " + str(eretry + 1) + "), retrying...")
+    time.sleep(3 * (eretry + 1))
+    eretry += 1
+}
+print("embed status: " + str(eresp["status_code"]))
+if eresp["status_code"] != 200 {
+    close_browser(driver)
+    exit(1)
+}
+let esoup = bs4.BeautifulSoup(eresp["text"], "html.parser")
+let etag = esoup.find("script", {"id": "__FRONTITY_CONNECT_STATE__"})
+if etag == null {
+    print("no embed state script")
+    close_browser(driver)
+    exit(1)
+}
+let edata = json.loads(etag.string)
+let epage = edata["source"]["data"]["/embed/v2/" + VIDEO]
+let mp4 = epage["videoData"]["itemInfos"]["video"]["urls"][0]
+print("mp4: " + mp4[0:80] + "...")
+
+urllib.request.urlretrieve(mp4, out)
+print("downloaded: " + out + " (" + str(fs.size(out)) + " bytes)")
+
+close_browser(driver)
+time.sleep(1)
+print("browser closed")

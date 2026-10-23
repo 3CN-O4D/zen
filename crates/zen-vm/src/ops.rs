@@ -889,7 +889,7 @@ pub fn native_call(id: u16, args: &[Value], output: &mut String) -> VmResult<Val
                 Ok(Value::float(f.abs()))
             }
         }
-        10 => Ok(Value::nil()),
+        10 => os_exit(args, output),
         // Container constructors and reflection. These mirror the reference
         // interpreter exactly (same iteration helpers) so the two engines agree.
         12 => Ok(new_list(opt_items(args)?)),
@@ -1706,7 +1706,7 @@ pub fn os_cwd(args: &[Value]) -> VmResult<Value> {
 }
 
 pub fn os_exit(args: &[Value], output: &mut String) -> VmResult<Value> {
-    let code = int_arg(args, 0)?;
+    let code = if args.is_empty() { 0 } else { int_arg(args, 0)? };
     // Flush anything buffered by the VM before terminating; `std::process::exit`
     // skips the host's normal end-of-run flush.
     if !output.is_empty() {

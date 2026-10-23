@@ -1,0 +1,33 @@
+import json as zenjson
+pymport json
+
+# A Python exception is captured by the bridge and raised as a Zen error.
+let bad = false
+try {
+    json.loads("{not json}")
+} catch as e {
+    bad = true
+    print("caught json error")
+}
+
+if !bad {
+    print("expected json.loads to fail")
+    exit(1)
+}
+
+# Missing modules fail at the pymport statement and are catchable too.
+let missing = false
+try {
+    pymport this_module_does_not_exist_zen_test
+} catch as e {
+    missing = true
+    print("caught import error")
+}
+
+if !missing {
+    print("expected import to fail")
+    exit(1)
+}
+
+# Zen-side JSON still works after a foreign failure.
+print("recovered: " + str(zenjson.parse("{\"ok\": true}")["ok"]))

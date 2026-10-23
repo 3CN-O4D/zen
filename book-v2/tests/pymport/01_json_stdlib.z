@@ -1,0 +1,12 @@
+pymport json
+
+let raw = json.dumps({"name": "Zen", "version": 3, "tags": ["ffi", "pymport"]})
+print("dumps: " + raw)
+
+let back = json.loads(raw)
+print("name: " + back["name"])
+print("version: " + str(back["version"]))
+print("tag: " + back["tags"][1])
+
+let text = json.dumps([1, 2, 3])
+print("list: " + text)

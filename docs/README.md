@@ -1,5 +1,9 @@
 # Zen Language Documentation
 
+<p align="center">
+  <img src="../assets/logo-terminal.png" width="180" alt="Zen logo"/>
+</p>
+
 This directory contains the complete engineering specification for the Zen language v3.
 
 ## Document Index

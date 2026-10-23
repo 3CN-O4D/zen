@@ -30,7 +30,10 @@ pub(crate) mod sys;
 #[cfg(target_os = "windows")]
 pub(crate) mod sys_stub;
 pub(crate) mod ffi;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod socket;
+#[cfg(target_os = "windows")]
+pub(crate) mod socket_stub;
 pub(crate) mod dns;
 pub(crate) mod requests;
 pub(crate) mod http;
@@ -599,7 +602,10 @@ pub fn native_modules() -> HashMap<String, ModuleUnit> {
         ("os", os_module()),
         ("time", time_module()),
         ("json", json_module()),
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         ("socket", socket::module()),
+        #[cfg(target_os = "windows")]
+        ("socket", socket_stub::module()),
         ("ffi", ffi_module()),
         ("channel", channel_module()),
         ("thread", thread_module()),

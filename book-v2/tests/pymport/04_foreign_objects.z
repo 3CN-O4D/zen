@@ -1,0 +1,17 @@
+pymport datetime
+pymport builtins
+
+# Foreign objects cross the bridge as opaque handles: attributes and methods
+# keep working, and scalar results marshal back to Zen values.
+let epoch = datetime.datetime.fromtimestamp(0)
+print("year: " + str(epoch.year))
+print("iso: " + epoch.isoformat())
+print("date: " + epoch.date().isoformat())
+
+let later = datetime.datetime(2030, 1, 2, 3, 4, 5)
+print("formatted: " + later.strftime("%Y-%m-%d %H:%M:%S"))
+
+# Python builtins are a module like any other.
+print("len: " + str(builtins.len([10, 20, 30])))
+print("sum: " + str(builtins.sum([10, 20, 30])))
+print("sorted: " + str(builtins.sorted([3, 1, 2])))

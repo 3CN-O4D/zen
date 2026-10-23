@@ -1,0 +1,17 @@
+import fs
+pymport bs4
+
+let html = fs.read("fixture.html")
+let soup = bs4.BeautifulSoup(html, "html.parser")
+
+print("title: " + soup.title.string)
+print("h1: " + soup.find("h1", {"id": "title"}).string)
+
+let items = soup.select("li.feature")
+print("features: " + str(len(items)))
+for li in list(items) {
+    print("- " + li.string)
+}
+
+let note = soup.select_one("p.note")
+print("note: " + note.string)

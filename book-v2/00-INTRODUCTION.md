@@ -1,0 +1,82 @@
+# Zen for Dummies: Complete Edition
+
+*The Definitive Guide to the Zen Programming Language*
+
+## Table of Contents
+
+This comprehensive guide is organized into detailed sections covering every aspect of Zen.
+
+### Part 1: Fundamentals
+1. [Getting Started](fundamentals/01-getting-started.md) - Installation, first program, REPL
+2. [Data Types](fundamentals/02-data-types.md) - Primitives, collections, type system
+3. [Operators and Expressions](fundamentals/03-operators.md) - Arithmetic, logical, bitwise
+4. [Control Flow](fundamentals/04-control-flow.md) - Conditionals, loops, branching
+5. [Functions](fundamentals/05-functions.md) - Defining, calling, parameters, returns
+6. [Lambdas and Closures](fundamentals/06-lambdas-closures.md) - Anonymous functions, higher-order functions
+
+### Part 2: Core Concepts
+7. [Strings Deep Dive](core/07-strings.md) - Manipulation, formatting, methods
+8. [Lists and Arrays](core/08-lists.md) - Operations, methods, iteration
+9. [Dictionaries and Maps](core/09-dictionaries.md) - Key-value pairs, methods
+10. [Modules and Imports](core/10-modules-imports.md) - Creating, importing, module system
+11. [Error Handling](core/11-error-handling.md) - Try/catch, throw, debugging
+
+### Part 3: Object-Oriented & Advanced Programming
+12. [Classes and Objects](advanced/12-classes-objects.md) - OOP, inheritance, polymorphism
+13. [File I/O](advanced/13-file-io.md) - Reading, writing, `with` statement
+14. [Memory and References](advanced/14-memory-references.md) - Values, references, ownership
+
+### Part 4: Standard Library Modules (Detailed)
+15. [math Module](modules/15-math.md) - Mathematical functions and constants
+16. [random Module](modules/16-random.md) - Random numbers and selection
+17. [string Module](modules/17-string.md) - String utilities
+18. [collections Module](modules/18-collections.md) - Advanced data structures
+19. [json Module](modules/19-json.md) - JSON parsing and serialization
+20. [datetime/time Module](modules/20-time-datetime.md) - Time and date operations
+21. [pathlib & os Module](modules/21-path-os.md) - File system operations
+22. [re (Regex) Module](modules/22-regex.md) - Pattern matching
+23. [base64 & binascii](modules/23-base64-binascii.md) - Encoding/decoding
+24. [hashlib Module](modules/24-hashlib.md) - Hashing algorithms
+25. [crypto Module - Complete Guide](modules/25-crypto-complete.md) - Cryptography, encryption, JWT, X.509
+
+### Part 5: Networking & Protocols
+26. [Networking Fundamentals](networking/26-networking-fundamentals.md) - Sockets, TCP/IP basics
+27. [socket Module](networking/27-socket-module.md) - Low-level socket programming
+28. [HTTP Protocol](networking/28-http-protocol.md) - HTTP/1.1, requests, headers
+29. [requests Module](networking/29-requests-module.md) - High-level HTTP client
+30. [http Server Module](networking/30-http-server.md) - Building HTTP servers
+31. [HTTPS & SSL/TLS Certificates](networking/31-https-ssl-certs.md) - Secure connections, certificates
+32. [DNS Module](networking/32-dns.md) - Domain name resolution
+33. [url Module](networking/33-url.md) - URL parsing and manipulation
+34. [Raw Sockets](networking/34-raw-sockets.md) - Packet-level networking
+
+### Part 6: Concurrency & Threading
+35. [Threading Fundamentals](concurrency/35-threading-fundamentals.md) - Threads, spawning, execution
+36. [Channels](concurrency/36-channels.md) - Inter-thread communication
+37. [Mutexes & Locks](concurrency/37-mutexes-locks.md) - Synchronization primitives
+38. [Thread Safety & Patterns](concurrency/38-thread-safety-patterns.md) - Best practices
+
+### Part 7: FFI, System & Interoperability
+39. [FFI Fundamentals](ffi/39-ffi-fundamentals.md) - Foreign Function Interface basics
+40. [FFI in Practice](ffi/40-ffi-practice.md) - Calling C functions, handles
+41. [sys Module](system/41-sys-module.md) - System information and operations
+42. [pymport - Python Interoperability](interop/42-pymport-python-interoperability.md) - Using Python from Zen (setup, sync, examples)
+
+### Part 8: Practical Projects
+43. [CLI Tools](projects/43-cli-tools.md) - Building command-line applications
+44. [Web Scraping & Automation](projects/44-web-automation.md) - Bots, scrapers, automation
+45. [REST API Client](projects/45-rest-api-client.md) - API integration projects
+46. [File Processing Tools](projects/46-file-processing.md) - Data processing pipelines
+47. [Network Security Tools](projects/47-security-tools.md) - Ethical hacking utilities
+48. [Capstone Projects](projects/48-capstone.md) - Full applications
+
+### Appendices
+- [Appendix A: Built-in Functions](appendix/a-builtins.md)
+- [Appendix B: Error Codes Reference](appendix/b-error-codes.md)
+- [Appendix C: Zen CLI Reference](appendix/c-cli-reference.md)
+- [Appendix D: Standard Library Index](appendix/d-stdlib-index.md)
+- [Appendix E: Quick Reference Card](appendix/e-quick-reference.md)
+
+## About This Book
+
+This book is written for complete beginners but goes deep into every aspect of Zen. Each module gets its own detailed chapter with theory, examples, common pitfalls, and exercises.
