@@ -378,6 +378,20 @@ impl Value {
         }
     }
 
+    /// Borrowed error fields (`msg`, `code`, `val`), or `None` if this is not an
+    /// error object. Lets `catch as e { ... e.msg ... }` report the real failure.
+    #[inline]
+    pub fn as_error(&self) -> Option<&crate::object::ErrObj> {
+        if self.kind() != Some(ObjKind::Error) {
+            return None;
+        }
+        // SAFETY: `kind() == Error` proves the payload is a live `ErrObj`.
+        unsafe {
+            let p = self.header_unchecked().as_ptr() as *const crate::object::ErrObj;
+            Some(&*p)
+        }
+    }
+
     /// Borrowed list contents, or `None` if this is not a list.
     #[inline]
     pub fn as_list(&self) -> Option<&[Value]> {

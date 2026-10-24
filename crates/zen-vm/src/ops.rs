@@ -58,7 +58,7 @@ fn remove_open_file(id: usize) -> Option<File> {
 
 use crate::errors::{VmError, VmResult};
 use crate::gc::{new_bound_method, new_dict, new_list, new_rope, new_set, new_tuple};
-use crate::object::{ObjKind, RopeObj};
+use crate::object::{ErrObj, ObjKind, RopeObj};
 use crate::value::{Tag, Value};
 
 // ── truthiness / equality / ordering ─────────────────────────────────────────
@@ -142,8 +142,13 @@ pub fn arith(op: Arith, l: Value, r: Value) -> VmResult<Value> {
             return Ok(new_set(out));
         }
     }
-    if op == Arith::Add && l.is_string() && r.is_string() {
-        return string_add(l, r);
+    if op == Arith::Add && (l.is_string() || r.is_string()) {
+        // Mixed concat: `"msg" + error` or `error + 42` stringifies the
+        // non-string side so `print("caught: " + e)` just works.
+        return string_add(
+            if l.is_string() { l } else { Value::string(stringify(l)) },
+            if r.is_string() { r } else { Value::string(stringify(r)) },
+        );
     }
     if op == Arith::Mul {
         if let (Some(s), Some(n)) = (l.as_str(), r.as_int()) {
@@ -481,6 +486,17 @@ pub fn get_field(obj: Value, name: Value) -> VmResult<Value> {
         // the reference interpreter's field access).
         return Ok(Value::nil());
     }
+    // Error objects expose `msg`, `code` and `val` so `catch as e { ... }`
+    // can report the real failure instead of an opaque `<error>`.
+    if let Some(e) = obj.as_error() {
+        let name_str = name.as_str().unwrap_or("");
+        return match name_str {
+            "msg" => Ok(Value::string(e.msg.as_ref().to_string())),
+            "code" => Ok(Value::int(e.code as i64)),
+            "val" => Ok(e.val),
+            _ => Err(VmError::KeyError(stringify(name))),
+        };
+    }
     Err(VmError::type_mismatch("object with fields", obj))
 }
 
@@ -729,6 +745,10 @@ pub fn stringify(v: Value) -> String {
         s.to_string()
     } else if let Some(b) = v.as_bytes() {
         String::from_utf8_lossy(b).into_owned()
+    } else if let Some(e) = v.as_error() {
+        // `str(error)` and `"prefix" + error` render the real message so
+        // `catch as e { print("caught: " + e) }` just works.
+        e.msg.as_ref().to_string()
 } else if let Some(dict) = v.as_dict() {
         // Objects are dicts with no class support; a `str` field (as written
         // by `std/uuid.z`) supplies the canonical form, matching Python's

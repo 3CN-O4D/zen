@@ -108,3 +108,34 @@ try {
     throw "leak"
 } catch { leaked = leaked + "o" }
 print(leaked)
+
+# Caught errors expose their real message via `str(e)`, `e.msg`, `e.code`
+# and concatenate with strings, so `print("caught: " + e)` just works.
+var efails = 0
+func echeck(cond, name) {
+    if not cond { print("EF FAIL: " + name); efails = efails + 1 }
+}
+var em = ""
+var ec = -1
+var emsg = ""
+var econcat = ""
+try {
+    let boom = 1 / 0
+} catch as e {
+    em = str(e)
+    ec = e.code
+    emsg = e.msg
+    econcat = "caught: " + e
+}
+echeck(em != "" and em != "<error>", "str(error) is the message")
+echeck(ec == 0, "error.code is 0")
+echeck(emsg == em, "e.msg matches str(e)")
+echeck(econcat.startswith("caught: DivideByZero"), "string + error object concatenates")
+echeck(emsg.startswith("DivideByZero"), "division by zero message")
+
+# A `throw` carries the message into `e.msg`.
+var tm = ""
+try { throw "custom boom" } catch as e { tm = e.msg }
+echeck(tm == "UserError: custom boom", "throw message is e.msg")
+
+if efails == 0 { print("error-message SUITE PASS") } else { print("error-message SUITE FAILURES: " + str(efails)) }
