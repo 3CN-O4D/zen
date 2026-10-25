@@ -12,10 +12,11 @@ common gotchas.
 | `-` | subtract | `5 - 3` | `2` |
 | `*` | multiply / repeat | `3 * 2`, `"x" * 3` | `6`, `"xxx"` |
 | `/` | divide (float) | `7 / 2` | `3.5` |
-| `//` | floor divide | `7 // 2` | `3` |
 | `%` | modulo | `7 % 3` | `1` |
 | `**` | power | `2 ** 3` | `8` |
 | `-` | negate | `-x` | `-x` |
+
+Floor division: `int(7 / 2)` → `3` (there is no `//` operator; `//` starts a comment).
 
 Division by zero raises `DivideByZero`, catchable with `try`/`catch`.
 

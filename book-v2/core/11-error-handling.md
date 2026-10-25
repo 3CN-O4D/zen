@@ -117,10 +117,15 @@ try {
 }
 ```
 
-`throw` accepts any value, not just strings:
+`throw` accepts any value, not just strings. The value is stringified into
+`e.msg` (prefixed with `UserError:`); `e.val` is always `nil` for `throw`.
 
 ```zen
 throw { code: 42, detail: "retry later" }
+
+# caught as:
+#   e.msg → "UserError: <dict>"
+#   e.val → nil
 ```
 
 ## 11.6 Cleanup: `finally`
