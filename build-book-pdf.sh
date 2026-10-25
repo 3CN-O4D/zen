@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build "Zen for Dummies" PDF from the book-v2 markdown chapters.
+# Includes the crafted front/back cover (assets/book-cover-*.png).
 set -euo pipefail
 
 cd /home/bard/Desktop/zen
@@ -8,19 +9,11 @@ OUT="book-v2/Zen-for-Dummies.pdf"
 TMP="$(mktemp -d)"
 BOOK="$TMP/book.md"
 
-# ── title page ──────────────────────────────────────────────────────────────
-cat > "$BOOK" <<'EOF'
-% Zen for Dummies: Complete Edition
-% The Definitive Guide to the Zen Programming Language
-% Zen 3.0
-
-EOF
-
-# ── table of contents / introduction ────────────────────────────────────────
-cat book-v2/00-INTRODUCTION.md >> "$BOOK"
+# ── title page (from introduction) ─────────────────────────────────────────
+cat book-v2/00-INTRODUCTION.md > "$BOOK"
 printf '\n\n\\newpage\n\n' >> "$BOOK"
 
-# ── chapters in TOC order (only files that exist on disk) ───────────────────
+# ── chapters in TOC order (only files that exist on disk) ──────────────────
 CHAPTERS=(
   book-v2/fundamentals/02-data-types.md
   book-v2/fundamentals/03-operators.md
@@ -52,9 +45,10 @@ for ch in "${CHAPTERS[@]}"; do
   fi
 done
 
-# ── build PDF ───────────────────────────────────────────────────────────────
+# ── build body PDF ─────────────────────────────────────────────────────────
+BODY="$TMP/body.pdf"
 pandoc "$BOOK" \
-  -o "$OUT" \
+  -o "$BODY" \
   --pdf-engine=lualatex \
   --toc \
   --toc-depth=2 \
@@ -70,7 +64,30 @@ pandoc "$BOOK" \
   --variable=toccolor=blue \
   --highlight-style=tango \
   --from markdown \
-  2>&1 | tail -20
+  2>&1 | tail -5
+
+# ── merge cover + body ─────────────────────────────────────────────────────
+pdftk A=assets/book-cover-front.png B="$BODY" cat A B output "$OUT" 2>/dev/null || {
+  # pdftk not available: use pypdf to merge (cover as first page via img2pdf)
+  python3 - "$BODY" "$OUT" <<'PY'
+import sys, io
+from PIL import Image
+from pypdf import PdfReader, PdfWriter
+
+cover = Image.open("assets/book-cover-front.png").convert("RGB")
+buf = io.BytesIO()
+cover.save(buf, format="PDF")
+cover_pdf = PdfReader(buf)
+body = PdfReader(sys.argv[1])
+writer = PdfWriter()
+for p in cover_pdf.pages:
+    writer.add_page(p)
+for p in body.pages:
+    writer.add_page(p)
+with open(sys.argv[2], "wb") as f:
+    writer.write(f)
+PY
+}
 
 echo
 echo "PDF written to: $OUT"
