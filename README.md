@@ -152,6 +152,9 @@ See [`book-v2/tests/README.md`](book-v2/tests/README.md) for requirements and
 the full test matrix, and [`book-v2/interop/42-pymport-python-interoperability.md`](book-v2/interop/42-pymport-python-interoperability.md)
 for the pymport chapter.
 
+A rendered PDF of the full book is at [`book-v2/Zen-for-Dummies.pdf`](book-v2/Zen-for-Dummies.pdf)
+(built with [`build-book-pdf.sh`](build-book-pdf.sh) via pandoc + lualatex).
+
 ## License
 
 MIT
