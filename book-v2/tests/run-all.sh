@@ -53,6 +53,11 @@ for t in 01_json_stdlib.z 02_os_math_stdlib.z 03_bs4_third_party.z \
     run_one pymport "$t" 60
 done
 
+echo
+echo "=== book chapters (hermetic, no network) ==="
+run_one fundamentals 03-operators.z 60
+run_one core 11-error-handling.z 60
+
 if [ "$NETWORK" = "1" ]; then
     echo
     echo "=== web automation (live network) ==="

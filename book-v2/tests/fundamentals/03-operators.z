@@ -1,0 +1,79 @@
+# Test: Chapter 3 — Operators and Expressions
+# Mirrors book-v2/fundamentals/03-operators.md
+# Run: cd book-v2/tests/fundamentals && ../../../target/release/zen run 03-operators.z
+
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+# ── 3.1 Arithmetic ──
+check(1 + 2 == 3, "add")
+check(5 - 3 == 2, "subtract")
+check(3 * 2 == 6, "multiply")
+check(7 / 2 == 3.5, "divide float")
+check(int(7 / 2) == 3, "floor via int()")
+check(7 % 3 == 1, "modulo")
+check(2 ** 3 == 8, "power")
+check(-5 == -5, "negate")
+
+# ── 3.2 Comparison ──
+check(1 == 1, "equal ints")
+check(1 == 1.0, "equal int/float coerce")
+check(1 != 2, "not equal")
+check(3 < 5, "less than")
+check(5 <= 5, "less equal")
+check(5 > 3, "greater than")
+check(5 >= 5, "greater equal")
+
+# ── 3.3 Logic ──
+check(true and true == true, "and true")
+check(true and false == false, "and false")
+check(false or true == true, "or true")
+check(false or false == false, "or false")
+check(not false == true, "not")
+check(!true == false, "bang not")
+check(nil == nil, "nil is nil")
+check(false == false, "false is false")
+
+# ── 3.4 String concatenation with stringification ──
+check("caught: " + "x" == "caught: x", "string + string")
+check("count: " + 42 == "count: 42", "string + int")
+check("flag: " + true == "flag: true", "string + bool")
+check(nil + "end" == "nilend", "nil + string")
+
+# ── 3.5 Safe member access ?. ──
+let u = nil
+check(u?.name == nil, "safe access nil returns nil")
+let u2 = { name: "Zen" }
+check(u2?.name == "Zen", "safe access object returns field")
+let d = nil
+check(d?.a?.b?.c == nil, "nested safe access short-circuits to nil")
+
+# Strict access on nil raises (catchable)
+var strict_raised = false
+try {
+    let _ = u.name
+} catch {
+    strict_raised = true
+}
+check(strict_raised, "strict field access on nil raises")
+
+# ── 3.6 Nullish coalescing ?? ──
+check((nil ?? "default") == "default", "coalesce nil")
+check(("set" ?? "default") == "set", "coalesce present")
+check((0 ?? "default") == 0, "zero is not nil")
+check((false ?? "default") == false, "false is not nil")
+check(("" ?? "default") == "", "empty string is not nil")
+check((nil ?? nil ?? "fallback") == "fallback", "chain coalesce")
+
+# Config fallback pattern
+let cfg = nil
+check((cfg?.timeout ?? 30) == 30, "config fallback to default")
+let cfg2 = { timeout: 10 }
+check((cfg2?.timeout ?? 30) == 10, "config uses set value")
+
+if fails == 0 { print("03-operators SUITE PASS") } else { print("03-operators SUITE FAILURES: " + str(fails)) }

@@ -1,0 +1,134 @@
+# Test: Chapter 11 — Error Handling
+# Mirrors book-v2/core/11-error-handling.md
+# Run: cd book-v2/tests/core && ../../../target/release/zen run 11-error-handling.z
+
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+# ── 11.1 try / catch ──
+var caught = false
+try {
+    let x = 1 / 0
+    caught = true
+} catch {
+    caught = true
+}
+check(caught, "bare catch handles any error")
+
+var ran = false
+try {
+    print("ok")
+    ran = true
+} catch {
+    ran = false
+}
+check(ran, "catch skipped when try succeeds")
+
+# ── 11.2 catch as e + str(e) ──
+var em = ""
+try {
+    let y = 1 / 0
+} catch as e {
+    em = str(e)
+}
+check(em != "" and em != "<error>", "str(error) is the real message")
+check(em.startswith("DivideByZero"), "message names the error type")
+
+# String + error concatenation
+var joined = ""
+try {
+    let y = 1 / 0
+} catch as e {
+    joined = "caught: " + e
+}
+check(joined.startswith("caught: DivideByZero"), "string + error concatenates")
+
+# ── 11.3 Error fields ──
+var ec = -1
+var eval_ = nil
+try {
+    let y = 1 / 0
+} catch as e {
+    ec = e.code
+    eval_ = e.val
+}
+check(ec == 0, "e.code is numeric")
+check(eval_ == nil, "e.val is nil for builtin errors")
+
+# IndexError fields
+var im = ""
+try {
+    let a = [1][5]
+} catch as e {
+    im = e.msg
+}
+check(im.startswith("IndexError"), "IndexError message")
+
+# ── 11.4 Typed catch clauses ──
+var hit = ""
+try {
+    throw "boom"
+} catch TypeError {
+    hit = "t"
+} catch UserError {
+    hit = "u"
+}
+check(hit == "u", "typed catch matches UserError")
+
+# Unmatched typed clause falls through
+var hit2 = ""
+try {
+    throw "z"
+} catch TypeError {
+    hit2 = "t"
+} catch UserError {
+    hit2 = "u"
+}
+check(hit2 == "u", "unmatched clause falls through")
+
+# ── 11.5 throw ──
+var tm = ""
+try {
+    throw "custom boom"
+} catch as e {
+    tm = e.msg
+}
+check(tm == "UserError: custom boom", "throw string becomes e.msg")
+
+# throw always sets e.msg; e.val is nil
+var tc = nil
+var tv = nil
+try {
+    throw { code: 42 }
+} catch as e {
+    tc = e.msg
+    tv = e.val
+}
+check(tc == "UserError: <dict>", "throw object stringified into e.msg")
+check(tv == nil, "e.val is nil for throw")
+
+# ── 11.6 finally ──
+var log = ""
+try {
+    throw "boom"
+} catch {
+    log = log + "c"
+} finally {
+    log = log + "f"
+}
+check(log == "cf", "finally runs after catch on failure")
+
+var log2 = ""
+try {
+    log2 = "b"
+} finally {
+    log2 = log2 + "f"
+}
+check(log2 == "bf", "finally runs when nothing fails")
+
+if fails == 0 { print("11-error-handling SUITE PASS") } else { print("11-error-handling SUITE FAILURES: " + str(fails)) }

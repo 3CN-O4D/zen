@@ -18,6 +18,8 @@ cd zen/book-v2/tests
 |---|---|
 | `pymport/` | 5 hermetic tests for the embedded CPython bridge |
 | `web-automation/` | 4 tested TikTok scrapers: bs4, MechanicalSoup, Selenium, CDP |
+| `fundamentals/` | language fundamentals tests (operators, etc.) |
+| `core/` | core concept tests (error handling, etc.) |
 | `setup.sh` | Builds Zen with `--features python`, creates `.venv`, installs packages |
 | `run-all.sh` | Runs the suite and validates downloaded MP4 artifacts |
 
@@ -78,6 +80,15 @@ the full video page. If a test suddenly fails with a challenge page or a
 renamed JSON key, that is external drift, not a Zen failure. See
 [Chapter 44](../projects/44-web-automation.md) for the full walkthrough.
 
+### book chapters (no network)
+
+| Script | Chapter | Covers |
+|---|---|---|
+| `fundamentals/03-operators.z` | [Chapter 3](../fundamentals/03-operators.md) | arithmetic, comparison, logic, string `+`, `?.`, `??` |
+| `core/11-error-handling.z` | [Chapter 11](../core/11-error-handling.md) | `try`/`catch`/`throw`/`finally`, `e.msg`, `e.code`, `e.val` |
+
+These are hermetic — no network or third-party packages required.
+
 ## Using `zen py-sync` instead
 
 Each test directory has a `requirements.txt`:
@@ -94,5 +105,7 @@ manages its own `.venv`, which is faster for repeated runs.
 
 ## Related chapters
 
+- [Chapter 3 — Operators and Expressions](../fundamentals/03-operators.md)
+- [Chapter 11 — Error Handling](../core/11-error-handling.md)
 - [Chapter 42 — pymport](../../interop/42-pymport-python-interoperability.md)
 - [Chapter 44 — Web Scraping & Automation](../projects/44-web-automation.md)
