@@ -1082,6 +1082,8 @@ pub fn native_call(id: u16, args: &[Value], output: &mut String) -> VmResult<Val
         154 => crate::native::ffi::ffi_strerror(args),
         155 => crate::native::ffi::ffi_sizeof(args),
         156 => crate::native::ffi::ffi_alignof(args),
+        190 => crate::native::ffi::ffi_allow(args),
+        191 => crate::native::ffi::ffi_deny(args),
         // std/socket (500-599)
         500..=599 => crate::native::socket::dispatch(id, args),
         // net.dns (600-619)
@@ -1124,6 +1126,14 @@ pub fn native_call(id: u16, args: &[Value], output: &mut String) -> VmResult<Val
         222 => crate::native::crypto::crypto_pbkdf2(args),
         223 => crate::native::crypto::crypto_hex_encode(args),
         224 => crate::native::crypto::crypto_hex_decode(args),
+        225 => crate::native::crypto::crypto_constant_time_eq(args),
+        226 => crate::native::crypto::crypto_secure_zero(args),
+        227 => crate::native::crypto::crypto_policy(args),
+        240 => crate::native::tls::native_tls_connect(args),
+        241 => crate::native::tls::native_tls_connect_pinned(args),
+        242 => crate::native::tls::native_tls_write(args),
+        243 => crate::native::tls::native_tls_read(args),
+        244 => crate::native::tls::native_tls_close(args),
         other => {
             if let Some(v) = crate::native::sqlite::dispatch(other, args)? {
                 return Ok(v);

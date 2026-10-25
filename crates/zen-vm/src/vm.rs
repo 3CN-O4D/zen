@@ -148,6 +148,9 @@ pub struct Vm {
     /// Location of the most recent runtime error, recorded before `catch`
     /// unwinding. Read via [`Vm::error_location`] to render diagnostics.
     error_location: Option<ErrorLocation>,
+    /// Whether the VM is in safe mode: FFI, file I/O, network, and process
+    /// spawning are disabled. Set by `zen run --safe`.
+    pub safe_mode: bool,
     /// Background JIT worker pool. Present only when the `jit` feature is
     /// compiled in and `ZEN_JIT` is set; `None` makes the tier-up hook a
     /// single nullable check.
@@ -215,6 +218,7 @@ impl Vm {
             jit: crate::jit::JitHandle::new(),
             py_bridge: None,
             osr_transfers: 0,
+            safe_mode: false,
         }
     }
 
@@ -224,6 +228,12 @@ impl Vm {
     /// untrusted programs safely.
     pub fn set_step_budget(&mut self, budget: Option<u64>) {
         self.step_budget = budget;
+    }
+
+    /// Enable or disable safe mode. When on, FFI, file I/O, network, and
+    /// process-spawning native modules are not registered.
+    pub fn set_safe_mode(&mut self, enabled: bool) {
+        self.safe_mode = enabled;
     }
 
     /// Read a module global by index, for JIT-compiled code. Out-of-range reads

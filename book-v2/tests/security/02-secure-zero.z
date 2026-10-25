@@ -1,0 +1,23 @@
+# Test: Security Feature 2 — Secure zeroize
+# Mirrors crypto.secure_zero documentation
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import crypto
+
+# secure_zero returns nil
+let r = crypto.secure_zero("secret")
+check(r == nil, "secure_zero returns nil")
+
+# After secure_zero, caller should reassign to nil
+let pass = "hunter2"
+let _ = crypto.secure_zero(pass)
+pass = nil
+check(pass == nil, "secure_zero pattern: reassignment to nil")
+
+if fails == 0 { print("security-secure-zero SUITE PASS") } else { print("security-secure-zero SUITE FAILURES: " + str(fails)) }

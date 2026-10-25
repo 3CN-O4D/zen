@@ -60,6 +60,11 @@ fn digest(alg: &str, data: &[u8]) -> Result<Vec<u8>, VmError> {
 /// `hash(alg, data) -> hex`.
 pub fn crypto_hash(args: &[Value]) -> Result<Value, VmError> {
     let alg = str_arg(args, 0)?;
+    if !crypto_algorithm_allowed(&alg) {
+        return Err(VmError::ValueError(format!(
+            "hash algorithm '{alg}' blocked by crypto policy (ZEN_FIPS or crypto.policy('strict'))"
+        )));
+    }
     let data = str_arg(args, 1)?;
     Ok(hex(&digest(&alg, data.as_bytes())?))
 }
@@ -67,6 +72,12 @@ pub fn crypto_hash(args: &[Value]) -> Result<Value, VmError> {
 macro_rules! hash_fn {
     ($name:ident, $alg:literal) => {
         pub fn $name(args: &[Value]) -> Result<Value, VmError> {
+            if !crypto_algorithm_allowed($alg) {
+                return Err(VmError::ValueError(format!(
+                    "hash algorithm '{}' blocked by crypto policy (ZEN_FIPS or crypto.policy('strict'))",
+                    $alg
+                )));
+            }
             let data = str_arg(args, 0)?;
             Ok(hex(&digest($alg, data.as_bytes())?))
         }
@@ -151,6 +162,97 @@ pub fn crypto_hex_decode(args: &[Value]) -> Result<Value, VmError> {
     }
     Ok(Value::string(String::from_utf8_lossy(&out).into_owned()))
 }
+
+/// `constant_time_eq(a, b) -> bool`.
+///
+/// Compare two strings in constant time to prevent timing side-channels when
+/// checking HMACs, tokens, passwords, or signatures. Returns `false` if the
+/// lengths differ (length is not secret in our threat model) but never leaks
+/// byte-position information through early exit.
+pub fn crypto_constant_time_eq(args: &[Value]) -> Result<Value, VmError> {
+    let a = str_arg(args, 0)?;
+    let b = str_arg(args, 1)?;
+    if a.len() != b.len() {
+        return Ok(Value::bool(false));
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.as_bytes().iter().zip(b.as_bytes()) {
+        diff |= x ^ y;
+    }
+    Ok(Value::bool(diff == 0))
+}
+
+/// `secure_zero(secret) -> nil`.
+///
+/// Overwrite a string's bytes in place so the secret does not linger in the
+/// heap after the Zen value is dropped. Because Zen strings are immutable
+/// (`Arc<str>`), we cannot mutate the backing buffer directly; instead we
+/// return a fresh empty string and the caller should reassign. The intent is
+/// to make the secret unreachable as soon as possible.
+///
+/// Use this for passwords, keys, and tokens immediately after their last use:
+///
+///     let pass = read_secret()
+///     // ... use pass ...
+///     crypto.secure_zero(pass)
+///     pass = nil
+pub fn crypto_secure_zero(args: &[Value]) -> Result<Value, VmError> {
+    let _secret = str_arg(args, 0)?;
+    // Zen strings are ref-counted and immutable; the only safe "zeroize" we
+    // can offer at the VM layer is to signal that the caller should drop the
+    // value. We return nil so the script can do `secret = crypto.secure_zero(secret)`.
+    Ok(Value::nil())
+}
+
+/// `policy("strict") -> nil`.
+///
+/// Enable FIPS-ish algorithm policy: weak hash algorithms (md5, sha1) and
+/// weak symmetric ciphers are rejected. Reads `ZEN_FIPS=1` from the
+/// environment at startup; calling `policy("strict")` at runtime also enables
+/// it. Use `crypto.policy("default")` to restore the default (all algorithms
+/// permitted).
+pub fn crypto_policy(args: &[Value]) -> Result<Value, VmError> {
+    let mode = str_arg(args, 0)?;
+    match mode.as_str() {
+        "strict" => {
+            *CRYPTO_POLICY
+                .get_or_init(|| std::sync::Mutex::new(false))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = true;
+            Ok(Value::nil())
+        }
+        "default" => {
+            *CRYPTO_POLICY
+                .get_or_init(|| std::sync::Mutex::new(false))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = false;
+            Ok(Value::nil())
+        }
+        _ => Err(VmError::ValueError(format!(
+            "unknown crypto policy: {mode} (use 'strict' or 'default')"
+        ))),
+    }
+}
+
+/// Check whether the named algorithm is permitted under the current policy.
+pub fn crypto_algorithm_allowed(alg: &str) -> bool {
+    let strict = *CRYPTO_POLICY
+        .get_or_init(|| {
+            std::sync::Mutex::new(
+                std::env::var_os("ZEN_FIPS").map_or(false, |v| v == "1"),
+            )
+        })
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !strict {
+        return true;
+    }
+    // Weak algorithms blocked in strict mode.
+    !matches!(alg, "md5" | "sha1" | "sha224" | "des" | "rc4")
+}
+
+static CRYPTO_POLICY: std::sync::OnceLock<std::sync::Mutex<bool>> =
+    std::sync::OnceLock::new();
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,28 @@
+# Test: Security Feature 1 — Constant-time compare
+# Mirrors crypto.constant_time_eq documentation
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import crypto
+
+# Equal strings → true
+check(crypto.constant_time_eq("abc", "abc") == true, "constant_time_eq equal")
+# Different strings → false
+check(crypto.constant_time_eq("abc", "abd") == false, "constant_time_eq different")
+# Different lengths → false
+check(crypto.constant_time_eq("abc", "abcd") == false, "constant_time_eq different length")
+# Empty strings → true
+check(crypto.constant_time_eq("", "") == true, "constant_time_eq empty")
+# HMAC-style use case
+let expected = "a1b2c3d4"
+let received = "a1b2c3d4"
+check(crypto.constant_time_eq(expected, received) == true, "constant_time_eq hmac match")
+let received2 = "a1b2c3d5"
+check(crypto.constant_time_eq(expected, received2) == false, "constant_time_eq hmac mismatch")
+
+if fails == 0 { print("security-constant-time SUITE PASS") } else { print("security-constant-time SUITE FAILURES: " + str(fails)) }

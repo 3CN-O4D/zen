@@ -33,6 +33,9 @@ pub struct LinkedProgram {
     /// is stored under the empty key; native modules have no source and are
     /// absent (their errors surface at the Zen call site instead).
     pub sources: HashMap<String, (String, String)>,
+    /// When true, dangerous native modules (ffi, sys, process, socket,
+    /// requests, http) are not registered.
+    pub safe_mode: bool,
 }
 
 impl LinkedProgram {
@@ -68,13 +71,13 @@ pub fn compile_source(path: &str, source: &str) -> Result<CompiledModule, String
 }
 
 /// Link `entry_path` and every module it transitively imports.
-pub fn link(entry_path: impl AsRef<Path>) -> Result<LinkedProgram, String> {
+pub fn link(entry_path: impl AsRef<Path>, safe_mode: bool) -> Result<LinkedProgram, String> {
     let entry_path = entry_path.as_ref();
     let display = entry_path.to_string_lossy().to_string();
     let source =
         fs::read_to_string(entry_path)
             .map_err(|e| format!("Z0325: cannot read {}: {}", display, e))?;
-    link_program(display, source, Some(entry_path), &HashMap::new())
+    link_program(display, source, Some(entry_path), &HashMap::new(), safe_mode)
 }
 
 /// Link a program whose entry source is supplied directly, with an optional
@@ -86,6 +89,7 @@ pub fn link_program(
     source: String,
     entry_path: Option<&Path>,
     overlay: &HashMap<String, String>,
+    safe_mode: bool,
 ) -> Result<LinkedProgram, String> {
     let entry = compile_source(&display, &source)?;
 
@@ -103,8 +107,16 @@ pub fn link_program(
     let natives = native_modules();
     let mut linked: HashSet<String> = HashSet::new();
     let mut pending: Vec<String> = module_deps(&entry);
+    
+    // Modules that are unsafe in safe mode.
+    let dangerous: &[&str] = &["ffi", "sys", "process", "socket", "requests", "http", "net"];
+    
     while let Some(name) = pending.pop() {
         if !linked.insert(name.clone()) {
+            continue;
+        }
+        // In safe mode, skip dangerous native modules entirely.
+        if safe_mode && dangerous.contains(&name.as_str()) {
             continue;
         }
         // `ZEN_NATIVE_ONLY=<mod>` bypasses a `.z` tier for one module, so the
@@ -144,7 +156,7 @@ pub fn link_program(
         modules.push((name.clone(), unit));
         sources.insert(name, (path, src));
     }
-    Ok(LinkedProgram { entry, modules, sources })
+    Ok(LinkedProgram { entry, modules, sources, safe_mode })
 }
 
 /// True when `ZEN_NATIVE_ONLY` names this module.

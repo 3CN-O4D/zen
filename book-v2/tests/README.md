@@ -20,6 +20,7 @@ cd zen/book-v2/tests
 | `web-automation/` | 4 tested TikTok scrapers: bs4, MechanicalSoup, Selenium, CDP |
 | `fundamentals/` | language fundamentals tests (operators, etc.) |
 | `core/` | core concept tests (error handling, etc.) |
+| `security/` | security feature tests (constant-time, zeroize, FFI gates, crypto policy, TLS pinning) |
 | `setup.sh` | Builds Zen with `--features python`, creates `.venv`, installs packages |
 | `run-all.sh` | Runs the suite and validates downloaded MP4 artifacts |
 
@@ -87,7 +88,17 @@ renamed JSON key, that is external drift, not a Zen failure. See
 | `fundamentals/03-operators.z` | [Chapter 3](../fundamentals/03-operators.md) | arithmetic, comparison, logic, string `+`, `?.`, `??` |
 | `core/11-error-handling.z` | [Chapter 11](../core/11-error-handling.md) | `try`/`catch`/`throw`/`finally`, `e.msg`, `e.code`, `e.val` |
 
-These are hermetic — no network or third-party packages required.
+### security (no network)
+
+| Script | Covers |
+|---|---|
+| `security/01-constant-time.z` | `crypto.constant_time_eq` — timing-safe comparison |
+| `security/02-secure-zero.z` | `crypto.secure_zero` — secret zeroization |
+| `security/04-ffi-gates.z` | `ffi.allow` / `ffi.deny` — FFI capability policy |
+| `security/05-crypto-policy.z` | `crypto.policy("strict")` — FIPS-ish algorithm policy |
+| `security/03-tls-pinning.z` | `tls.connect_pinned` — TLS certificate pinning (network) |
+
+These are hermetic — no network or third-party packages required (except `03-tls-pinning.z` which needs `--network`).
 
 ## Using `zen py-sync` instead
 
@@ -107,5 +118,8 @@ manages its own `.venv`, which is faster for repeated runs.
 
 - [Chapter 3 — Operators and Expressions](../fundamentals/03-operators.md)
 - [Chapter 11 — Error Handling](../core/11-error-handling.md)
+- [Chapter 25 — Crypto Module](../modules/25-crypto-complete.md)
+- [Chapter 27 — Socket Module](../networking/27-socket-module.md)
+- [Chapter 29 — Requests Module](../networking/29-requests-module.md)
 - [Chapter 42 — pymport](../../interop/42-pymport-python-interoperability.md)
 - [Chapter 44 — Web Scraping & Automation](../projects/44-web-automation.md)

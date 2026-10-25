@@ -38,7 +38,7 @@ impl Drop for Scratch {
 
 /// Run `entry` through the linker and a fresh VM, returning its stdout.
 fn run(path: &Path) -> Result<String, String> {
-    let linked = zen_cli::linker::link(path)?;
+    let linked = zen_cli::linker::link(path, false)?;
     let mut vm = Vm::new(Box::new(RefCountGc));
     linked.register_with(&mut vm);
     vm.run_module(&linked.entry.main, &linked.entry.children)
@@ -129,7 +129,7 @@ fn a_plain_module_gets_no_native_member() {
     s.module("json", "let tag = \"pure\"\n");
     let entry = s.entry("main.z", "import json\nprint(json.tag)\n");
 
-    let linked = zen_cli::linker::link(&entry).expect("link");
+    let linked = zen_cli::linker::link(&entry, false).expect("link");
     let json = linked
         .modules
         .iter()

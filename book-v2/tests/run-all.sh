@@ -58,6 +58,17 @@ echo "=== book chapters (hermetic, no network) ==="
 run_one fundamentals 03-operators.z 60
 run_one core 11-error-handling.z 60
 
+echo
+echo "=== security (hermetic, no network) ==="
+run_one security 01-constant-time.z 60
+run_one security 02-secure-zero.z 60
+run_one security 04-ffi-gates.z 60
+run_one security 05-crypto-policy.z 60
+
+if [ "$NETWORK" = "1" ]; then
+    run_one security 03-tls-pinning.z 120
+fi
+
 if [ "$NETWORK" = "1" ]; then
     echo
     echo "=== web automation (live network) ==="

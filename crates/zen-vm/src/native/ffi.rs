@@ -36,6 +36,38 @@ fn libs() -> &'static Mutex<HashMap<u64, SendLib>> {
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+// ── FFI capability gates ────────────────────────────────────────────────────
+
+/// Allowed library path prefixes for `ffi.load`. Empty = allow all.
+static ALLOW_LIST: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+/// Denied library path prefixes for `ffi.load`. Empty = deny none.
+static DENY_LIST: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+fn allow_list() -> &'static Mutex<Vec<String>> {
+    ALLOW_LIST.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn deny_list() -> &'static Mutex<Vec<String>> {
+    DENY_LIST.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Check whether a library path is permitted by the allow/deny lists.
+fn path_allowed(path: &str) -> bool {
+    let deny = deny_list().lock().unwrap_or_else(|e| e.into_inner());
+    for prefix in deny.iter() {
+        if path.starts_with(prefix) {
+            return false;
+        }
+    }
+    drop(deny);
+
+    let allow = allow_list().lock().unwrap_or_else(|e| e.into_inner());
+    if allow.is_empty() {
+        return true; // no allow list = allow all (subject to deny list)
+    }
+    allow.iter().any(|prefix| path.starts_with(prefix))
+}
+
 // ── numeric / C-string helpers ──────────────────────────────────────────────
 
 fn num_u64(v: Value) -> Option<u64> {
@@ -409,6 +441,11 @@ fn do_call(addr: u64, raw_args: &[Value], ret: &Value, what: &str) -> VmResult<V
 
 pub fn ffi_load(args: &[Value]) -> VmResult<Value> {
     let path = string_arg(args, 0)?;
+    if !path_allowed(&path) {
+        return Err(VmError::NativeError(format!(
+            "ffi.load {path}: blocked by FFI capability policy"
+        )));
+    }
     let lib = unsafe { Library::new(path.as_str()) }
         .map_err(|e| VmError::NativeError(format!("ffi.load {path}: {e}")))?;
     let id = NEXT_ID.fetch_add(1, SeqCst);
@@ -588,6 +625,43 @@ pub fn ffi_alignof(args: &[Value]) -> VmResult<Value> {
     Ok(Value::int_promote(align_of(&tag)? as i64))
 }
 
+/// `ffi.allow(paths) -> nil`
+///
+/// Add library path prefixes to the FFI allow list. Once the allow list is
+/// non-empty, `ffi.load` only permits libraries whose path starts with one of
+/// the listed prefixes. Use this to restrict FFI to a known set of trusted
+/// libraries.
+pub fn ffi_allow(args: &[Value]) -> VmResult<Value> {
+    let paths = args.get(0)
+        .and_then(|v| v.as_list())
+        .ok_or_else(|| VmError::TypeError("allow expects a list of path prefixes".into()))?;
+    let mut list = allow_list().lock().unwrap_or_else(|e| e.into_inner());
+    for p in paths {
+        if let Some(s) = p.as_str() {
+            list.push(s.to_string());
+        }
+    }
+    Ok(Value::nil())
+}
+
+/// `ffi.deny(paths) -> nil`
+///
+/// Add library path prefixes to the FFI deny list. `ffi.load` rejects any
+/// library whose path starts with one of the listed prefixes, even if the
+/// allow list is empty.
+pub fn ffi_deny(args: &[Value]) -> VmResult<Value> {
+    let paths = args.get(0)
+        .and_then(|v| v.as_list())
+        .ok_or_else(|| VmError::TypeError("deny expects a list of path prefixes".into()))?;
+    let mut list = deny_list().lock().unwrap_or_else(|e| e.into_inner());
+    for p in paths {
+        if let Some(s) = p.as_str() {
+            list.push(s.to_string());
+        }
+    }
+    Ok(Value::nil())
+}
+
 // ── module registration ─────────────────────────────────────────────────────
 
 fn func(name: &'static str, id: u16, required: u8, max: u8) -> crate::native::HostExport {
@@ -618,5 +692,7 @@ pub fn module() -> crate::bytecode::ModuleUnit {
         func("strerror", 154, 1, 1),
         func("sizeof", 155, 1, 1),
         func("alignof", 156, 1, 1),
+        func("allow", 190, 1, 1),
+        func("deny", 191, 1, 1),
     ])
 }

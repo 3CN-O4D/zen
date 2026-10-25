@@ -1,0 +1,32 @@
+# Test: Security Feature 5 — FFI capability gates
+# Mirrors ffi.allow / ffi.deny documentation
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import ffi
+
+# deny a path prefix - should not error
+let r = ffi.deny(["/nonexistent/"])
+check(r == nil, "ffi.deny returns nil")
+
+# allow a path prefix - should not error
+let r2 = ffi.allow(["/usr/lib/"])
+check(r2 == nil, "ffi.allow returns nil")
+
+# ffi.load of a blocked path should fail with policy error
+var load_blocked = false
+try {
+    ffi.load("/nonexistent/blocked.so")
+} catch as e {
+    if e.msg.contains("blocked by FFI capability policy") {
+        load_blocked = true
+    }
+}
+check(load_blocked, "ffi.load blocked by policy")
+
+if fails == 0 { print("security-ffi-gates SUITE PASS") } else { print("security-ffi-gates SUITE FAILURES: " + str(fails)) }

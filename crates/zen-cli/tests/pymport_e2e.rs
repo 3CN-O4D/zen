@@ -38,7 +38,7 @@ impl Drop for Scratch {
 
 /// Link, scan all linked sources, export paths, attach the bridge, run.
 fn run_e2e(entry: &Path) -> Result<String, String> {
-    let linked = zen_cli::linker::link(entry).map_err(|e| format!("link: {e}"))?;
+    let linked = zen_cli::linker::link(entry, false).map_err(|e| format!("link: {e}"))?;
     let mut specs = Vec::new();
     for (path, source) in linked.sources.values() {
         match zen_cli::pydeps::scan_pymports(source) {
@@ -66,7 +66,7 @@ fn transitive_zen_helper_pymport_is_found() {
     let s = Scratch::new("transitive");
     s.write("helper.z", "pymport json\nlet enc = fn(v) {\n    return json.dumps(v)\n}\n");
     let entry = s.write("main.zen", "import helper\nprint helper.enc({\"a\": 1})\n");
-    let linked = zen_cli::linker::link(&entry).expect("link");
+    let linked = zen_cli::linker::link(&entry, false).expect("link");
     let mut mods = Vec::new();
     for source in linked.sources.values().map(|(_, src)| src) {
         for spec in zen_cli::pydeps::scan_pymports(source).expect("scan") {

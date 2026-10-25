@@ -19,6 +19,7 @@ use std::cell::RefCell;
 
 pub mod crypto;
 pub mod platform;
+pub mod tls;
 pub(crate) mod sqlite;
 pub(crate) mod qr;
 pub(crate) mod wa;
@@ -583,6 +584,20 @@ fn crypto_module() -> ModuleUnit {
         ("pbkdf2", 222, 4),
         ("hex_encode", 223, 1),
         ("hex_decode", 224, 1),
+        ("constant_time_eq", 225, 2),
+        ("secure_zero", 226, 1),
+        ("policy", 227, 1),
+    ])
+}
+
+/// `tls` module: encrypted TCP connections with optional certificate pinning.
+fn tls_module() -> ModuleUnit {
+    host_module(&[
+        ("connect", 240, 2),
+        ("connect_pinned", 241, 3),
+        ("write", 242, 2),
+        ("read", 243, 2),
+        ("close", 244, 1),
     ])
 }
 
@@ -597,7 +612,7 @@ fn crypto_module() -> ModuleUnit {
 /// Registering a pre-suffixed key here would collide with that, so no module
 /// below carries a `.native` suffix of its own.
 pub fn native_modules() -> HashMap<String, ModuleUnit> {
-    let table: [(&str, ModuleUnit); 31] = [
+    let table: [(&str, ModuleUnit); 32] = [
         ("fs", fs_module()),
         ("os", os_module()),
         ("time", time_module()),
@@ -626,6 +641,7 @@ pub fn native_modules() -> HashMap<String, ModuleUnit> {
         ("lxml.html", lxml_html::module()),
         ("raw", raw_module()),
         ("crypto", crypto_module()),
+        ("tls", tls_module()),
         ("sqlite", sqlite::module()),
         ("qr", qr::module()),
         ("wa", wa::module()),

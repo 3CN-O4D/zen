@@ -131,11 +131,22 @@ pub fn format_error(e: &str) -> String {
 
 fn run_command(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
-        return Err(format!("Z0501: usage: zen run <file>"));
+        return Err(format!("Z0501: usage: zen run [--safe] <file>"));
     }
-    let linked = linker::link(&args[0])?;
-    ensure_python_deps(&args[0], &linked)?;
-    run_linked(linked)
+    let mut safe_mode = false;
+    let mut file_idx = 0;
+    for (i, a) in args.iter().enumerate() {
+        if a == "--safe" {
+            safe_mode = true;
+        } else if !a.starts_with('-') {
+            file_idx = i;
+            break;
+        }
+    }
+    let file = &args[file_idx];
+    let linked = linker::link(file, safe_mode)?;
+    ensure_python_deps(file, &linked)?;
+    run_linked(linked, safe_mode)
 }
 
 /// Scan ALL linked sources (entry plus transitive `.z` imports) for
@@ -246,8 +257,9 @@ fn py_sync_command(args: &[String]) -> Result<(), String> {
 }
 
 /// Register and execute an already-linked program on a fresh VM.
-pub fn run_linked(linked: linker::LinkedProgram) -> Result<(), String> {
+pub fn run_linked(linked: linker::LinkedProgram, safe_mode: bool) -> Result<(), String> {
     let mut vm = Vm::new(Box::new(RefCountGc));
+    vm.set_safe_mode(safe_mode);
     attach_jit(&mut vm);
     attach_python(&mut vm);
     linked.register_with(&mut vm);
@@ -305,7 +317,7 @@ fn check_command(args: &[String]) -> Result<(), String> {
     // Static checks that need only the AST (division by a literal zero).
     crate::check::check_source(&args[0], &source)?;
     // Full compile: undefined names, structural errors, unresolved imports.
-    let _ = linker::link(&args[0])?;
+    let _ = linker::link(&args[0], false)?;
     println!("OK: {}", args[0]);
     Ok(())
 }
@@ -494,7 +506,7 @@ fn fmt_command(args: &[String]) -> Result<(), String> {
 pub fn link_temp_source(code: &str) -> Result<LinkedProgram, String> {
     let path = std::env::temp_dir().join(format!("zen_eval_{}.z", std::process::id()));
     std::fs::write(&path, code).map_err(|e| format!("repl: {e}"))?;
-    linker::link(&path)
+    linker::link(&path, false)
 }
 
 /// Run one linked entry on `vm`, returning captured `print` output and the
@@ -628,6 +640,7 @@ mod tests {
             "print 15\nthrow \"boom\"\n".to_string(),
             None,
             &std::collections::HashMap::new(),
+            false,
         )
         .expect("link");
         let mut vm = Vm::new(Box::new(RefCountGc));

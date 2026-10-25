@@ -1,0 +1,52 @@
+# Test: Security Feature 3 & 7 — TLS connect + certificate pinning
+# Mirrors tls module documentation
+# These tests require network access; they verify the API surface works.
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import tls
+
+# connect returns an integer fd
+let fd = tls.connect("example.com", 443)
+check(typeof(fd) == "int", "tls.connect returns int fd")
+check(fd > 0, "tls.connect fd is positive")
+
+# write + read
+let w = tls.write(fd, "GET / HTTP/1.0\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+check(w == nil, "tls.write returns nil")
+let resp = tls.read(fd, 4096)
+check(typeof(resp) == "string", "tls.read returns string")
+check(resp.contains("HTTP"), "tls.read response contains HTTP")
+
+tls.close(fd)
+
+# connect_pinned with empty pins list should work like connect
+let fd2 = tls.connect_pinned("example.com", 443, [])
+check(typeof(fd2) == "int", "tls.connect_pinned returns int fd")
+check(fd2 > 0, "tls.connect_pinned fd is positive")
+tls.close(fd2)
+
+# connect_pinned with wrong pin should fail on first read (handshake is lazy)
+let fd3 = tls.connect_pinned("example.com", 443, ["sha256:0000000000000000000000000000000000000000000000000000000000000000"])
+let pin_ok = typeof(fd3) == "int"
+if pin_ok {
+    # Handshake is lazy — pin check happens on first read
+    var read_err = ""
+    try {
+        let _ = tls.read(fd3, 4096)
+    } catch as e {
+        read_err = e.msg
+    }
+    check(read_err != "", "connect_pinned with wrong pin fails on read: " + read_err)
+    tls.close(fd3)
+} else {
+    # connect itself failed (handshake was eager)
+    check(typeof(fd3) == "string", "connect_pinned with wrong pin fails")
+}
+
+if fails == 0 { print("security-tls SUITE PASS") } else { print("security-tls SUITE FAILURES: " + str(fails)) }

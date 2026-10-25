@@ -45,7 +45,7 @@ impl EmbeddedProgram {
 
 /// Build `source_path` into a standalone executable at `output`.
 pub fn build(source_path: &str, output: &str) -> Result<(), String> {
-    let linked = linker::link(source_path)?;
+    let linked = linker::link(source_path, false)?;
     let payload = encode_payload(&linked);
 
     let exe = std::env::current_exe().map_err(|e| format!("build: cannot find interpreter: {e}"))?;
@@ -147,8 +147,8 @@ fn decode_payload(buf: &[u8]) -> Option<EmbeddedProgram> {
 /// Link and run an embedded program. Mirrors `zen run` for the payload case.
 pub fn run_embedded(prog: &EmbeddedProgram) -> Result<(), String> {
     let overlay = prog.overlay();
-    let linked = linker::link_program(prog.entry_path.clone(), prog.entry_source.clone(), None, &overlay)?;
-    crate::cli::run_linked(linked)
+    let linked = linker::link_program(prog.entry_path.clone(), prog.entry_source.clone(), None, &overlay, false)?;
+    crate::cli::run_linked(linked, false)
 }
 
 // ── small binary codec ──────────────────────────────────────────────────

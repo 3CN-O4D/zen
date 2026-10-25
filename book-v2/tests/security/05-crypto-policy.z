@@ -1,0 +1,46 @@
+# Test: Security Feature 6 — Algorithm policy / FIPS mode
+# Mirrors crypto.policy documentation
+var fails = 0
+func check(cond, name) {
+    if cond { } else {
+        print("FAIL: " + name)
+        fails = fails + 1
+    }
+}
+
+import crypto
+
+# Default: all algorithms permitted
+let h = crypto.sha256("test")
+check(typeof(h) == "string", "sha256 works by default")
+let h2 = crypto.md5("test")
+check(typeof(h2) == "string", "md5 works by default")
+
+# Enable strict policy
+let r = crypto.policy("strict")
+check(r == nil, "crypto.policy('strict') returns nil")
+
+# MD5 should now fail
+var md5_blocked = false
+try {
+    crypto.md5("test")
+} catch as e {
+    if e.msg.contains("blocked by crypto policy") {
+        md5_blocked = true
+    }
+}
+check(md5_blocked, "md5 blocked in strict mode")
+
+# SHA256 should still work
+let h4 = crypto.sha256("test")
+check(typeof(h4) == "string", "sha256 still works in strict mode")
+
+# Restore default
+let r2 = crypto.policy("default")
+check(r2 == nil, "crypto.policy('default') returns nil")
+
+# MD5 should work again
+let h5 = crypto.md5("test")
+check(typeof(h5) == "string", "md5 works again after default policy")
+
+if fails == 0 { print("security-crypto-policy SUITE PASS") } else { print("security-crypto-policy SUITE FAILURES: " + str(fails)) }

@@ -32,7 +32,7 @@ fn interp_out(src: &str) -> Result<String, String> {
 /// and every transitive import from disk, register the dependencies, execute.
 /// Linking is shared with the CLI so the harness can never drift from it.
 fn vm_out_file(path: &Path) -> Result<String, String> {
-    let linked = match zen_cli::linker::link(path) {
+    let linked = match zen_cli::linker::link(path, false) {
         Ok(l) => l,
         Err(e) => return Err(format!("link: {e}")),
     };
