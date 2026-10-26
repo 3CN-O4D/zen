@@ -1,487 +1,256 @@
-# Chapter 25: crypto Module - Complete Guide
+# Chapter 25: crypto Module — Complete Guide
 
-The `crypto` module provides comprehensive cryptographic functionality including hashing, encryption, decryption, digital signatures, JWT, certificates, and more.
+The `crypto` module provides symmetric encryption, asymmetric keys, hashing,
+HMAC, key derivation, JWT, OTP, and X.509. This chapter covers the complete
+crypto API.
 
-## Importing the crypto Module
+> WARNING:️ Warning: Cryptography is easy to get wrong. Use well-established
+> algorithms and modes. Never roll your own crypto for production security.
+
+## 25.1 Symmetric encryption
 
 ```zen
 import crypto
-```
 
-The crypto module is organized into submodules:
-- `crypto.hash` - Hashing functions
-- `crypto.hmac` - HMAC
-- `crypto.symmetric` - Symmetric encryption (AES, etc.)
-- `crypto.asymmetric` - Asymmetric encryption (RSA, etc.)
-- `crypto.kdf` - Key derivation functions
-- `crypto.rand` - Cryptographic random
-- `crypto.jwt` - JSON Web Tokens
-- `crypto.x509` - X.509 certificates
-- `crypto.encoding` - Encoding utilities
-- `crypto.otp` - One-time passwords
-
-## Cryptographic Hashing
-
-### Hash Functions
-
-```zen
-import crypto.hash
-
-# SHA-256
-let h = crypto.hash.sha256("Hello World")
-print(h.hexdigest())
-
-# SHA-512
-let h2 = crypto.hash.sha512("Hello World")
-print(h2.hexdigest())
-
-# SHA-1 (less secure, avoid for new applications)
-let h3 = crypto.hash.sha1("Hello World")
-print(h3.hexdigest())
-
-# MD5 (not cryptographically secure)
-let h4 = crypto.hash.md5("Hello World")
-print(h4.hexdigest())
-
-# Blake2b
-let h5 = crypto.hash.blake2b("Hello World")
-print(h5.hexdigest())
-```
-
-### Hashing Files
-
-```zen
-import crypto.hash
-
-func hash_file(filename, algorithm) {
-    let content = fs.read(filename)
-    if algorithm == "sha256" {
-        return crypto.hash.sha256(content).hexdigest()
-    }
-    return null
-}
-
-print(hash_file("important.txt", "sha256"))
-```
-
-## HMAC (Hash-based Message Authentication Code)
-
-```zen
-import crypto.hmac
-
-let key = "secret-key"
-let message = "Hello World"
-
-let mac = crypto.hmac.new(key, message, "sha256")
-print(mac.hexdigest())
-```
-
-### Verifying HMAC
-
-```zen
-func verify_hmac(message, key, signature) {
-    let mac = crypto.hmac.new(key, message, "sha256")
-    return mac.hexdigest() == signature
-}
-```
-
-## Cryptographic Random
-
-```zen
-import crypto.rand
-
-# Random bytes
-let bytes = crypto.rand.bytes(32)
-print(bytes)
-
-# Random integer
-let num = crypto.rand.int(1, 100)
-print(num)
-
-# Random string
-let token = crypto.rand.token(32)
-print(token)  # Hex string
-```
-
-## Symmetric Encryption (AES)
-
-Symmetric encryption uses the same key for encryption and decryption.
-
-### AES-GCM Encryption
-
-```zen
-import crypto.symmetric
-import crypto.rand
-
-# Generate key (32 bytes for AES-256)
-let key = crypto.rand.bytes(32)
-let plaintext = "Secret message"
+# Generate a key
+let key = crypto.generate_key("aes-256-gcm")
 
 # Encrypt
-let encrypted = crypto.symmetric.aes_gcm_encrypt(key, plaintext)
-print("Nonce:", encrypted.nonce)
-print("Ciphertext:", encrypted.ciphertext)
-print("Tag:", encrypted.tag)
+let ciphertext = crypto.encrypt_aes_gcm(key, "secret message")
 
 # Decrypt
-let decrypted = crypto.symmetric.aes_gcm_decrypt(key, encrypted.nonce, 
-    encrypted.ciphertext, encrypted.tag)
-print("Decrypted:", decrypted)
+let plaintext = crypto.decrypt_aes_gcm(key, ciphertext)
+print(plaintext)  # secret message
 ```
 
-### AES-CBC Encryption
+### Symmetric functions
+
+| Function | Description |
+|----------|-------------|
+| `generate_key(alg?)` | Generate a key ("aes-256-gcm" or "chacha20-poly1305") |
+| `encrypt(alg, key, plaintext, aad?)` | Encrypt with given algorithm |
+| `decrypt(alg, key, ciphertext, aad?)` | Decrypt with given algorithm |
+| `encrypt_aes_gcm(key, plaintext, aad?)` | AES-256-GCM encrypt |
+| `decrypt_aes_gcm(key, ciphertext, aad?)` | AES-256-GCM decrypt |
+| `encrypt_chacha20_poly1305(key, plaintext, aad?)` | ChaCha20-Poly1305 encrypt |
+| `decrypt_chacha20_poly1305(key, ciphertext, aad?)` | ChaCha20-Poly1305 decrypt |
+
+### With associated data (AAD)
 
 ```zen
-import crypto.symmetric
-import crypto.rand
+import crypto
 
-let key = crypto.rand.bytes(32)
-let iv = crypto.rand.bytes(16)
-let plaintext = "Another secret message"
+let key = crypto.generate_key("aes-256-gcm")
+let aad = "header-data"
 
-let ciphertext = crypto.symmetric.aes_cbc_encrypt(key, iv, plaintext)
-let decrypted = crypto.symmetric.aes_cbc_decrypt(key, iv, ciphertext)
-print(decrypted)
+let ct = crypto.encrypt_aes_gcm(key, "secret", aad)
+let pt = crypto.decrypt_aes_gcm(key, ct, aad)
+print(pt)  # secret
 ```
 
-## Key Derivation Functions (KDF)
+If you tamper with the ciphertext or AAD, decryption raises an error.
 
-Used to derive encryption keys from passwords.
-
-### PBKDF2
+## 25.2 Asymmetric encryption (RSA)
 
 ```zen
-import crypto.kdf
-import crypto.rand
+import crypto
 
-let password = "my_password"
-let salt = crypto.rand.bytes(16)
+let keys = crypto.generate_rsa(2048)
+let public_key = keys.public_key
+let private_key = keys.private_key
 
-# Derive key
-let key = crypto.kdf.pbkdf2(password, salt, iterations=100000, length=32)
-print(key)
+let ciphertext = crypto.rsa_encrypt(public_key, "secret")
+let plaintext = crypto.rsa_decrypt(private_key, ciphertext)
+print(plaintext)  # secret
 ```
 
-### Argon2 (if supported)
+### Asymmetric functions
+
+| Function | Description |
+|----------|-------------|
+| `generate_rsa(bits?)` | Generate RSA keypair (default 2048) |
+| `rsa_encrypt(public_key, plaintext)` | RSA encrypt |
+| `rsa_decrypt(private_key, ciphertext)` | RSA decrypt |
+| `rsa_sign(private_key, message)` | RSA sign |
+| `rsa_verify(public_key, message, sig)` | RSA verify → bool |
+
+## 25.3 Digital signatures
+
+### RSA sign/verify
 
 ```zen
-import crypto.kdf
+import crypto
 
-let password = "my_password"
-let salt = crypto.rand.bytes(16)
-let key = crypto.kdf.argon2(password, salt, length=32)
-print(key)
+let keys = crypto.generate_rsa(2048)
+let message = "hello world"
+
+let sig = crypto.rsa_sign(keys.private_key, message)
+let valid = crypto.rsa_verify(keys.public_key, message, sig)
+print(valid)  # true
+
+# Tampered message fails
+let invalid = crypto.rsa_verify(keys.public_key, "tampered", sig)
+print(invalid)  # false
 ```
 
-## Asymmetric Encryption (RSA)
-
-Asymmetric uses public key for encryption, private key for decryption.
-
-### Generating RSA Key Pair
+### Ed25519 sign/verify
 
 ```zen
-import crypto.asymmetric
+import crypto
 
-let keypair = crypto.asymmetric.rsa_generate(2048)
-print("Public key generated")
-print("Private key generated")
+let keys = crypto.generate_ed25519()
+let message = "hello world"
+
+let sig = crypto.ed25519_sign(keys.private_key, message)
+let valid = crypto.ed25519_verify(keys.public_key, message, sig)
+print(valid)  # true
 ```
 
-### RSA Encryption/Decryption
+## 25.4 Key agreement (X25519)
 
 ```zen
-import crypto.asymmetric
+import crypto
 
-let keypair = crypto.asymmetric.rsa_generate(2048)
-let plaintext = "Secret message"
+let alice = crypto.generate_x25519()
+let bob = crypto.generate_x25519()
 
-# Encrypt with public key
-let ciphertext = crypto.asymmetric.rsa_encrypt(keypair.public_key, plaintext)
+let alice_secret = crypto.x25519_shared_secret(alice.private_key, bob.public_key)
+let bob_secret = crypto.x25519_shared_secret(bob.private_key, alice.public_key)
 
-# Decrypt with private key
-let decrypted = crypto.asymmetric.rsa_decrypt(keypair.private_key, ciphertext)
-print(decrypted)
+print(alice_secret == bob_secret)  # true (shared secret matches)
 ```
 
-### RSA Signatures
+## 25.5 Hashing and HMAC
 
 ```zen
-import crypto.asymmetric
-import crypto.hash
+import crypto
 
-let keypair = crypto.asymmetric.rsa_generate(2048)
-let message = "Important message"
-
-# Sign
-let signature = crypto.asymmetric.rsa_sign(keypair.private_key, message, "sha256")
-
-# Verify
-let valid = crypto.asymmetric.rsa_verify(keypair.public_key, message, signature, "sha256")
-print("Valid:", valid)
+print(crypto.hash("sha256", "hello"))
+print(crypto.hmac("sha256", "key", "message"))
 ```
 
-## JSON Web Tokens (JWT)
+Hash algorithms: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`,
+`sha3_256`, `sha3_512`, `blake2b`, `blake2s`.
 
-JWTs are used for authentication and information exchange.
+HMAC algorithms: `sha256`, `sha512`.
 
-### Creating a JWT
+## 25.6 Key derivation (PBKDF2)
 
 ```zen
-import crypto.jwt
+import crypto
 
-let secret = "my-secret-key"
-let payload = {
-    "user_id": 123,
-    "username": "alice",
-    "exp": time.time() + 3600  # Expires in 1 hour
-}
-
-let token = crypto.jwt.encode(payload, secret, algorithm="HS256")
-print(token)
+let key = crypto.pbkdf2("password", "salt", 100000, 32)
+print(key)  # derived key (hex)
 ```
 
-### Verifying and Decoding a JWT
+## 25.7 JWT (JSON Web Tokens)
 
 ```zen
-import crypto.jwt
+import crypto
 
-let token = "eyJhbGc..."
-let secret = "my-secret-key"
+let payload = {"sub": "123", "name": "Zen"}
+let secret = "my-secret"
 
-try {
-    let payload = crypto.jwt.decode(token, secret, algorithm="HS256")
-    print("User ID:", payload.user_id)
-    print("Valid token")
-} catch (e) {
-    print("Invalid token:", e)
-}
+let token = crypto.jwt_encode(payload, secret)
+print(token)  # eyJ...
+
+let decoded = crypto.jwt_decode(token, secret)
+print(decoded["sub"])  # 123
 ```
 
-### JWT with RS256 (Asymmetric)
+## 25.8 OTP (TOTP/HOTP)
 
 ```zen
-import crypto.jwt
-import crypto.asymmetric
+import crypto
 
-let keypair = crypto.asymmetric.rsa_generate(2048)
-let payload = {"user_id": 123}
+let totp = crypto.otp_totp("secret")
+print(totp)  # 6-digit code
 
-let token = crypto.jwt.encode(payload, keypair.private_key, algorithm="RS256")
-let decoded = crypto.jwt.decode(token, keypair.public_key, algorithm="RS256")
+let valid = crypto.otp_verify("secret", "123456")
+print(valid)  # true/false
 ```
 
-## X.509 Certificates
-
-Working with SSL/TLS certificates.
-
-### Loading a Certificate
+## 25.9 X.509 certificates
 
 ```zen
-import crypto.x509
+import crypto
 
-let cert_pem = fs.read("certificate.crt")
-let cert = crypto.x509.load_cert(cert_pem)
-
-print("Subject:", cert.subject)
-print("Issuer:", cert.issuer)
-print("Valid from:", cert.not_before)
-print("Valid until:", cert.not_after)
+let cert = crypto.x509_parse(cert_pem)
+print(cert.subject)
+print(cert.issuer)
+print(cert.not_after)
 ```
 
-### Verifying Certificate
+## 25.10 Constant-time compare and secure zero
 
 ```zen
-import crypto.x509
+import crypto
 
-let cert = crypto.x509.load_cert(fs.read("cert.crt"))
-let ca_cert = crypto.x509.load_cert(fs.read("ca.crt"))
+# Timing-safe comparison (for HMACs, tokens, passwords)
+let ok = crypto.constant_time_eq(expected, received)
+print(ok)  # true/false
 
-let valid = crypto.x509.verify(cert, ca_cert)
-print("Certificate valid:", valid)
+# Zeroize a secret after use
+let pass = read_secret()
+# ... use pass ...
+crypto.secure_zero(pass)
+pass = nil
 ```
 
-### Getting Certificate Information
+## 25.11 Algorithm policy (FIPS-ish mode)
 
 ```zen
-let cert = crypto.x509.load_cert(pem)
-print(cert.serial_number)
-print(cert.signature_algorithm)
-print(cert.public_key)
+import crypto
+
+crypto.policy("strict")   # block md5, sha1, weak ciphers
+crypto.policy("default")  # allow all
 ```
 
-## Base64 Encoding/Decoding
+Or set `ZEN_FIPS=1` in the environment.
+
+## 25.12 Quick reference
 
 ```zen
-import crypto.encoding
+import crypto
 
-let data = "Hello World"
-let encoded = crypto.encoding.base64_encode(data)
-print(encoded)  # SGVsbG8gV29ybGQ=
+# Symmetric
+let key = crypto.generate_key("aes-256-gcm")
+let ct = crypto.encrypt_aes_gcm(key, "secret")
+let pt = crypto.decrypt_aes_gcm(key, ct)
 
-let decoded = crypto.encoding.base64_decode(encoded)
-print(decoded)  # Hello World
+# Asymmetric
+let keys = crypto.generate_rsa(2048)
+let ct = crypto.rsa_encrypt(keys.public_key, "secret")
+let pt = crypto.rsa_decrypt(keys.private_key, ct)
 
-# URL-safe base64
-let url_encoded = crypto.encoding.base64url_encode(data)
-let url_decoded = crypto.encoding.base64url_decode(url_encoded)
+# Signatures
+let sig = crypto.ed25519_sign(keys.private_key, "msg")
+let ok = crypto.ed25519_verify(keys.public_key, "msg", sig)
+
+# Key agreement
+let shared = crypto.x25519_shared_secret(a.private_key, b.public_key)
+
+# Hashing
+print(crypto.hash("sha256", "hello"))
+print(crypto.hmac("sha256", "key", "msg"))
+
+# KDF
+let derived = crypto.pbkdf2("password", "salt", 100000, 32)
+
+# JWT
+let token = crypto.jwt_encode({"sub": "1"}, "secret")
+let decoded = crypto.jwt_decode(token, "secret")
+
+# Security utils
+crypto.constant_time_eq(a, b)
+crypto.secure_zero(secret)
+crypto.policy("strict")
 ```
 
-## One-Time Passwords (OTP)
+## 25.13 Exercises
 
-### TOTP (Time-based OTP)
-
-```zen
-import crypto.otp
-
-let secret = crypto.otp.generate_secret()
-print("Secret:", secret)
-
-# Generate TOTP code
-let code = crypto.otp.totp(secret)
-print("Current code:", code)
-
-# Verify TOTP code
-let valid = crypto.otp.verify_totp(secret, "123456")
-print("Valid:", valid)
-```
-
-### HOTP (HCounter-based OTP)
-
-```zen
-import crypto.otp
-
-let secret = crypto.otp.generate_secret()
-let counter = 0
-
-let code = crypto.otp.hotp(secret, counter)
-print(code)
-counter = counter + 1
-```
-
-## Practical Examples
-
-### Password Hashing
-
-```zen
-import crypto.kdf
-import crypto.rand
-
-func hash_password(password) {
-    let salt = crypto.rand.bytes(16)
-    let hash = crypto.kdf.pbkdf2(password, salt, iterations=100000, length=32)
-    return {
-        "hash": hash,
-        "salt": salt
-    }
-}
-
-func verify_password(password, stored) {
-    let hash = crypto.kdf.pbkdf2(password, stored.salt, iterations=100000, length=32)
-    return hash == stored.hash
-}
-
-let stored = hash_password("mysecretpassword")
-print(verify_password("mysecretpassword", stored))  # true
-print(verify_password("wrongpassword", stored))     # false
-```
-
-### Secure File Encryption
-
-```zen
-import crypto.symmetric
-import crypto.rand
-import crypto.kdf
-
-func encrypt_file(password, input_file, output_file) {
-    let salt = crypto.rand.bytes(16)
-    let key = crypto.kdf.pbkdf2(password, salt, iterations=100000, length=32)
-    let plaintext = fs.read(input_file)
-    let encrypted = crypto.symmetric.aes_gcm_encrypt(key, plaintext)
-    
-    # Save salt + nonce + ciphertext + tag
-    let data = salt + encrypted.nonce + encrypted.ciphertext + encrypted.tag
-    fs.write_bytes(output_file, data)
-}
-
-func decrypt_file(password, input_file, output_file) {
-    let data = fs.read_bytes(input_file)
-    let salt = data[0:16]
-    let nonce = data[16:28]
-    let tag = data[-16:]
-    let ciphertext = data[28:-16]
-    
-    let key = crypto.kdf.pbkdf2(password, salt, iterations=100000, length=32)
-    let plaintext = crypto.symmetric.aes_gcm_decrypt(key, nonce, ciphertext, tag)
-    fs.write(output_file, plaintext)
-}
-```
-
-### API Authentication with JWT
-
-```zen
-import crypto.jwt
-import http
-import json
-
-let JWT_SECRET = "super-secret-key-change-in-production"
-
-func auth_handler(req) {
-    if req.path == "/login" && req.method == "POST" {
-        let body = json.parse(req.body)
-        # Validate credentials (simplified)
-        if body.username == "admin" && body.password == "pass" {
-            let token = crypto.jwt.encode({
-                "user": body.username,
-                "exp": time.time() + 3600
-            }, JWT_SECRET)
-            return {"status": 200, "body": json.stringify({"token": token})}
-        }
-        return {"status": 401, "body": json.stringify({"error": "Invalid credentials"})}
-    }
-    
-    # Protected route
-    if req.path == "/protected" {
-        let auth = req.headers.get("Authorization", "")
-        if auth.starts_with("Bearer ") {
-            let token = auth.split(" ")[1]
-            try {
-                let payload = crypto.jwt.decode(token, JWT_SECRET)
-                return {"status": 200, "body": json.stringify({"message": "Hello " + payload.user})}
-            } catch {
-                return {"status": 401, "body": json.stringify({"error": "Invalid token"})}
-            }
-        }
-        return {"status": 401, "body": json.stringify({"error": "No token"})}
-    }
-    
-    return {"status": 404, "body": "Not found"}
-}
-
-http.serve("0.0.0.0", 8080, auth_handler)
-```
-
-## Security Best Practices
-
-1. **Use strong algorithms** - SHA-256+, AES-256, RSA-2048+
-2. **Never use MD5/SHA-1** for security
-3. **Use cryptographically secure random** - Always use `crypto.rand`
-4. **Derive keys from passwords** - Use PBKDF2/Argon2, not raw hashes
-5. **Use authenticated encryption** - AES-GCM provides encryption + authentication
-6. **Store secrets securely** - Never hardcode in production
-7. **Use HTTPS** - Always encrypt in transit
-8. **Verify signatures** - Always verify JWTs and signatures
-9. **Keep libraries updated** - Use latest secure versions
-10. **Salt passwords** - Never hash passwords without salt
-
-## Chapter Summary
-
-- Crypto module provides comprehensive cryptographic tools
-- Use hash functions for integrity, HMAC for authentication
-- Use symmetric encryption (AES-GCM) for data encryption
-- Use asymmetric (RSA) for key exchange and signatures
-- Use KDFs (PBKDF2) for password-based keys
-- JWT for token-based authentication
-- Always follow cryptographic best practices
-- Use secure random for keys and nonces
-
-**Next:** Part 5 continues with HTTPS & SSL Certificates
+1. Encrypt and decrypt a message with AES-256-GCM.
+2. Generate an Ed25519 keypair, sign a message, and verify it.
+3. Perform X25519 key agreement between two parties and confirm shared secrets match.
+4. Create a JWT, decode it, and verify tampering fails.
+5. Generate a TOTP code and verify it.

@@ -1,0 +1,167 @@
+# Chapter 33: url Module
+
+The `url` module provides URL parsing, building, and percent-encoding:
+`urllib.parse` and `urllib.request` utilities.
+
+## 33.1 Parsing URLs
+
+```zen
+import urllib.parse
+
+let url = "https://user:pass@example.com:8080/path/to/page?q=1#section"
+let parts = urllib.parse.urlparse(url)
+
+print(parts.scheme)    # https
+print(parts.netloc)    # user:pass@example.com:8080
+print(parts.path)      # /path/to/page
+print(parts.params)    # (empty)
+print(parts.query)     # q=1
+print(parts.fragment)  # section
+print(parts.username)  # user
+print(parts.password)  # pass
+print(parts.hostname)  # example.com
+print(parts.port)      # 8080
+```
+
+## 33.2 Building URLs
+
+```zen
+import urllib.parse
+
+let url = urllib.parse.urlunparse({
+    "scheme": "https",
+    "netloc": "example.com",
+    "path": "/search",
+    "params": "",
+    "query": "q=zen",
+    "fragment": ""
+})
+print(url)  # https://example.com/search?q=zen
+```
+
+## 33.3 Query strings
+
+```zen
+import urllib.parse
+
+# Encode query params
+let qs = urllib.parse.urlencode({"q": "zen lang", "page": 1})
+print(qs)  # q=zen+lang&page=1
+
+# Parse query string
+let params = urllib.parse.parse_qs("q=zen+lang&page=1")
+print(params)  # {"q": ["zen lang"], "page": ["1"]}
+```
+
+## 33.4 Joining URLs
+
+```zen
+import urllib.parse
+
+let full = urllib.parse.urljoin("https://example.com/base/", "page.html")
+print(full)  # https://example.com/page.html
+
+let full2 = urllib.parse.urljoin("https://example.com/base/", "/abs.html")
+print(full2)  # https://example.com/abs.html
+```
+
+## 33.5 Percent encoding
+
+```zen
+import urllib.parse
+
+let encoded = urllib.parse.quote("hello world")
+print(encoded)  # hello%20world
+
+let decoded = urllib.parse.unquote("hello%20world")
+print(decoded)  # hello world
+```
+
+## 33.6 Splitting and joining netloc
+
+```zen
+import urllib.parse
+
+let parts = urllib.parse.splituser("user:pass@example.com:8080")
+print(parts)  # ["user:pass", "example.com:8080"]
+
+let splitpass = urllib.parse.splitpasswd("user:pass@example.com:8080")
+print(splitpass)  # ["user", "pass@example.com:8080"]
+
+let port = urllib.parse.splitport("example.com:8080")
+print(port)  # ["example.com", "8080"]
+```
+
+## 33.6 Common patterns
+
+### Build a search URL
+
+```zen
+import urllib.parse
+
+let base = "https://example.com/search"
+let qs = urllib.parse.urlencode({"q": "Zen language", "page": 2})
+let url = base + "?" + qs
+print(url)  # https://example.com/search?q=Zen+language&page=2
+```
+
+### Extract domain from URL
+
+```zen
+import urllib.parse
+
+let parts = urllib.parse.urlparse("https://sub.example.com/path")
+print(parts.hostname)  # sub.example.com
+```
+
+### Add a query param to existing URL
+
+```zen
+import urllib.parse
+
+let url = "https://example.com/page?a=1"
+let parts = urllib.parse.urlparse(url)
+let params = urllib.parse.parse_qs(parts.query)
+params["b"] = ["2"]
+let new_qs = urllib.parse.urlencode(params)
+let new_url = urllib.parse.urlunparse({
+    "scheme": parts.scheme,
+    "netloc": parts.netloc,
+    "path": parts.path,
+    "params": parts.params,
+    "query": new_qs,
+    "fragment": parts.fragment
+})
+print(new_url)
+```
+
+## 33.7 Quick reference
+
+```zen
+import urllib.parse
+
+urllib.parse.urlparse(url)        # parse into parts
+urllib.parse.urlunparse(parts)    # build from parts
+urllib.parse.urljoin(base, ref)   # resolve relative URL
+urllib.parse.urlencode(params)    # encode query string
+urllib.parse.parse_qs(qs)         # parse query string
+urllib.parse.quote(s)             # percent-encode
+urllib.parse.unquote(s)           # percent-decode
+
+let p = urllib.parse.urlparse("https://example.com/path?q=1")
+p.scheme      # https
+p.netloc      # example.com
+p.path        # /path
+p.query       # q=1
+p.fragment    # (empty)
+p.hostname    # example.com
+p.port        # (none)
+```
+
+## 33.8 Exercises
+
+1. Write `extract_domain(url)` that returns the hostname.
+2. Write `add_param(url, key, value)` that adds/replaces a query parameter.
+3. Write `build_api_url(base, endpoint, params)` that constructs a full API URL.
+4. Write `decode_query(qs)` that returns a dict of query parameters.
+5. Write `normalize_url(url)` that ensures a scheme and trailing slash.
