@@ -1,347 +1,239 @@
 # Chapter 6: Lambdas and Closures
 
-Lambdas (anonymous functions) and closures are powerful features for writing concise, flexible code.
+This chapter is a deep dive into anonymous functions and closure semantics: how captures work, what is shared vs copied, the `lambda` expression vs `fn` statement, and how closures interact with the JIT and reference counting.
 
-## Lambda Functions
+## 6.1 Lambda expressions
 
-Lambdas are functions without names, defined inline with `fn`.
-
-### Basic Lambda
+A lambda is an anonymous function defined as an expression:
 
 ```zen
-let double = fn(x) { return x * 2 }
-print(double(5))  # 10
-
-let square = fn(x) { return x * x }
-print(square(7))  # 49
+let double = lambda(x) { return x * 2 }
+print(double(21))   # 42
 ```
 
-### Multiple Parameters
+Syntax: `lambda(params) { body }`. The body is a block; use `return` to produce a value (omitting `return` yields `nil`).
+
+### Lambda as expression vs fn as statement
+
+| | `lambda` | `fn` |
+|---|----------|------|
+| Kind | Expression | Statement |
+| Can appear inline | Yes (`(lambda(x){...})(1)`) | No |
+| Assignable | Yes | Yes (`let f = fn() {...}`) |
+| First-class | Yes | Yes |
+| Closure capture | Yes | Yes |
+| `return` target | The lambda itself | The enclosing function |
+
+Because `lambda` is an expression, you can call it immediately:
 
 ```zen
-let add = fn(a, b) { return a + b }
-let multiply = fn(a, b) { return a * b }
-
-print(add(3, 4))       # 7
-print(multiply(3, 4))  # 12
+let result = (lambda(x, y) { return x + y })(3, 4)
+print(result)   # 7
 ```
 
-### No Parameters
+And pass it directly:
 
 ```zen
-let greet = fn() { return "Hello!" }
-print(greet())
+print((lambda(x) { return x * 2 })(5))   # 10
 ```
 
-### Lambdas with Blocks
+## 6.2 Closure capture semantics
+
+Zen functions (both `fn` and `lambda`) capture variables from their enclosing scope by **shared reference** (a boxed `cell`). Mutating a captured variable is visible to every closure that captured it, and persists across calls.
+
+### Basic capture
 
 ```zen
-let process = fn(x) {
-    let result = x * 2 + 10
-    return result
-}
-
-print(process(5))  # 20
-```
-
-## Using Lambdas as Arguments
-
-Lambdas are perfect for passing to functions:
-
-```zen
-func apply_twice(func, value) {
-    return func(func(value))
-}
-
-print(apply_twice(fn(x) { return x + 1 }, 5))  # 7
-print(apply_twice(fn(x) { return x * 2 }, 3))  # 12
-```
-
-## Higher-Order Functions with Lambdas
-
-### Map-like Pattern
-
-```zen
-func map_list(list, func) {
-    let result = []
-    for item in list {
-        result.push(func(item))
-    }
-    return result
-}
-
-let numbers = [1, 2, 3, 4, 5]
-let squared = map_list(numbers, fn(x) { return x * x })
-let doubled = map_list(numbers, fn(x) { return x * 2 })
-
-print(squared)  # [1, 4, 9, 16, 25]
-print(doubled)  # [2, 4, 6, 8, 10]
-```
-
-### Filter-like Pattern
-
-```zen
-func filter_list(list, predicate) {
-    let result = []
-    for item in list {
-        if predicate(item) {
-            result.push(item)
-        }
-    }
-    return result
-}
-
-let numbers = [1, 2, 3, 4, 5, 6, 7, 8]
-let evens = filter_list(numbers, fn(x) { return x % 2 == 0 })
-let odds = filter_list(numbers, fn(x) { return x % 2 == 1 })
-
-print(evens)  # [2, 4, 6, 8]
-print(odds)   # [1, 3, 5, 7]
-```
-
-### Reduce-like Pattern
-
-```zen
-func reduce_list(list, func, initial) {
-    let acc = initial
-    for item in list {
-        acc = func(acc, item)
-    }
-    return acc
-}
-
-let numbers = [1, 2, 3, 4, 5]
-let sum = reduce_list(numbers, fn(a, b) { return a + b }, 0)
-let product = reduce_list(numbers, fn(a, b) { return a * b }, 1)
-
-print(sum)      # 15
-print(product)  # 120
-```
-
-## Closures
-
-A closure is a function that captures variables from its surrounding scope.
-
-### Basic Closure
-
-```zen
-func make_counter() {
-    let count = 0
-    func increment() {
+func make_counter(start) {
+    var count = start
+    func inc() {
         count = count + 1
         return count
     }
-    return increment
+    return inc
 }
 
-let counter = make_counter()
-print(counter())  # 1
-print(counter())  # 2
-print(counter())  # 3
+let c1 = make_counter(0)
+let c2 = make_counter(100)
+
+print(c1())   # 1
+print(c1())   # 2
+print(c2())   # 101
+print(c1())   # 3   (c1 and c2 are independent)
 ```
 
-Each call to `make_counter()` creates a new closure with its own `count`:
+Each call to `make_counter` allocates a fresh `count` cell. `c1` and `c2` point to different cells, so they count independently.
+
+### Multiple closures share the same cell
 
 ```zen
-let counter1 = make_counter()
-let counter2 = make_counter()
-
-print(counter1())  # 1
-print(counter1())  # 2
-print(counter2())  # 1 (separate counter)
-print(counter1())  # 3
-```
-
-### Closure with Parameters
-
-```zen
-func make_adder(x) {
-    func adder(y) {
-        return x + y
-    }
-    return adder
+func make_pair() {
+    var value = 0
+    func get() { return value }
+    func set(v) { value = v }
+    return #(get, set)
 }
 
-let add5 = make_adder(5)
-let add10 = make_adder(10)
-
-print(add5(3))   # 8
-print(add10(3))  # 13
-print(add5(20))  # 25
+let #(get, set) = make_pair()
+print(get())     # 0
+set(42)
+print(get())     # 42
 ```
 
-### Multiple Captured Variables
+`get` and `set` share the same `value` cell — mutation through one is visible through the other.
 
-```zen
-func make_calculator(a, b) {
-    func add() { return a + b }
-    func subtract() { return a - b }
-    func multiply() { return a * b }
-    func divide() { return a / b }
-    
-    return {
-        "add": add,
-        "subtract": subtract,
-        "multiply": multiply,
-        "divide": divide
-    }
-}
+## 6.3 The loop-variable capture trap
 
-let calc = make_calculator(10, 2)
-print(calc.add())       # 12
-print(calc.subtract())  # 8
-print(calc.multiply())  # 20
-print(calc.divide())    # 5
-```
-
-## Practical Applications
-
-### Event Handlers Pattern
-
-```zen
-func create_button(label) {
-    func on_click() {
-        print("Button '" + label + "' clicked!")
-    }
-    return on_click
-}
-
-let save_btn = create_button("Save")
-let cancel_btn = create_button("Cancel")
-
-save_btn()    # Button 'Save' clicked!
-cancel_btn()  # Button 'Cancel' clicked!
-```
-
-### Private Variables
-
-Closures can simulate private state:
-
-```zen
-func bank_account(initial_balance) {
-    let balance = initial_balance
-    
-    func deposit(amount) {
-        if amount > 0 {
-            balance = balance + amount
-            return balance
-        }
-        return balance
-    }
-    
-    func withdraw(amount) {
-        if amount > 0 && amount <= balance {
-            balance = balance - amount
-            return balance
-        }
-        return balance
-    }
-    
-    func get_balance() {
-        return balance
-    }
-    
-    return {
-        "deposit": deposit,
-        "withdraw": withdraw,
-        "get_balance": get_balance
-    }
-}
-
-let account = bank_account(100)
-print(account.get_balance())  # 100
-account.deposit(50)
-print(account.get_balance())  # 150
-account.withdraw(30)
-print(account.get_balance())  # 120
-# balance is not directly accessible from outside
-```
-
-### Memoization with Closures
-
-```zen
-func memoize(func) {
-    let cache = {}
-    
-    func memoized(x) {
-        let key = str(x)
-        if cache.contains(key) {
-            print("Cache hit for " + key)
-            return cache[key]
-        }
-        print("Computing for " + key)
-        let result = func(x)
-        cache[key] = result
-        return result
-    }
-    
-    return memoized
-}
-
-func expensive(x) {
-    # Simulate expensive computation
-    return x * x
-}
-
-let fast_expensive = memoize(expensive)
-print(fast_expensive(5))  # Computing for 5, returns 25
-print(fast_expensive(5))  # Cache hit for 5, returns 25
-print(fast_expensive(6))  # Computing for 6, returns 36
-```
-
-## Lambda Short Syntax (If Available)
-
-Some implementations may support shorter lambda syntax, but the `fn` form is standard in Zen:
-
-```zen
-# Standard form
-let double = fn(x) { return x * 2 }
-
-# If arrow syntax supported (check Zen version)
-# let double = x => x * 2
-```
-
-## When to Use Lambdas vs Functions
-
-**Use named functions when:**
-- Function is complex or long
-- Function will be reused in multiple places
-- You want clear documentation
-- Function needs a descriptive name
-
-**Use lambdas when:**
-- Function is short and simple
-- Used as argument to higher-order function
-- One-time use
-- Want to keep code concise
-
-## Common Pitfalls
-
-### Variable Capture in Loops
-
-Be careful capturing loop variables:
+This is the most common closure bug. A loop variable is a single cell; every closure created in the loop captures **that same cell**, so they all see the final value:
 
 ```zen
 let funcs = []
-let i = 0
-while i < 3 {
-    let j = i  # Capture in new scope
-    funcs.push(fn() { return j })
-    i = i + 1
+for i in 1..3 {
+    funcs.push(fn() { return i })
 }
-
-print(funcs[0]())  # 0
-print(funcs[1]())  # 1
-print(funcs[2]())  # 2
+print(funcs[0]())   # 3   ← not 1!
+print(funcs[1]())   # 3
+print(funcs[2]())   # 3
 ```
 
-## Chapter Summary
+All three closures return `3` because `i` ended at `3` (the loop exits when `i == 3`).
 
-- Lambdas are anonymous functions created with `fn(params) { body }`
-- Can be assigned to variables and passed as arguments
-- Closures capture variables from their enclosing scope
-- Useful for higher-order functions, callbacks, and private state
-- Each closure maintains its own captured state
-- Great for functional programming patterns
+### Fix: bind per-iteration with a helper function
 
-**Next:** Part 2 - Core Concepts (Strings, Lists, Dictionaries)
+```zen
+func make_fn(val) {
+    return fn() { return val }
+}
+
+let funcs = []
+for i in 1..3 {
+    funcs.push(make_fn(i))   # i is copied into `val` at each call
+}
+print(funcs[0]())   # 1
+print(funcs[1]())   # 2
+print(funcs[2]())   # 3
+```
+
+`make_fn(i)` copies the current `i` into a fresh `val` parameter cell, so each closure captures its own `val`.
+
+## 6.4 `return` target in closures
+
+`return` inside a lambda returns from the lambda, **not** from the enclosing function:
+
+```zen
+func outer() {
+    let f = lambda(x) {
+        if x < 0 { return -1 }   # returns from lambda
+        return x * 2
+    }
+    return f
+}
+
+let f = outer()
+print(f(-5))   # -1
+print(f(5))    # 10
+print(outer()(-3))  # -1
+```
+
+If you need the enclosing function to return from inside a closure, use an error or a sentinel value instead.
+
+## 6.5 Closures and reference counting
+
+A closure retains every variable it captures. As long as the closure is alive, its captured variables stay alive:
+
+```zen
+func make_big() {
+    let big = [0 for _ in 1..1000000]   # large allocation
+    return fn() { return len(big) }     # keeps `big` alive
+}
+
+let f = make_big()
+print(f())   # 1000000   (big still in memory)
+```
+
+When `f` is dropped (goes out of scope or reassigned), the captured cell is released, and `big` can be collected.
+
+```zen
+f = nil
+# now `big` can be freed
+```
+
+## 6.6 Closures in collections
+
+Functions are first-class, so they can live in lists and dicts:
+
+```zen
+let ops = {
+    "add": lambda(a, b) { return a + b },
+    "sub": lambda(a, b) { return a - b },
+}
+
+print(ops["add"](5, 3))   # 8
+print(ops["sub"](5, 3))   # 2
+```
+
+## 6.7 Closures and threads
+
+Closures can be passed to `thread.spawn`, but captured shared variables become concurrently accessible — use `shared` for atomic counters:
+
+```zen
+import shared
+import thread
+
+let counter = shared.create(0)
+
+for i in 1..3 {
+    thread.spawn(fn() {
+        shared.increment(counter, 1)
+    })
+}
+# ... join threads ...
+print(shared.get(counter))   # 3
+```
+
+Without `shared`, each thread would capture its own copy and updates would be lost.
+
+## 6.8 JIT lowering note
+
+Zen's Cranelift JIT lowers hot closures to native code. Closures that are called repeatedly in a loop get tiered up; the capture cells are accessed through a stable context pointer. You generally don't need to think about this, but it means:
+
+- A closure called once stays interpreted.
+- A closure called millions of times becomes native code with equivalent capture semantics.
+- `ZEN_NO_JIT=1` disables tiering (all interpreted, same semantics).
+
+## 6.9 Quick reference
+
+```zen
+# Lambda expression
+let f = lambda(x) { return x * 2 }
+print(f(5))           # 10
+
+# Inline call
+print((lambda(x) { return x + 1 })(41))   # 42
+
+# Closure with shared cell
+func make_counter(start) {
+    var count = start
+    return fn() { count = count + 1; return count }
+}
+
+# Fix loop capture
+let funcs = []
+for i in 1..3 {
+    funcs.push((lambda(v) { return fn() { return v } })(i))
+}
+print(funcs[0]())   # 1
+
+# return from lambda, not enclosing func
+let f = fn(x) { if x < 0 { return -1 } return x * 2 }
+```
+
+## 6.10 Exercises
+
+1. Write `make_adder(n)` returning a lambda that adds `n` to its argument.
+2. Write `make_accumulator()` returning `fn(x)` that adds `x` to a running total and returns the total.
+3. Write `repeater(n)` returning `fn()` that returns `n` on every call, but after `k` calls returns `nil` (capture a counter).
+4. Write `compose(f, g)` returning `fn(x) { return f(g(x)) }`.
+5. Demonstrate the loop-capture bug and fix it with `make_fn`.
+6. Write `twice(f)` returning `fn(x) { return f(f(x)) }`.
+7. Write `curry(f)` for a two-argument function: `curry(f)(a)(b)` equals `f(a, b)`.
