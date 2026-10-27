@@ -2,18 +2,17 @@
 
 *Note: This chapter is for educational and ethical purposes only. Always get proper authorization before testing network security.*
 
-## Port Scanner
+## 47.1 Port Scanner
 
 ```zen
 import socket
-import time
 
-func scan_port(host, port, timeout=1) {
+func scan_port(host, port, timeout) {
     try {
-        let s = socket.create(socket.AF_INET, socket.SOCK_STREAM)
-        socket.settimeout(s, timeout)
-        socket.connect(s, host, port)
-        socket.close(s)
+        let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+        socket.settimeout(sock, timeout)
+        socket.connect(sock, host, port)
+        socket.close(sock)
         return true
     } catch {
         return false
@@ -21,12 +20,12 @@ func scan_port(host, port, timeout=1) {
 }
 
 func scan_ports(host, start_port, end_port) {
-    print("Scanning " + host + " from port " + start_port + " to " + end_port)
+    print("Scanning " + host + " from port " + str(start_port) + " to " + str(end_port))
     let open_ports = []
     let port = start_port
     while port <= end_port {
-        if scan_port(host, port) {
-            print("Port " + port + " is OPEN")
+        if scan_port(host, port, 500) {
+            print("Port " + str(port) + " is OPEN")
             open_ports.push(port)
         }
         port = port + 1
@@ -34,11 +33,11 @@ func scan_ports(host, start_port, end_port) {
     return open_ports
 }
 
-# Usage (only scan hosts you own or have permission to scan)
-# let open = scan_ports("127.0.0.1", 1, 1024)
+// Usage (only scan hosts you own or have permission to scan)
+// let open = scan_ports("127.0.0.1", 1, 1024)
 ```
 
-## Subdomain Finder
+## 44. Subdomain Finder
 
 ```zen
 import dns
@@ -60,10 +59,10 @@ func find_subdomains(domain, wordlist) {
 }
 
 let wordlist = ["www", "mail", "ftp", "api", "admin", "test", "dev"]
-# find_subdomains("example.com", wordlist)
+// find_subdomains("example.com", wordlist)
 ```
 
-## HTTP Header Checker
+## 44. HTTP Header Checker
 
 ```zen
 import requests
@@ -79,95 +78,166 @@ func check_headers(url) {
             "Content-Security-Policy",
             "X-Frame-Options",
             "X-Content-Type-Options",
+            "Referrer-Policy"
+        ]
+        
+        for h in security_headers {
+            let val = resp.headers[h]
+            if val != nil {
+                print(h + ": " + val)
+            } else {
+                print(h + ": MISSING")
+            }
+        }
+    } catch as e {
+        print("Error: " + e.msg)
+    }
+}
+
+// check_headers("https://example.com")
+```
+
+## 44.5 Port Scan Report
+
+```zen
+import socket
+import fs
+
+func scan_and_report(host, start, end, output_file) {
+    let open_ports = []
+    for port in start..end {
+        try {
+            let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+            socket.settimeout(sock, 300)
+            socket.connect(sock, host, port)
+            socket.close(sock)
+            open_ports.push(port)
+            print("OPEN: " + str(port))
+        } catch {
+            # closed or filtered
+        }
+    }
+    
+    let report = "# Scan Report for " + host + "\n"
+    report = report + "Open ports: " + str(len(open_ports)) + "\n"
+    for p in open_ports {
+        report = report + "  - " + str(p) + "\n"
+    }
+    
+    fs.write(output_file, report)
+    print("Report written to " + output_file)
+}
+
+// scan_and_report("127.0.0.1", 1, 1000, "scan_report.txt")
+```
+
+## 44.6 HTTP Header Analysis
+
+```zen
+import requests
+
+func analyze_security(url) {
+    try {
+        let resp = requests.get(url, {"timeout": 10})
+        
+        print("URL: " + url)
+        print("Status: " + str(resp.status_code))
+        print("")
+        
+        let headers = [
+            "Strict-Transport-Security",
+            "Content-Security-Policy",
+            "X-Frame-Options",
+            "X-Content-Type-Options",
             "X-XSS-Protection",
             "Referrer-Policy",
             "Permissions-Policy"
         ]
         
-        for h in security_headers {
-            if resp.headers.contains(h) {
-                print("✓ " + h + ": " + resp.headers[h])
+        for h in headers {
+            let val = resp.headers[h]
+            if val == nil {
+                print("[MISSING] " + h)
             } else {
-                print("✗ " + h + ": MISSING")
+                print("[OK] " + h + ": " + val)
             }
         }
-    } catch (e) {
-        print("Error: " + e)
+        
+        // Check for server header disclosure
+        let server = resp.headers["Server"]
+        if server != nil {
+            print("[INFO] Server header: " + server)
+        }
+        
+    } catch as e {
+        print("Error: " + e.msg)
     }
 }
 
-check_headers("https://example.com")
+// analyze_security("https://example.com")
 ```
 
-## Directory Brute Forcer
+## 44.7 DNS Reconnaissance
 
 ```zen
+import dns
+
+func dns_recon(domain) {
+    print("DNS Recon for " + domain)
+    print("")
+    
+    // A record
+    try {
+        let addrs = dns.resolve(domain)
+        print("A records:")
+        for a in addrs {
+            print("  " + a)
+        }
+    } catch {
+        print("No A records found")
+    }
+    
+    // MX record (if supported)
+    // ...
+    
+    print("")
+    print("FQDN: " + dns.getfqdn(domain))
+}
+
+// dns_recon("example.com")
+```
+
+## 44.8 Common pitfalls
+
+- **Only scan hosts you own or have explicit written permission to test.**
+- **Rate-limit your requests** to avoid overwhelming the target.
+- **TLS certificate errors** may occur with self-signed certs.
+- **Some WAFs block automated scanning.**
+
+## 44.9 Quick reference
+
+```zen
+import socket
+import dns
 import requests
 
-func brute_directories(url, wordlist) {
-    let found = []
-    for word in wordlist {
-        let test_url = url + "/" + word
-        try {
-            let resp = requests.get(test_url)
-            if resp.status_code == 200 || resp.status_code == 301 || resp.status_code == 302 {
-                print("Found: " + test_url + " [" + resp.status_code + "]")
-                found.push(test_url)
-            }
-        } catch {}
-    }
-    return found
-}
+// Port scan
+socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.connect(sock, host, port)
+socket.close(sock)
 
-let dirs = ["admin", "login", "config", "backup", "uploads"]
-# brute_directories("https://example.com", dirs)
+// DNS resolve
+dns.resolve(domain)
+
+// HTTP headers
+requests.get(url)
+resp.headers[header_name]
 ```
 
-## SSL Certificate Checker
+## 44.10 Exercises
 
-```zen
-import crypto.x509
-import socket
-import ssl
-
-func check_ssl_cert(host, port=443) {
-    try {
-        # Get certificate (simplified)
-        let cert_pem = get_server_cert(host, port)
-        let cert = crypto.x509.load_cert(cert_pem)
-        
-        print("Certificate for " + host)
-        print("Subject:", cert.subject)
-        print("Issuer:", cert.issuer)
-        print("Valid until:", cert.not_after)
-        
-        # Check expiration
-        let days_left = (cert.not_after_timestamp - time.time()) / 86400
-        if days_left < 30 {
-            print("WARNING: Expires in " + int(days_left) + " days!")
-        }
-    } catch (e) {
-        print("Error: " + e)
-    }
-}
-```
-
-## Ethical Guidelines
-
-1. **Only test with permission** - Written authorization required
-2. **Stay in scope** - Only test authorized targets
-3. **Report responsibly** - Report vulnerabilities properly
-4. **No malicious use** - These tools for defense/testing only
-5. **Follow laws** - Computer crime laws apply
-6. **Educational purpose** - Learn to defend, not attack
-
-## Chapter Summary
-
-- Port scanning for network reconnaissance
-- Subdomain enumeration
-- HTTP security header analysis
-- Directory enumeration
-- SSL certificate inspection
-- Always practice ethical security
-
-**Next:** Chapter 48 - Capstone Projects
+1. Write a port scanner that scans common ports (21, 22, 25, 53, 80, 443, 3306, 3389).
+2. Write a subdomain enumerator with a custom wordlist.
+3. Write a security header checker for a list of URLs.
+4. Write a DNS reconnaissance script that gathers A, MX, and NS records.
+5. Write a scan report generator that saves results to a file.

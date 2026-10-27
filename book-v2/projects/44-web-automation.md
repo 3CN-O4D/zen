@@ -2,11 +2,11 @@
 
 Web scraping and automation let you extract data from websites, download media, and control browsers programmatically. This chapter covers Zen's HTTP client, **pymport** (Python interoperability), browser automation with Selenium, and driving Chrome over **raw TCP/WebSocket sockets with the Chrome DevTools Protocol (CDP)**.
 
-Every example here is runnable. The complete scripts, setup script, and test runner live in [`book-v2/tests/web-automation`](../tests/web-automation/); the pymport fundamentals are in [Chapter 42](../interop/42-pymport-python-interoperability.md).
+Every example here is runnable. The complete scripts, setup script, and test runner live in [`book-v2/tests/web-automation/`](../tests/web-automation/); the pymport fundamentals are in [Chapter 42](../interop/42-pymport-python-interoperability.md).
 
 > **Legal and ethical note:** Only scrape sites you are permitted to scrape. Check `robots.txt`, Terms of Service, and applicable laws. The examples target publicly accessible TikTok pages for educational purposes; sites may rate-limit, require authentication, or block automated access.
 
-## Setup
+## 44.1 Setup
 
 From the repository root:
 
@@ -15,11 +15,7 @@ cd book-v2/tests
 ./setup.sh
 ```
 
-`setup.sh` does three things:
-
-1. builds Zen with the Python bridge (`cargo build --release --features python`);
-2. creates `.venv/` beside the tests;
-3. installs [`requirements.txt`](../tests/requirements.txt).
+`setup.sh` does three things:\n1. builds Zen with the Python bridge (`cargo build --release --features python`);\n2. creates `.venv/` beside the tests;\n3. installs [`requirements.txt`](../tests/requirements.txt).
 
 Then, in the shell you use for the examples:
 
@@ -30,19 +26,13 @@ export ZEN_NO_PY_BOOTSTRAP=1
 ZEN=../../../target/release/zen
 ```
 
-Requirements:
-
-- Zen built with `--features python`
-- Python 3.9+ with `venv`
-- `chromium` for Selenium and CDP
-- `chromedriver` matching Chromium for Selenium
-- Network access
+Requirements:\n- Zen built with `--features python`\n- Python 3.9+ with `venv`\n- `chromium` for Selenium and CDP\n- `chromedriver` matching Chromium for Selenium\n- Network access
 
 Alternatively, let Zen manage a project environment: this directory has its own `requirements.txt`, so `zen py-sync` creates `.zen_venv/` and `zen run` uses it automatically. See [Chapter 42](../interop/42-pymport-python-interoperability.md).
 
 > **pymport calls are positional-only.** No keyword arguments in v1. Pass `Options()` to `webdriver.Chrome(opts)` positionally, and pass `Popen` arguments positionally.
 
-## Run the whole suite
+## 44.2 Run the whole suite
 
 ```bash
 cd book-v2/tests
@@ -52,7 +42,7 @@ cd book-v2/tests
 
 The runner validates that each downloaded file is an MP4 (`ftyp` box) before reporting success.
 
-## 1) Scrape + Download with `requests` + `bs4` (pymport)
+## 44.3 1) Scrape + Download with `requests` + `bs4` (pymport)
 
 `bs4` parses HTML. TikTok's embed page (`/embed/v2/<id>`) is accessible over plain HTTP and embeds video metadata in `__FRONTITY_CONNECT_STATE__`. The MP4 CDN URL is in `videoData.itemInfos.video.urls[0]`; `urllib.request.urlretrieve` writes it without re-encoding.
 
@@ -61,13 +51,11 @@ The runner validates that each downloaded file is an MP4 (`ftyp` box) before rep
 ```zen
 import requests
 import fs
-import time
 pymport bs4
 pymport json
 pymport urllib.request
 pymport socket
 
-# requests/urllib have no default timeout; avoid hanging forever.
 socket.setdefaulttimeout(45)
 
 let UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0 Safari/537.36"
@@ -77,8 +65,8 @@ let url = "https://www.tiktok.com/embed/v2/" + VIDEO
 let _ = fs.mkdirs("out")
 let out = "out/tiktok_bs4.mp4"
 
-# TikTok's edge intermittently answers 503 to non-browser clients. Retry
-# with backoff instead of failing the example on the first response.
+// TikTok's edge intermittently answers 503 to non-browser clients. Retry
+// with backoff instead of failing the example on the first response.
 let fetch = fn(u) {
     let attempt = 0
     let resp = null
@@ -147,7 +135,7 @@ file out/tiktok_bs4.mp4
 
 Expected: metadata for `@scout2015`, a `downloaded: out/tiktok_bs4.mp4 (3224978 bytes)` line, and `ISO Media, MP4 Base Media v1`.
 
-## 2) Stateful Scraping + Download with `mechanicalsoup` (pymport)
+## 44.4 2) Stateful Scraping + Download with `mechanicalsoup` (pymport)
 
 `MechanicalSoup` wraps `requests` and BeautifulSoup in a stateful browser. `browser.open()` keeps cookies/history, `browser.page` is the current BS4 soup, and `browser.session` can be reused for the CDN fetch. Python `bytes` are written through Python's own file object because native `fs.write_binary` is string-oriented.
 
@@ -161,7 +149,6 @@ pymport json
 pymport builtins
 pymport socket
 
-# requests/urllib have no default timeout; avoid hanging forever.
 socket.setdefaulttimeout(45)
 
 let UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0 Safari/537.36"
@@ -172,8 +159,6 @@ let _ = fs.mkdirs("out")
 let out = "out/tiktok_ms.mp4"
 
 let browser = mechanicalsoup.StatefulBrowser()
-# Give the session browser-like headers; MechanicalSoup otherwise sends
-# python-requests' default User-Agent, which TikTok often rate-limits.
 browser.session.headers.update({
     "User-Agent": UA,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -214,7 +199,6 @@ print("id: " + item["id"])
 print("author: @" + author["uniqueId"] + " (" + author["nickName"] + ")")
 print("plays: " + str(item["playCount"]) + " likes: " + str(item["diggCount"]))
 
-# MechanicalSoup keeps a requests.Session for us: reuse it for the CDN fetch.
 let bin = browser.session.get(video_url)
 print("cdn status: " + str(bin.status_code) + " bytes: " + str(len(bin.content)))
 if bin.status_code != 200 {
@@ -222,8 +206,6 @@ if bin.status_code != 200 {
     exit(1)
 }
 
-# Python bytes -> file. Native fs.write_binary takes a string, so binary
-# media is written through CPython's own file object.
 let f = builtins.open(out, "wb")
 f.write(bin.content)
 f.close()
@@ -236,9 +218,7 @@ Run:
 $ZEN run ms_tiktok.z
 ```
 
-If a site needs forms, `browser.select_form()`, fill controls, then `browser.submit_selected()`. For real links, `browser.follow_link()` and `browser.download_link()` work as expected.
-
-## 3) Browser Automation with Selenium (pymport)
+## 44.5 3) Browser Automation with Selenium (pymport)
 
 Headless Chromium solves JavaScript challenges and renders pages like a user. Selenium navigates to the real TikTok video page, waits for `__UNIVERSAL_DATA_FOR_REHYDRATION__`, and extracts the full `itemStruct` (author, stats, description). The video page's `playAddr` is signed and rejected by the CDN outside the player, so the script fetches the embed route with plain HTTP for an unsigned MP4 URL.
 
@@ -264,8 +244,8 @@ let url = "https://www.tiktok.com/@scout2015/video/" + VIDEO
 let _ = fs.mkdirs("out")
 let out = "out/tiktok_selenium.mp4"
 
-# Quit the browser and stop the chromedriver service. The embedded
-# interpreter exits immediately, so this must happen before exit().
+// Quit the browser and stop the chromedriver service. The embedded
+// interpreter exits immediately, so this must happen before exit().
 let close_browser = fn(d) {
     d.quit()
     try {
@@ -294,7 +274,7 @@ try {
     print("navigation warning: " + str(e))
 }
 
-# The page renders its data after the WAF/JS boot; poll for the payload.
+// The page renders its data after the WAF/JS boot; poll for the payload.
 let src = ""
 let tries = 0
 while tries < 15 {
@@ -327,9 +307,6 @@ print("author: @" + author["uniqueId"] + " (" + author["nickname"] + ")")
 print("plays: " + str(stats["playCount"]) + " likes: " + str(stats["diggCount"]))
 print("comments: " + str(stats["commentCount"]) + " shares: " + str(stats["shareCount"]))
 
-# The video-detail page exposes a signed playAddr that the CDN rejects
-# outside the player. The embed route serves an unsigned CDN URL over plain
-# HTTP, so fetch that page separately after Selenium has done the hard part.
 print("fetching embed route for an unsigned mp4 url...")
 let embed = "https://www.tiktok.com/embed/v2/" + VIDEO
 let embed_headers = {
@@ -382,15 +359,11 @@ timeout 300 $ZEN run selenium_tiktok.z
 
 Chromedriver must match the Chromium major version. On Debian/Ubuntu: `apt install chromium-driver`.
 
-## 4) Low-Level Control: CDP over raw TCP + WebSocket sockets
+## 44.6 4) Low-Level Control: CDP over raw TCP + WebSocket sockets
 
 This example uses no automation library. Zen launches Chromium with `--remote-debugging-port`, discovers the page target over HTTP (`/json/list`), upgrades to a WebSocket, sends masked CDP frames through `sys.write_bytes` on the socket fd, and parses unmasked server frames byte by byte.
 
-Key protocol details:
-
-- **HTTP**: parse headers and stop at `Content-Length`. Chrome may keep the connection open despite `Connection: close`; waiting for EOF produces a timeout (`EAGAIN`).
-- **WebSocket**: client frames must be masked. Extended lengths are 126 + 16-bit or 127 + 64-bit. Server frames are not masked.
-- **Binary writes**: `socket.send` takes a string and would UTF-8 re-encode masked bytes. `sys.write_bytes(fd, hex)` writes raw bytes, so the frame is built as a byte list, hex-encoded, and written to `socket.fileno(sock)`.
+Key protocol details:\n- **HTTP**: parse headers and stop at `Content-Length`. Chrome may keep the connection open despite `Connection: close`; waiting for EOF produces a timeout (`EAGAIN`).\n- **WebSocket**: client frames must be masked. Extended lengths are 126 + 16-bit or 127 + 64-bit. Server frames are not masked.\n- **Binary writes**: `socket.send` takes a string and would UTF-8 re-encode masked bytes. `sys.write_bytes(fd, hex)` writes raw bytes, so the frame is built as a byte list, hex-encoded, and written to `socket.fileno(sock)`.
 
 `cdp_tiktok.z` helpers:
 
@@ -411,6 +384,7 @@ let VIDEO = "6718335390845095173"
 let VIDEO_PAGE = "https://www.tiktok.com/@scout2015/video/" + VIDEO
 
 let HEX = "0123456789abcdef"
+
 let to_hex = fn(bs) {
     let out = ""
     for b in bs {
@@ -501,25 +475,60 @@ let ws_read = fn(sock) {
     }
     return {"opcode": opcode, "data": data}
 }
+
+let cdp_call = fn(sock, id, method, params) {
+    ws_send(sock, json.stringify({"id": id, "method": method, "params": params}))
+    let pending = []
+    while true {
+        let f = ws_read(sock)
+        if f["opcode"] == 8 {
+            throw "websocket closed by peer"
+        }
+        if f["opcode"] == 9 {
+            continue
+        }
+        if f["opcode"] == 1 or f["opcode"] == 0 {
+            for b in f["data"] {
+                pending.push(b)
+            }
+            let text = bytes.str_from_bytes(pending)
+            try {
+                let msg = json.parse(text)
+                if msg.get("id", 0) == id {
+                    return msg
+                }
+                pending = []
+            } catch {
+                # fragmented frame: keep collecting
+            }
+        }
+    }
+}
 ```
 
 The full script then launches Chromium with `pymport subprocess`, performs the HTTP discovery and WebSocket upgrade, and polls `Runtime.evaluate`:
 
 ```zen
+let _ = fs.mkdirs("out")
+let _ = fs.rmtree(PROFILE)
+let cmd = "chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage "
+cmd += "--remote-debugging-port=" + str(PORT) + " "
+cmd += "--user-data-dir=" + PROFILE + " about:blank"
+let argv = cmd.split(" ")
 let browser = subprocess.Popen(argv, -1, null, null, null, -3)
+print("chromium pid " + str(browser.pid) + " on port " + str(PORT))
+
 try {
-    # GET /json/list, read until Content-Length, parse the page target
-    # ... WS upgrade ...
+    # ... HTTP discovery, WS upgrade ...
     let nav = cdp_call(ws, 1, "Page.navigate", {"url": VIDEO_PAGE})
-    let reply = cdp_call(ws, 100, "Runtime.evaluate", {
-        "expression": expr,
-        "returnByValue": true
-    })
+    let reply = cdp_call(ws, 100, "Runtime.evaluate", {"expression": expr, "returnByValue": true})
     # expr returns id, author, plays, likes, comments, desc
 } finally {
     browser.terminate()
 }
 ```
+
+See the complete, tested script: [`tests/web-automation/cdp_tiktok.z`](../tests/web-automation/cdp_tiktok.z).
 
 Run:
 
@@ -527,21 +536,19 @@ Run:
 timeout 180 $ZEN run cdp_tiktok.z
 ```
 
-See the complete, tested script: [`tests/web-automation/cdp_tiktok.z`](../tests/web-automation/cdp_tiktok.z).
-
-## Tips and Gotchas
+## 44.7 Tips and Gotchas
 
 - **WAF challenges**: plain `requests` to TikTok video/profile pages may return a WAF challenge. Use `/embed/v2/<id>` or a real browser (Selenium). The embed route is reliable for the MP4 URL.
 - **Binary downloads**: `fs.write_binary` expects a string and has UTF-8/string constraints. Prefer `urllib.request.urlretrieve` or `builtins.open(..., "wb").write(py_bytes)`.
 - **pymport limits**: positional-only calls (no kwargs). `webdriver.Chrome(opts)` and `Popen(argv, -1, null, null, null, -3)` are positional.
 - **Environment bootstrap**: use `book-v2/tests/setup.sh`, or `zen py-sync` with a local `requirements.txt`.
 - **Chrome sandbox**: in containers, add `--no-sandbox` and `--disable-dev-shm-usage`.
-- **Hangs**: `MechanicalSoup`, `urllib.request.urlretrieve`, and `requests` do not impose a default timeout. Set `socket.setdefaulttimeout(45)` (via `pymport socket`) or pass an explicit timeout where supported.
 - **Sockets**: `socket.recv` returns `bytes`; use `list(bytes)` to index. `socket.recv_text` returns a string and is lossy for binary. For raw binary protocols, write through `sys.write_bytes(fd, hex)`.
 - **JSON**: the pure-Zen `std/json.z` stringifies numbers with `str()`; nested dict access in CDP responses needs explicit keys.
 - **Cleanup**: Selenium can leave `chromedriver` alive when the embedded interpreter exits; the example calls `driver.service.stop()`. For a hard-killed CDP run, remove leftovers with `pkill -x chromium`.
+- **Hangs**: `MechanicalSoup`, `urllib.request.urlretrieve`, and `requests` do not impose a default timeout. Set `socket.setdefaulttimeout(45)` (via `pymport socket`) or pass an explicit timeout where supported.
 
-## Verified Artifacts
+## 44.8 Verified Artifacts
 
 Tested against real TikTok on 2026-10-23:
 
@@ -550,7 +557,7 @@ Tested against real TikTok on 2026-10-23:
 - `out/tiktok_selenium.mp4` — ISO Media, MP4 Base Media v1 (3,224,978 bytes)
 - CDP over raw sockets extracted metadata from `@scout2015/video/6718335390845095173`: 159600 plays, 35200 likes, 5486 comments.
 
-## Appendix: Tested Scripts
+## 44.9 Appendix: Tested Scripts
 
 Everything in this chapter is in the repository:
 

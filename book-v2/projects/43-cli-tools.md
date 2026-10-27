@@ -1,7 +1,6 @@
 # Chapter 43: CLI Tools
 
-Zen is excellent for building command-line applications. This chapter shows
-how to parse arguments, read input, write output, and build useful CLI tools.
+Zen is excellent for building command-line applications. This chapter shows how to parse arguments, read input, write output, and build useful CLI tools.
 
 ## 43.1 Argument parsing: `argparser`
 
@@ -73,11 +72,11 @@ if args.bytes {
 ```zen
 import fs
 
-# Read all stdin
+// Read all stdin
 let input = fs.read("/dev/stdin")
 print(input)
 
-# Or line by line
+// Or line by line
 let lines = input.split("\n")
 for line in lines {
     print(line)
@@ -89,13 +88,13 @@ for line in lines {
 ```zen
 import fs
 
-# stdout
+// stdout
 print("hello")
 
-# stderr
+// stderr
 fs.write("/dev/stderr", "error message\n")
 
-# To a file
+// To a file
 fs.write("output.txt", "result")
 ```
 
@@ -104,13 +103,13 @@ fs.write("output.txt", "result")
 ```zen
 import sys
 
-# Success
+// Success
 exit(0)
 
-# Failure
+// Failure
 exit(1)
 
-# Specific error
+// Specific error
 exit(2)
 ```
 
@@ -129,7 +128,7 @@ let args = parser.parse_args()
 
 let files = args.files
 if len(files) == 0 {
-    # Read stdin
+    // Read stdin
     print(fs.read("/dev/stdin"))
 } else {
     for f in files {
@@ -184,14 +183,14 @@ let args = parser.parse_args()
 let text = fs.read(args.file)
 let data = json.loads(text)
 
-# Zen's json.dumps doesn't support indent in this version
-# Output compact JSON
+// Zen's json.dumps doesn't support indent in this version
+// Output compact JSON
 print(json.dumps(data))
 ```
 
 ## 43.8 Making scripts executable
 
-```bash
+```zen
 #!/usr/bin/env zen
 print("Hello from a script!")
 ```
@@ -203,12 +202,10 @@ chmod +x mycli.z
 
 ## 43.9 Common pitfalls
 
-- **`argparser` reads from `sys.argv`**. Don't call `parse_args` twice.
+- **`argparser` reads from `sys.argv`.** Don't call `parse_args` twice.
 - **`nargs="*"`** collects remaining positional args into a list.
-- **`exit(code)` terminates immediately** — use `try`/`finally` for cleanup
-  before exiting if needed.
-- **`fs.read("/dev/stdin")`** reads all stdin at once; for large input, read
-  in chunks.
+- **`exit(code)` terminates immediately** — use `try`/`finally` for cleanup before exiting if needed.
+- **`fs.read("/dev/stdin")`** reads all stdin at once; for large input, read in chunks.
 
 ## 43.10 Quick reference
 

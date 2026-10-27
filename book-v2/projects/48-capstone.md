@@ -1,298 +1,365 @@
 # Chapter 48: Capstone Projects
 
-Put everything together with these complete, real-world projects.
+This chapter presents complete, end-to-end projects that combine multiple Zen features: pymport, web scraping, file processing, security tools, and CLI building.
 
-## Project 1: Full-Stack Blog API
+## 48.1 Capstone 1: Web Metadata Archiver
 
-Build a complete blog API with authentication, posts, comments.
-
-```zen
-import http
-import json
-import crypto.jwt
-import crypto.rand
-
-let JWT_SECRET = "change-in-production"
-let posts = []
-let users = []
-
-func hash_password(pw) {
-    # Simplified
-    return crypto.hash.sha256(pw).hexdigest()
-}
-
-func auth_middleware(req, handler) {
-    if req.path.starts_with("/api/protected") {
-        let auth = req.headers.get("Authorization", "")
-        if !auth.starts_with("Bearer ") {
-            return {"status": 401, "body": json.stringify({"error": "Unauthorized"})}
-        }
-        try {
-            let token = auth.split(" ")[1]
-            let payload = crypto.jwt.decode(token, JWT_SECRET)
-            req.user = payload
-        } catch {
-            return {"status": 401, "body": json.stringify({"error": "Invalid token"})}
-        }
-    }
-    return handler(req)
-}
-
-func router(req) {
-    # Register
-    if req.path == "/api/register" && req.method == "POST" {
-        let body = json.parse(req.body)
-        let user = {
-            "id": len(users) + 1,
-            "username": body.username,
-            "password": hash_password(body.password)
-        }
-        users.push(user)
-        return {"status": 201, "body": json.stringify({"id": user.id})}
-    }
-    
-    # Login
-    if req.path == "/api/login" && req.method == "POST" {
-        let body = json.parse(req.body)
-        for user in users {
-            if user.username == body.username && user.password == hash_password(body.password) {
-                let token = crypto.jwt.encode({"user_id": user.id}, JWT_SECRET)
-                return {"status": 200, "body": json.stringify({"token": token})}
-            }
-        }
-        return {"status": 401, "body": json.stringify({"error": "Invalid credentials"})}
-    }
-    
-    # Get posts
-    if req.path == "/api/posts" && req.method == "GET" {
-        return {"status": 200, "body": json.stringify(posts)}
-    }
-    
-    # Create post (protected)
-    if req.path == "/api/protected/posts" && req.method == "POST" {
-        let body = json.parse(req.body)
-        let post = {
-            "id": len(posts) + 1,
-            "title": body.title,
-            "content": body.content,
-            "author_id": req.user.user_id
-        }
-        posts.push(post)
-        return {"status": 201, "body": json.stringify(post)}
-    }
-    
-    return {"status": 404, "body": json.stringify({"error": "Not found"})}
-}
-
-func main() {
-    print("Blog API running on http://localhost:8080")
-    http.serve("0.0.0.0", 8080, fn(req) { return auth_middleware(req, router) })
-}
-
-main()
-```
-
-## Project 2: Real-Time Chat Application
-
-```zen
-import socket
-import json
-
-let clients = []
-let client_counter = 0
-
-func broadcast(message, sender_id) {
-    for client in clients {
-        if client.id != sender_id {
-            try {
-                socket.send(client.sock, json.stringify(message) + "\n")
-            } catch {}
-        }
-    }
-}
-
-func handle_client(client) {
-    while true {
-        try {
-            let data = socket.recv(client.sock, 1024)
-            if len(data) == 0 {
-                break
-            }
-            let msg = json.parse(data.trim())
-            broadcast({
-                "type": "message",
-                "from": client.name,
-                "text": msg.text
-            }, client.id)
-        } catch {
-            break
-        }
-    }
-    # Remove client
-    socket.close(client.sock)
-    print(client.name + " disconnected")
-}
-
-func main() {
-    let server = socket.create(socket.AF_INET, socket.SOCK_STREAM)
-    socket.setsockopt(server, socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    socket.bind(server, "0.0.0.0", 9000)
-    socket.listen(server, 100)
-    
-    print("Chat server on port 9000")
-    
-    while true {
-        let sock = socket.accept(server)
-        client_counter = client_counter + 1
-        let client = {"id": client_counter, "sock": sock, "name": "User" + client_counter}
-        clients.push(client)
-        print("New connection: " + client.name)
-        spawn(fn() { handle_client(client) })
-    }
-}
-
-main()
-```
-
-## Project 3: Web Scraper with Data Export
+A tool that fetches a webpage, extracts metadata (title, description, images, links), and saves it as a JSON file.
 
 ```zen
 import requests
+import bs4
 import json
-import re
-import time
+import fs
+import argparser
+import sys
 
-class Scraper {
-    func init() {
-        self.results = []
+func archive_metadata(url, output_file) {
+    let resp = requests.get(url, {
+        "headers": {"User-Agent": "Zen-Archiver/1.0"},
+        "timeout": 30
+    })
+    
+    if !resp.ok {
+        throw "Failed to fetch " + url + ": HTTP " + str(resp.status_code)
     }
     
-    func scrape_quotes() {
-        let page = 1
-        while page <= 3 {
-            let url = "https://quotes.toscrape.com/page/" + page + "/"
-            try {
-                let resp = requests.get(url)
-                # Extract quotes (simplified pattern)
-                let quotes = re.findall(r'<span class="text" itemprop="text">([^<]+)</span>', resp.text)
-                let authors = re.findall(r'<small class="author" itemprop="author">([^<]+)</small>', resp.text)
-                
-                let i = 0
-                while i < len(quotes) {
-                    self.results.push({
-                        "quote": quotes[i],
-                        "author": authors[i]
-                    })
-                    i = i + 1
-                }
-                print("Scraped page " + page)
-                time.sleep(1)
-            } catch (e) {
-                print("Error: " + e)
-            }
-            page = page + 1
+    let soup = bs4.BeautifulSoup(resp["text"], "html.parser")
+    
+    let metadata = {
+        "url": url,
+        "title": "",
+        "description": "",
+        "images": [],
+        "links": []
+    }
+    
+    // Title
+    let title_tag = soup.find("title")
+    if title_tag != null {
+        metadata["title"] = title_tag.string
+    }
+    
+    // Meta description
+    let desc_tag = soup.find("meta", {"name": "description"})
+    if desc_tag != null {
+        metadata["description"] = desc_tag.get("content", "")
+    }
+    
+    // Images
+    let img_tags = soup.find_all("img")
+    for img in img_tags {
+        let src = img.get("src", "")
+        if len(src) > 0 {
+            metadata["images"].push(src)
         }
     }
     
-    func export_json(filename) {
-        with open(filename, "w") as f {
-            f.write(json.stringify(self.results, indent=2))
+    // Links
+    let link_tags = soup.find_all("a")
+    for link in link_tags {
+        let href = link.get("href", "")
+        if len(href) > 0 {
+            metadata["links"].push(href)
         }
-        print("Exported to " + filename)
     }
     
-    func export_csv(filename) {
-        let content = "quote,author\n"
-        for r in self.results {
-            content = content + '"' + r.quote.replace('"', '""') + '","' + r.author.replace('"', '""') + '"\n'
-        }
-        fs.write(filename, content)
-        print("Exported to " + filename)
-    }
+    fs.write(output_file, json.dumps(metadata, {"indent": 2}))
+    print("Metadata saved to " + output_file)
+    print("Title: " + metadata["title"])
+    print("Images: " + str(len(metadata["images"])))
+    print("Links: " + str(len(metadata["links"])))
 }
 
-let scraper = Scraper()
-scraper.scrape_quotes()
-scraper.export_json("quotes.json")
-scraper.export_csv("quotes.csv")
+let parser = argparser.ArgumentParser("archive-metadata")
+parser.add_argument("url", help="URL to archive")
+parser.add_argument("--output", "-o", default="metadata.json", help="Output file")
+let args = parser.parse_args()
+
+try {
+    archive_metadata(args.url, args.output)
+} catch as e {
+    fs.write("/dev/stderr", "Error: " + e.msg + "\n")
+    sys.exit(1)
+}
 ```
 
-## Project 4: Task Scheduler
+## 48.2 Capstone 2: Password Strength Checker
+
+A tool that checks password strength using entropy calculation and common password lists.
 
 ```zen
-import time
-import json
+import fs
+import math
+import random
+import argparser
 
-class TaskScheduler {
-    func init() {
-        self.tasks = []
+func password_strength(password) {
+    let score = 0
+    let reasons = []
+    
+    let length = len(password)
+    if length >= 8 {
+        score = score + 1
+    } else {
+        reasons.push("Password too short (min 8)")
     }
     
-    func add_task(name, func, interval_seconds) {
-        self.tasks.push({
-            "name": name,
-            "func": func,
-            "interval": interval_seconds,
-            "last_run": 0
-        })
-        print("Added task: " + name)
+    let has_lower = false
+    let has_upper = false
+    let has_digit = false
+    let has_special = false
+    
+    for ch in password {
+        let code = ord(ch)
+        if code >= 97 and code <= 122 {
+            has_lower = true
+        } elif code >= 65 and code <= 90 {
+            has_upper = true
+        } elif code >= 48 and code <= 57 {
+            has_digit = true
+        } else {
+            has_special = true
+        }
     }
     
-    func run() {
-        print("Task scheduler started")
-        while true {
-            let now = time.time()
-            for task in self.tasks {
-                if now - task.last_run >= task.interval {
-                    print("Running task: " + task.name)
-                    try {
-                        task.func()
-                    } catch (e) {
-                        print("Task error: " + e)
-                    }
-                    task.last_run = now
-                }
+    if has_lower { score = score + 1 } else { reasons.push("Add lowercase") }
+    if has_upper { score = score + 1 } else { reasons.push("Add uppercase") }
+    if has_digit { score = score + 1 } else { reasons.push("Add digit") }
+    if has_special { score = score + 1 } else { reasons.push("Add special char") }
+    
+    let strength = ["Very Weak", "Weak", "Fair", "Good", "Strong"]
+    let level = strength[min(score, 4)]
+    
+    return {"score": score, "level": level, "reasons": reasons}
+}
+
+func generate_password(length) {
+    let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+    let pw = []
+    for i in 1..length {
+        pw.push(random.choice(chars))
+    }
+    return "".join(pw)
+}
+
+let parser = argparser.ArgumentParser("password-checker")
+parser.add_argument("password", nargs="?", help="Password to check")
+parser.add_argument("--generate", "-g", type="int", help="Generate random password of length")
+let args = parser.parse_args()
+
+if args.generate != nil {
+    let pw = generate_password(args.generate)
+    let strength = password_strength(pw)
+    print("Generated: " + pw)
+    print("Strength: " + strength["level"] + " (" + str(strength["score"]) + "/5)")
+} elif args.password != nil {
+    let strength = password_strength(args.password)
+    print("Password: " + args.password)
+    print("Strength: " + strength["level"] + " (" + str(strength["score"]) + "/5)")
+    if len(strength["reasons"]) > 0 {
+        print("Suggestions:")
+        for r in strength["reasons"] {
+            print("  - " + r)
+        }
+    }
+} else {
+    parser.print_help()
+}
+```
+
+## 48.3 Capstone 3: Log Analyzer
+
+A tool that parses web server logs and produces summary statistics.
+
+```zen
+import fs
+import re
+import argparser
+
+func analyze_log(path) {
+    let content = fs.read(path)
+    let lines = content.split("\n")
+    
+    let total = 0
+    let status_codes = {}
+    let ips = {}
+    let paths = {}
+    
+    let log_re = re.compile("^(\\S+) \\S+ \\S+ \\[.*\\] \"(\\S+) (\\S+) \\S+\" (\\d{3})")
+    
+    for line in lines {
+        if len(line) == 0 {
+            continue
+        }
+        total = total + 1
+        
+        let m = log_re.search(line)
+        if m != nil {
+            let ip = m.group(1)
+            let method = m.group(2)
+            let path = m.group(3)
+            let status = m.group(4)
+            
+            ips[ip] = (ips.get(ip, 0) + 1)
+            paths[path] = (paths.get(path, 0) + 1)
+            status_codes[status] = (status_codes.get(status, 0) + 1)
+        }
+    }
+    
+    return {
+        "total": total,
+        "status_codes": status_codes,
+        "top_ips": sort_by_value(ips, 10),
+        "top_paths": sort_by_value(paths, 10)
+    }
+}
+
+func sort_by_value(dict, n) {
+    let items = []
+    for k in dict.keys() {
+        items.push([k, dict[k]])
+    }
+    // Simple bubble sort by value descending
+    for i in 0..len(items) {
+        for j in 0..(len(items) - i - 1) {
+            if items[j][1] < items[j + 1][1] {
+                let tmp = items[j]
+                items[j] = items[j + 1]
+                items[j + 1] = tmp
             }
-            time.sleep(1)
+        }
+    }
+    let result = []
+    for i in 0..min(n, len(items)) {
+        result.push(items[i])
+    }
+    return result
+}
+
+let parser = argparser.ArgumentParser("log-analyzer")
+parser.add_argument("file", help="Log file to analyze")
+let args = parser.parse_args()
+
+try {
+    let result = analyze_log(args.file)
+    print("Log Analysis Report")
+    print("=" * 40)
+    print("Total requests: " + str(result["total"]))
+    print("")
+    print("Status codes:")
+    for code in result["status_codes"].keys() {
+        print("  " + code + ": " + str(result["status_codes"][code]))
+    }
+    print("")
+    print("Top IPs:")
+    for item in result["top_ips"] {
+        print("  " + item[0] + ": " + str(item[1]))
+    }
+    print("")
+    print("Top paths:")
+    for item in result["top_paths"] {
+        print("  " + item[0] + ": " + str(item[1]))
+    }
+} catch as e {
+    fs.write("/dev/stderr", "Error: " + e.msg + "\n")
+    sys.exit(1)
+}
+```
+
+## 48.4 Capstone 4: Site Uptime Monitor
+
+A tool that checks multiple URLs and reports which are down.
+
+```zen
+import requests
+import fs
+import argparser
+import time
+
+func check_url(url, timeout) {
+    try {
+        let resp = requests.get(url, {"timeout": timeout})
+        return {
+            "url": url,
+            "status": resp.status_code,
+            "ok": resp.ok,
+            "error": nil
+        }
+    } catch as e {
+        return {
+            "url": url,
+            "status": nil,
+            "ok": false,
+            "error": e.msg
         }
     }
 }
 
-let scheduler = TaskScheduler()
+func monitor(urls, timeout) {
+    let results = []
+    for url in urls {
+        let result = check_url(url, timeout)
+        results.push(result)
+        let status = result["ok"] ? "UP" : "DOWN"
+        print(url + ": " + status + (result["error"] != nil ? " (" + result["error"] + ")" : ""))
+    }
+    return results
+}
 
-scheduler.add_task("heartbeat", fn() {
-    print("Heartbeat: " + time.time())
-}, 10)
+let parser = argparser.ArgumentParser("uptime-monitor")
+parser.add_argument("urls", nargs="*", help="URLs to monitor")
+parser.add_argument("--timeout", "-t", type="int", default=10, help="Timeout in seconds")
+let args = parser.parse_args()
 
-scheduler.add_task("cleanup", fn() {
-    print("Cleaning up...")
-}, 60)
+if len(args.urls) == 0 {
+    print("No URLs to monitor")
+    sys.exit(1)
+}
 
-scheduler.run()
+let results = monitor(args.urls, args.timeout)
+
+let up_count = 0
+for r in results {
+    if r["ok"] {
+        up_count = up_count + 1
+    }
+}
+print("")
+print("Summary: " + str(up_count) + "/" + str(len(results)) + " sites up")
+
+// Save report
+let report = json.dumps(results, {"indent": 2})
+fs.write("uptime_report.json", report)
+print("Report saved to uptime_report.json")
 ```
 
-## Final Words
+## 48.5 Running the Capstones
 
-Congratulations on completing the comprehensive Zen for Dummies guide! You've learned:
+```bash
+# Metadata archiver
+cd book-v2/tests
+export PYTHONPATH="$(../.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+export ZEN_NO_PY_BOOTSTRAP=1
+ZEN=../../../target/release/zen
 
-- **Fundamentals**: Data types, functions, lambdas, closures
-- **Core Concepts**: Modules, error handling, classes, objects
-- **Networking**: Sockets, HTTP, HTTPS, SSL/TLS, DNS
-- **Concurrency**: Threads, channels, mutexes
-- **Cryptography**: Hashing, encryption, JWT, certificates
-- **Practical Skills**: Web scraping, API clients, file processing
-- **Projects**: Real-world applications
+# Note: capstone scripts are examples; adapt paths as needed
+# $ZEN run projects/capstone/archive_metadata.z https://example.com --output meta.json
+```
 
-## Next Steps
+## 48.6 Quick reference
 
-1. **Practice** - Build your own projects
-2. **Read the Source** - Explore Zen's stdlib and codebase
-3 **Document** - Write comments and documentation
-4. **Share** - Contribute to the Zen community
-5. **Keep Learning** - Experiment with new features
+```zen
+# Web metadata archiver: requests + bs4 + json + fs
+# Password checker: math + random + argparser + fs
+# Log analyzer: fs + re + argparser
+# Uptime monitor: requests + fs + argparser + json
+```
 
-Remember: The best way to learn is by doing. Start with small projects and gradually build up to more complex ones.
+## 48.7 Exercises
 
-**Happy coding with Zen!**
-
-*End of Zen for Dummies: Complete Edition*
+1. Extend the metadata archiver to also extract `<h1>` tags and meta keywords.
+2. Add rate limiting to the uptime monitor (wait between checks).
+3. Add email/Slack notifications to the uptime monitor when a site goes down.
+4. Extend the password checker to check against a common-passwords list.
+5. Add HTML report generation to the log analyzer.

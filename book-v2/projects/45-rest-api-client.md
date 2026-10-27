@@ -1,323 +1,334 @@
 # Chapter 45: REST API Client
 
-Building a robust REST API client is a practical skill. This chapter walks through creating a reusable API client in Zen.
+This chapter shows how to build a REST API client in Zen using `requests`, `json`, and `argparser`. It covers authentication, pagination, rate limiting, error handling, and building a reusable client class.
 
-## Understanding REST APIs
+## 45.1 Basic GET request
 
-REST (Representational State Transfer) uses HTTP methods to perform CRUD operations:
-- **Create**: POST
-- **Read**: GET
-- **Update**: PUT/PATCH
-- **Delete**: DELETE
+```zen
+import requests
+import json
 
-## Basic API Client Structure
+let resp = requests.get("https://api.example.com/users/1")
+if resp.ok {
+    let user = resp.json()
+    print(user["name"])
+} else {
+    print("HTTP " + str(resp.status_code))
+}
+```
+
+## 45.2 POST with JSON body
+
+```zen
+import requests
+import json
+
+let body = json.dumps({"name": "Zen", "version": 3})
+let resp = requests.post("https://example.com/api/users", body, {
+    "headers": {"Content-Type": "application/json"}
+})
+print(resp.status_code)
+print(resp.text)
+```
+
+## 45.3 Reusable API client
 
 ```zen
 import requests
 import json
 
 class ApiClient {
-    func init(base_url, api_key = null) {
-        self.base_url = base_url
-        self.api_key = api_key
-        self.session = requests.Session()
-        if api_key != null {
-            self.session.headers["Authorization"] = "Bearer " + api_key
-        }
-        self.session.headers["Content-Type"] = "application/json"
-        self.session.headers["User-Agent"] = "Zen-API-Client/1.0"
+    let base_url
+    let headers
+    let session
+
+    func init(base_url, headers = {}) {
+        this.base_url = base_url
+        this.headers = headers
+        this.session = requests.Session()
+        this.session.headers = headers
     }
-    
-    func get(endpoint, params = {}) {
-        let url = self.base_url + endpoint
-        try {
-            let resp = self.session.get(url, params=params)
-            return self._handle_response(resp)
-        } catch (e) {
-            throw "GET request failed: " + e
-        }
+
+    func get(path, params = {}) {
+        let url = this.base_url + path
+        let resp = requests.sess_get(this.session, url, {"params": params})
+        return resp
     }
-    
-    func post(endpoint, data = {}) {
-        let url = self.base_url + endpoint
-        try {
-            let resp = self.session.post(url, json=data)
-            return self._handle_response(resp)
-        } catch (e) {
-            throw "POST request failed: " + e
-        }
+
+    func post(path, data) {
+        let url = this.base_url + path
+        let body = json.dumps(data)
+        let resp = requests.sess_post(this.session, url, {
+            "json": body,
+            "headers": {"Content-Type": "application/json"}
+        })
+        return resp
     }
-    
-    func put(endpoint, data = {}) {
-        let url = self.base_url + endpoint
-        try {
-            let resp = self.session.put(url, json=data)
-            return self._handle_response(resp)
-        } catch (e) {
-            throw "PUT request failed: " + e
-        }
+
+    func put(path, data) {
+        let url = this.base_url + path
+        let body = json.dumps(data)
+        let resp = requests.sess_put(this.session, url, {
+            "json": body,
+            "headers": {"Content-Type": "application/json"}
+        })
+        return resp
     }
-    
-    func delete(endpoint) {
-        let url = self.base_url + endpoint
-        try {
-            let resp = self.session.delete(url)
-            return self._handle_response(resp)
-        } catch (e) {
-            throw "DELETE request failed: " + e
-        }
+
+    func delete(path) {
+        let url = this.base_url + path
+        let resp = requests.sess_delete(this.session, url)
+        return resp
     }
-    
-    func _handle_response(resp) {
-        if resp.status_code >= 200 && resp.status_code < 300 {
-            if resp.text == "" {
-                return null
-            }
-            try {
-                return json.parse(resp.text)
-            } catch {
-                return resp.text
-            }
-        } elif resp.status_code == 401 {
-            throw "Unauthorized: " + resp.text
-        } elif resp.status_code == 404 {
-            throw "Not Found: " + resp.text
-        } elif resp.status_code >= 400 && resp.status_code < 500 {
-            throw "Client Error " + resp.status_code + ": " + resp.text
-        } elif resp.status_code >= 500 {
-            throw "Server Error " + resp.status_code + ": " + resp.text
-        }
-        throw "Unexpected status: " + resp.status_code
+
+    func close() {
+        requests.session_close(this.session)
     }
 }
 ```
 
-## Using the API Client
+### Usage
 
 ```zen
-let client = ApiClient("https://jsonplaceholder.typicode.com")
-
-# GET all posts
-let posts = client.get("/posts")
-print("Got " + len(posts) + " posts")
-
-# GET single post
-let post = client.get("/posts/1")
-print(post.title)
-
-# POST create post
-let new_post = client.post("/posts", {
-    "title": "Hello Zen",
-    "body": "This is a post from Zen",
-    "userId": 1
+let client = new ApiClient("https://api.example.com", {
+    "Authorization": "Bearer token123",
+    "User-Agent": "ZenClient/1.0"
 })
-print("Created post with id: " + new_post.id)
 
-# PUT update post
-let updated = client.put("/posts/1", {
-    "id": 1,
-    "title": "Updated Title",
-    "body": "Updated body",
-    "userId": 1
-})
-print(updated.title)
+let resp = client.get("/users/1")
+if resp.ok {
+    print(resp.json()["name"])
+}
 
-# DELETE post
-client.delete("/posts/1")
-print("Deleted")
+let created = client.post("/users", {"name": "New User"})
+print(created.status_code)
+
+client.close()
 ```
 
-## Adding Authentication
+## 45.4 Authentication
+
+### Bearer token
 
 ```zen
-# API key auth
-let client = ApiClient("https://api.example.com", "your-api-key-here")
-
-# Or OAuth token
-let client2 = ApiClient("https://api.example.com")
-client2.session.headers["Authorization"] = "Bearer " + oauth_token
+let client = new ApiClient("https://api.example.com", {
+    "Authorization": "Bearer " + token
+})
 ```
 
-## Error Handling and Retries
+### Basic auth
 
 ```zen
+import requests
+
+let resp = requests.get("https://example.com/api", {
+    "auth": ["user", "pass"]
+})
+```
+
+### API key header
+
+```zen
+let client = new ApiClient("https://api.example.com", {
+    "X-API-Key": "your-api-key"
+})
+```
+
+## 45.5 Pagination
+
+Many APIs paginate results. Here's a pattern for following `next` links:
+
+```zen
+import requests
+
+func get_all_pages(url) {
+    let all_items = []
+    let next_url = url
+    while next_url != nil {
+        let resp = requests.get(next_url)
+        if !resp.ok {
+            break
+        }
+        let data = resp.json()
+        for item in data["items"] {
+            all_items.push(item)
+        }
+        next_url = data["next"]  // null when no more pages
+    }
+    return all_items
+}
+
+let items = get_all_pages("https://api.example.com/items?page=1")
+print(len(items))
+```
+
+### Offset-based pagination
+
+```zen
+func get_all_offset(base_url, page_size = 50) {
+    let all_items = []
+    let offset = 0
+    while true {
+        let resp = requests.get(base_url, {
+            "params": {"offset": offset, "limit": page_size}
+        })
+        if !resp.ok {
+            break
+        }
+        let data = resp.json()
+        let items = data["items"]
+        for item in items {
+            all_items.push(item)
+        }
+        if len(items) < page_size {
+            break
+        }
+        offset = offset + page_size
+    }
+    return all_items
+}
+```
+
+## 45.6 Rate limiting
+
+Respect `RateLimit` headers and retry on 429:
+
+```zen
+import requests
 import time
 
-class RobustApiClient extends ApiClient {
-    func init(base_url, api_key = null, max_retries = 3) {
-        super.init(base_url, api_key)
-        self.max_retries = max_retries
+func get_with_retry(url, max_retries = 3) {
+    let attempt = 0
+    while attempt < max_retries {
+        let resp = requests.get(url)
+        if resp.ok {
+            return resp
+        }
+        if resp.status_code == 429 {
+            let retry_after = resp.headers["Retry-After"]
+            let wait = retry_after != nil ? int(retry_after) : 1
+            print("Rate limited, waiting " + str(wait) + "s")
+            time.sleep(wait)
+            attempt = attempt + 1
+        } else {
+            break
+        }
     }
-    
-    func get(endpoint, params = {}) {
-        return self._request_with_retry(fn() {
-            return super.get(endpoint, params)
-        })
+    return nil
+}
+
+let resp = get_with_retry("https://api.example.com/data")
+if resp != nil {
+    print(resp.text)
+}
+```
+
+## 45.7 Error handling
+
+```zen
+import requests
+
+func api_get(client, path) {
+    let resp = client.get(path)
+    if resp.status_code == 404 {
+        return nil  // not found
     }
-    
-    func _request_with_retry(func) {
-        let attempts = 0
-        while attempts < self.max_retries {
-            try {
-                return func()
-            } catch (e) {
-                attempts = attempts + 1
-                if attempts >= self.max_retries {
-                    throw e
-                }
-                print("Retry " + attempts + " after error: " + e)
-                time.sleep(2 * attempts)  # Exponential backoff
-            }
+    if !resp.ok {
+        throw "API error: " + str(resp.status_code) + " " + resp.reason
+    }
+    return resp.json()
+}
+
+try {
+    let user = api_get(client, "/users/999")
+    if user == nil {
+        print("User not found")
+    } else {
+        print(user["name"])
+    }
+} catch as e {
+    print("API call failed: " + e.msg)
+}
+```
+
+## 45.8 Complete CLI example
+
+```zen
+import requests
+import json
+import argparser
+import fs
+
+let parser = argparser.ArgumentParser("api-client")
+parser.add_argument("url", help="API URL")
+parser.add_argument("--method", "-m", default="GET", help="HTTP method")
+parser.add_argument("--data", "-d", help="JSON body")
+parser.add_argument("--header", "-H", action="append", help="Header (key:value)")
+let args = parser.parse_args()
+
+let headers = {}
+if args.header != nil {
+    for h in args.header {
+        let parts = h.split(":", 1)
+        if len(parts) == 2 {
+            headers[parts[0]] = parts[1]
         }
     }
 }
+
+let body = args.data != nil ? args.data : nil
+
+let resp = requests.get(args.url, {"headers": headers})
+// ... extend for other methods
+
+print(resp.status_code)
+print(resp.text)
 ```
 
-## Pagination Handling
+## 45.9 Common pitfalls
+
+- **Always check `resp.ok`.** A non-200 response still returns a response object.
+- **JSON bodies must be strings.** Use `json.dumps()` to serialize.
+- **Sessions persist cookies and headers.** Close them with `requests.session_close()`.
+- **Rate limits.** Respect `Retry-After` and back off on 429.
+- **Timeouts.** Always pass a `timeout` option to avoid hanging.
+
+## 45.10 Quick reference
 
 ```zen
-class PaginatedClient extends ApiClient {
-    func get_all(endpoint, params = {}) {
-        let all_results = []
-        let page = 1
-        let per_page = 100
-        
-        while true {
-            let page_params = params.copy()
-            page_params["page"] = page
-            page_params["per_page"] = per_page
-            
-            let results = self.get(endpoint, page_params)
-            if len(results) == 0 {
-                break
-            }
-            
-            for item in results {
-                all_results.push(item)
-            }
-            
-            if len(results) < per_page {
-                break
-            }
-            
-            page = page + 1
-        }
-        
-        return all_results
-    }
-}
+import requests
+import json
+
+// GET
+let resp = requests.get("https://api.example.com/items", {
+    "params": {"page": 1},
+    "headers": {"Authorization": "Bearer token"}
+})
+
+// POST JSON
+let resp = requests.post("https://example.com/api", {
+    "json": json.dumps({"name": "Zen"}),
+    "headers": {"Content-Type": "application/json"}
+})
+
+// Session
+let sess = requests.Session()
+sess.headers = {"Authorization": "Bearer token"}
+let resp = requests.sess_get(sess, "https://example.com/api")
+requests.session_close(sess)
+
+// Status
+resp.status_code
+resp.ok
+resp.text
+resp.json()
+resp.headers
 ```
 
-## Rate Limiting
+## 45.11 Exercises
 
-```zen
-import time
-
-class RateLimitedClient extends ApiClient {
-    func init(base_url, api_key = null, requests_per_second = 10) {
-        super.init(base_url, api_key)
-        self.delay = 1.0 / requests_per_second
-        self.last_request = 0
-    }
-    
-    func _throttle() {
-        let now = time.time()
-        if now - self.last_request < self.delay {
-            time.sleep(self.delay - (now - self.last_request))
-        }
-        self.last_request = time.time()
-    }
-    
-    func get(endpoint, params = {}) {
-        self._throttle()
-        return super.get(endpoint, params)
-    }
-    
-    func post(endpoint, data = {}) {
-        self._throttle()
-        return super.post(endpoint, data)
-    }
-}
-```
-
-## Building a GitHub API Client
-
-```zen
-class GitHubClient extends ApiClient {
-    func init(token = null) {
-        super.init("https://api.github.com", token)
-    }
-    
-    func get_user(username) {
-        return self.get("/users/" + username)
-    }
-    
-    func get_repos(username) {
-        return self.get("/users/" + username + "/repos", {"sort": "stars"})
-    }
-    
-    func get_repo(owner, repo) {
-        return self.get("/repos/" + owner + "/" + repo)
-    }
-    
-    func create_issue(owner, repo, title, body = "") {
-        return self.post("/repos/" + owner + "/" + repo + "/issues", {
-            "title": title,
-            "body": body
-        })
-    }
-}
-
-# Usage
-let gh = GitHubClient("your-github-token")
-let user = gh.get_user("octocat")
-print(user.name)
-let repos = gh.get_repos("octocat")
-for repo in repos[0:5] {
-    print(repo.name + " - " + repo.stargazers_count)
-}
-```
-
-## Testing API Clients
-
-```zen
-# Mock responses for testing
-class MockApiClient {
-    func get(endpoint, params = {}) {
-        if endpoint == "/users/1" {
-            return {"id": 1, "name": "Test User"}
-        }
-        throw "Not found"
-    }
-}
-
-# Use in tests
-let mock = MockApiClient()
-let user = mock.get("/users/1")
-print(user.name)
-```
-
-## Best Practices
-
-1. **Use a base class/client** - DRY principle
-2. **Handle authentication** - Store tokens securely
-3. **Error handling** - Catch and provide meaningful errors
-4. **Rate limiting** - Respect API limits
-5. **Retries** - For transient failures
-6. **Pagination** - Handle large result sets
-7. **Timeouts** - Set reasonable timeouts
-8. **Logging** - Log requests/responses for debugging
-9. **Type safety** - Validate responses
-10. **Environment variables** - Don't hardcode keys
-
-## Chapter Summary
-
-- Build reusable API client classes
-- Handle all HTTP methods
-- Implement authentication, retries, pagination
-- Add rate limiting and error handling
-- Use sessions for efficiency
-- Test with mocks
-- Follow API best practices
-
-**Next:** Chapter 46 - File Processing Tools
+1. Write a REST client for a public API (e.g., JSONPlaceholder) that lists posts.
+2. Add pagination support to fetch all pages.
+3. Add retry logic with exponential backoff.
+4. Write a CLI that takes a URL and method and prints the response.
+5. Build a small config client that reads/writes JSON config via REST.
