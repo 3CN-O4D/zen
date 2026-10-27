@@ -239,3 +239,79 @@ let resp2 = http.post("https://example.com/api", "data", {
 3. Write a `head_check(url)` that returns the `Content-Length` header without downloading the body.
 4. Write a POST script that sends form data (`application/x-www-form-urlencoded`).
 5. Compare `http.get` vs `requests.get` — note the differences in convenience features.
+
+
+## 28.12 HTTP/1.1 detailed
+
+### Request line
+`METHOD /path HTTP/1.1\r\n`
+
+### Headers (common request)
+| Header | Purpose |
+|---|---|
+| Host | Required in HTTP/1.1 |
+| User-Agent | Client identification |
+| Accept | Content types accepted |
+| Accept-Language | Language preferences |
+| Accept-Encoding | gzip, deflate, br |
+| Authorization | Auth credentials/tokens |
+| Cookie | Cookies |
+| Content-Type | Body media type |
+| Content-Length | Body size |
+| Connection | keep-alive/close |
+| Referer | Referring page |
+
+### Response headers (common)
+| Header | Purpose |
+|---|---|
+| Server | Server software |
+| Date | Response date |
+| Content-Type | Media type |
+| Content-Length | Size |
+| Content-Encoding | Encoding |
+| Cache-Control | Caching directives |
+| Set-Cookie | Set cookies |
+| Location | Redirect target |
+| ETag | Entity tag |
+| Access-Control-Allow-* | CORS |
+
+### Status codes complete categories
+- 1xx Informational
+- 2xx Success (200 OK, 201 Created, 202 Accepted, 204 No Content, 206 Partial Content)
+- 3xx Redirection (301, 302, 303, 304, 307, 308)
+- 4xx Client Error (400, 401, 403, 404, 405, 406, 409, 410, 413, 414, 415, 422, 429)
+- 5xx Server Error (500, 501, 502, 503, 504, 505)
+
+## 28.13 HTTP methods
+| Method | Safe | Idempotent | Body | Purpose |
+|---|---|---|---|---|
+| GET | yes | yes | no | Retrieve |
+| HEAD | yes | yes | no | Headers only |
+| OPTIONS | yes | yes | optional | Capabilities/CORS preflight |
+| POST | no | no | yes | Create/process |
+| PUT | no | yes | yes | Replace |
+| PATCH | no | no | yes | Partial update |
+| DELETE | no | yes | optional | Delete |
+| TRACE | yes | yes | no | Debug |
+| CONNECT | no | no | no | Tunnel |
+
+## 28.14 MIME types (common)
+`text/html`, `text/plain`, `application/json`, `application/xml`, `application/x-www-form-urlencoded`, `multipart/form-data`, `application/octet-stream`, `image/png`, `image/jpeg`
+
+## 28.15 Caching
+Cache-Control: `max-age`, `no-cache`, `no-store`, `public`, `private`, `must-revalidate`. ETag/If-None-Match, Last-Modified/If-Modified-Since.
+
+## 28.16 Authentication
+Basic, Bearer tokens, API keys, OAuth 2.0 flows (conceptual).
+
+## 28.17 HTTPS overview
+HTTP over TLS - encrypts request/response, provides authentication via certificates.
+
+## 28.18 Exercises
+1. Parse raw HTTP request manually
+2. Build minimal HTTP parser
+3. Implement GET/POST handling
+4. Add header parsing
+5. Handle query strings
+6. Implement status code responses
+7. Test with curl

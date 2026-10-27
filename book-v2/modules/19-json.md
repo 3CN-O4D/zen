@@ -205,3 +205,95 @@ json.loads(fs.read("data.json"))
 5. Write `json_to_csv(data)` that converts a list of flat dicts to CSV text.
 6. Write `validate_json(s)` that returns true if `s` is valid JSON, false otherwise (using try/catch).
 7. Write `extract_field(obj, path)` that navigates a nested dict using a dot-separated path like "a.b.c".
+
+
+## 19.12 json module — complete reference
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `parse(s)` | parse JSON string | `json.parse('{"a":1}')` |
+| `stringify(x)` / `encode(x)` | serialize to JSON | `json.stringify(#{a:1})` |
+| `pretty(x)` | pretty-printed JSON | `json.pretty(#{a:1})` |
+| `load(path)` | parse JSON from file | `json.load("data.json")` |
+| `save(path, x)` | write JSON to file | `json.save("out.json", d)` |
+
+### Usage
+
+```zen
+import json
+let d = #{name: "Ada", age: 36, tags: ["a","b"]}
+let s = json.stringify(d)
+print(s)   # {"name":"Ada","age":36,"tags":["a","b"]}
+let back = json.parse(s)
+print(back["name"])   # Ada
+let pretty = json.pretty(d)
+print(pretty)
+```
+
+### JSON types mapping
+
+| JSON | Zen |
+|------|-----|
+| object | dict |
+| array | list |
+| string | string |
+| number | int/float |
+| boolean | bool |
+| null | nil |
+
+### Exercises
+
+1. Write `safe_parse(s)` returning nil on invalid JSON.
+2. Implement `json_get(d, path, default)` for dotted paths.
+3. Write `merge_json(a, b)` merging two JSON objects.
+4. Implement `filter_json(d, pred)` keeping matching entries.
+5. Write `json_to_csv(data)` converting list of dicts to CSV.
+6. Implement `deep_compare(a, b)` for JSON values.
+7. Write `strip_nulls(d)` removing nil values recursively.
+8. Implement `sort_keys(d)` returning a sorted dict.
+9. Write `validate_json_schema(data, schema)` conceptually.
+10. Implement `merge_json_files(paths)` merging multiple files.
+
+
+
+## 19.12 Worked example — read, modify, write JSON
+
+```zen
+import json
+import pathlib
+
+let p = pathlib.Path("config.json")
+
+# read
+let cfg = json.load(str(p))
+print("theme=" + str(cfg["theme"]))
+
+# modify
+cfg["theme"] = "dark"
+cfg["version"] = 2
+
+# write
+json.save(str(p), cfg)
+print("saved")
+
+# parse a JSON string
+let s = '{"a":1,"b":[2,3]}'
+let d = json.parse(s)
+print(d["a"])   # 1
+```
+
+## 19.13 Troubleshooting JSON
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| parse error | malformed JSON (trailing comma, single quotes) | fix the JSON |
+| missing key | key absent | use `in` or `??` |
+| wrong type | value isn't what you expect | check with typeof |
+
+## 19.14 Exercises
+
+1. Write `safe_parse(s)` returning nil on invalid JSON.
+2. Implement `json_get(d, path, default)` for dotted paths.
+3. Merge two JSON objects.
+4. Convert a list of dicts to CSV.
+5. Strip nil values from a dict recursively.

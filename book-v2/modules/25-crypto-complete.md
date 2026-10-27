@@ -527,3 +527,129 @@ crypto.policy("strict")
 6. Write `hash_password(password, salt)` using PBKDF2.
 7. Write `verify_password(password, salt, expected_hash)` using PBKDF2.
 8. Demonstrate `crypto.constant_time_eq` vs regular `==` for timing safety.
+
+
+## 25.12 crypto module — advanced reference
+
+### Hashing
+
+| Function | Purpose |
+|----------|---------|
+| `sha256/384/512`, `sha3_256/512`, `blake3`, `md5`, `sha1` | cryptographic hashes |
+
+### HMAC
+
+| Function | Purpose |
+|----------|---------|
+| `sha256(key, data)` / `sha512(key, data)` | keyed hash |
+
+### Symmetric encryption
+
+| Function | Purpose |
+|----------|---------|
+| `generate_key(alg)` | generate a key |
+| `encrypt(alg, key, plaintext, aad="")` | encrypt |
+| `decrypt(alg, key, ciphertext, aad="")` | decrypt |
+| `encrypt_aes_gcm(key, plaintext, aad="")` | AES-GCM |
+| `decrypt_aes_gcm(key, ciphertext, aad="")` | AES-GCM |
+| `encrypt_chacha20_poly1305(...)` | ChaCha20-Poly1305 |
+| `decrypt_chacha20_poly1305(...)` | ChaCha20-Poly1305 |
+
+### Asymmetric (public key)
+
+| Function | Purpose |
+|----------|---------|
+| `generate_rsa(bits=2048)` | RSA keypair |
+| `rsa_encrypt(pub, pt)` / `rsa_decrypt(priv, ct)` | RSA encrypt/decrypt |
+| `rsa_sign(priv, msg)` / `rsa_verify(pub, msg, sig)` | RSA sign/verify |
+| `generate_ed25519()` | Ed25519 keypair |
+| `ed25519_sign(priv, msg)` / `ed25519_verify(pub, msg, sig)` | Ed25519 |
+| `generate_x25519()` | X25519 keypair |
+| `x25519_shared_secret(priv, pub)` | Diffie-Hellman shared secret |
+
+### Encoding
+
+| Function | Purpose |
+|----------|---------|
+| `b64encode/decode`, `b64urlencode/decode`, `hex_encode/decode` | encodings |
+
+### JWT
+
+| Function | Purpose |
+|----------|---------|
+| `sign(payload, key, alg="HS256")` | sign JWT |
+| `verify(token, key, algorithms=["HS256"])` | verify JWT |
+| `decode(token)` | decode JWT (no verify) |
+
+### KDF / passwords
+
+| Function | Purpose |
+|----------|---------|
+| `pbkdf2(password, salt, iterations, length)` | PBKDF2 |
+| `argon2id(password, salt, memory, iterations, parallelism, length)` | Argon2id |
+| `argon2id_hash(password)` | hash password |
+| `verify_argon2id(password, hash)` | verify password hash |
+
+### OTP
+
+| Function | Purpose |
+|----------|---------|
+| `totp(secret, time_step, digits)` | TOTP token |
+| `totp_verify(secret, token, window, time_step, digits)` | verify TOTP |
+| `hotp(secret, counter, digits)` | HOTP token |
+| `hotp_verify(secret, token, counter, window, digits)` | verify HOTP |
+| `generate_secret()` / `bytes(n)` / `hex(n)` / `base64(n)` / `uuid4()` / `secure_token()` | randomness |
+
+### X.509
+
+| Function | Purpose |
+|----------|---------|
+| `parse(pem)` | parse certificate |
+
+### Usage
+
+```zen
+import crypto
+let key = crypto.generate_key("aes-256-gcm")
+let ct = crypto.encrypt_aes_gcm(key, "secret message")
+let pt = crypto.decrypt_aes_gcm(key, ct)
+print(pt)   # secret message
+
+let pair = crypto.generate_ed25519()
+let sig = crypto.ed25519_sign(pair.private_key, "message")
+print(crypto.ed25519_verify(pair.public_key, "message", sig))  # true
+
+let token = crypto.sign(#{sub: "alice"}, "my-secret")
+let payload = crypto.verify(token, "my-secret")
+print(payload["sub"])   # alice
+
+let pw_hash = crypto.argon2id_hash("hunter2")
+print(crypto.verify_argon2id("hunter2", pw_hash))   # true
+print(crypto.verify_argon2id("wrong", pw_hash))     # false
+
+print(crypto.totp("JBSWY3DPEHPK3PXP"))   # 6-digit token
+```
+
+### Security best practices
+
+1. Never use MD5/SHA-1 for security; use SHA-256 or better.
+2. Use Argon2id or PBKDF2 for password hashing (with salt).
+3. Use AES-GCM or ChaCha20-Poly1305 for encryption (authenticated).
+4. Verify JWT signatures before trusting payloads.
+5. Use `crypto.secure_token`/`secrets`, not `random`, for tokens.
+6. Rotate keys regularly; never hardcode secrets.
+7. Constant-time comparison for secrets.
+
+### Exercises
+
+1. Encrypt/decrypt a string with AES-GCM; verify round-trip.
+2. Sign/verify a message with Ed25519.
+3. Generate an RSA keypair; encrypt with public, decrypt with private.
+4. Compute `x25519_shared_secret` for two keypairs; both sides match.
+5. Sign a JWT and verify it; tamper with payload and confirm verification fails.
+6. Hash a password with Argon2id and verify correct/wrong passwords.
+7. Generate a TOTP token and verify it within the time window.
+8. Compute HMAC-SHA256 of a message with a key.
+9. Compare timing of constant-time vs naive comparison (conceptually).
+10. Build a small "vault" CLI: encrypt a file, decrypt with passphrase.
+

@@ -289,3 +289,64 @@ os.path.isdir(path)
 3. Write `ensure_dir(path)` that creates parent directories if missing.
 4. Write a script that prints all environment variables containing "ZEN".
 5. Write `human_path(path)` that replaces `$HOME` with `~`.
+
+
+## 21.12 pathlib & os module — complete reference
+
+### pathlib.Path
+
+| Method | Purpose | Example |
+|--------|---------|---------|
+| `Path(s)` | construct path | `pathlib.Path("a/b.txt")` |
+| `/` operator | join paths | `p / "sub" / "file.txt"` |
+| `exists()` | exists | `p.exists()` |
+| `is_file()` | is file | `p.is_file()` |
+| `is_dir()` | is dir | `p.is_dir()` |
+| `name` | last component | `p.name` → "file.txt" |
+| `stem` | name without suffix | `p.stem` → "file" |
+| `suffix` | extension | `p.suffix` → ".txt" |
+| `parent` | parent path | `p.parent` |
+| `resolve()` | absolute path | `p.resolve()` |
+| `mkdir()` | create dir | `p.mkdir()` |
+| `glob(pattern)` | match files | `p.glob("*.txt")` |
+
+### os
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `getcwd()` | current dir | `os.getcwd()` |
+| `chdir(path)` | change dir | `os.chdir("/tmp")` |
+| `listdir(path)` | list dir | `os.listdir(".")` |
+| `makedirs(path)` | create dirs | `os.makedirs("a/b")` |
+| `remove(path)` | delete file | `os.remove("tmp.txt")` |
+| `rmdir(path)` | remove empty dir | `os.rmdir("dir")` |
+| `rename(src, dst)` | rename | `os.rename("a","b")` |
+| `stat(path)` | file stats | `os.stat("f.txt")` |
+| `environ` | env vars | `os.environ["PATH"]` |
+
+### Usage
+
+```zen
+import pathlib
+import os
+let p = pathlib.Path("data") / "config.txt"
+print(p.exists())
+for f in pathlib.Path(".").glob("*.z") {
+    print(f.name)
+}
+print(os.getcwd())
+```
+
+### Exercises
+
+1. Write `find_files(dir, suffix)` recursively.
+2. Implement `file_size(path)` using os.stat.
+3. Write `ensure_dir(path)` creating parents.
+4. Implement `copy_tree(src, dst)` copying a directory.
+5. Write `recent_files(dir, n)` listing n most recently modified.
+6. Implement `backup(path)` copying to `path.bak`.
+7. Write `list_env(prefix)` showing env vars starting with prefix.
+8. Implement `temp_name(dir, prefix)` generating a temp path.
+9. Write `walk(dir)` yielding all files recursively.
+10. Implement `safe_delete(path)` removing file if it exists.
+

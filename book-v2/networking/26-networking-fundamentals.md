@@ -263,3 +263,123 @@ let tcp_pkt = net_raw.pack_tcp(12345, 80, "SYN")
 5. Create a raw IP packet with `net_raw.pack_ip` and inspect the first 20 bytes.
 6. Write a function `is_port_open(host, port, timeout)` that returns true if a TCP connect succeeds.
 7. Demonstrate that `socket.close` releases the file descriptor by opening and closing multiple sockets.
+
+
+## 26.12 Socket address families and types (complete reference)
+
+### Address families
+| Family | Constant | Purpose |
+|---|---|---|
+| AF_INET | IPv4 | Internet Protocol v4 |
+| AF_INET6 | IPv6 | Internet Protocol v6 |
+| AF_UNIX/AF_LOCAL | Unix domain | Local IPC (file/socket path) |
+| AF_PACKET | Raw packet | Low-level packet access (Linux) |
+
+### Socket types
+| Type | Purpose | Protocol |
+|---|---|---|
+| SOCK_STREAM | Reliable, ordered, connection-based | TCP (usually) |
+| SOCK_DGRAM | Unreliable, unordered, datagram | UDP |
+| SOCK_RAW | Raw access to IP/ICMP etc | IP |
+| SOCK_SEQPACKET | Sequenced packets | SCTP etc |
+
+### Protocols (IPPROTO_*)
+| Protocol | Use |
+|---|---|
+| IPPROTO_TCP | TCP |
+| IPPROTO_UDP | UDP |
+| IPPROTO_ICMP | ICMP |
+| IPPROTO_IP | IP |
+
+## 26.13 Berkeley sockets API mapping
+
+Common calls: `socket()`, `bind()`, `listen()`, `accept()`, `connect()`, `send()`/`sendall()`, `recv()`, `sendto()`/`recvfrom()`, `close()`, `setsockopt()`, `getsockname()`, `getpeername()`, `shutdown()`.
+
+## 26.14 TCP connection lifecycle (detailed)
+
+**Server:**
+1. `socket(AF_INET, SOCK_STREAM, 0)` → sock
+2. `setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)` (optional but common)
+3. `bind((host, port))`
+4. `listen(backlog)`
+5. `accept()` → (client_sock, addr) [blocks]
+6. `recv/send` on client_sock
+7. `close()`
+
+**Client:**
+1. `socket(AF_INET, SOCK_STREAM, 0)`
+2. `connect((host, port))`
+3. `send/recv`
+4. `close()`
+
+## 26.15 UDP communication
+
+**Server:** bind, recvfrom, sendto (no listen/accept)
+**Client:** socket, sendto/recvfrom or connect (connected UDP)
+
+## 26.16 Socket options (important)
+
+| Option | Level | Purpose |
+|---|---|---|
+| SO_REUSEADDR | SOL_SOCKET | Allow reuse of local address |
+| SO_REUSEPORT | SOL_SOCKET | Allow multiple binds to same port (load balancing) |
+| SO_KEEPALIVE | SOL_SOCKET | TCP keepalive probes |
+| SO_RCVBUF/SO_SNDBUF | SOL_SOCKET | Buffer sizes |
+| SO_TIMEOUT | SOL_SOCKET | Timeouts |
+| TCP_NODELAY | IPPROTO_TCP | Disable Nagle's algorithm |
+| IP_TTL | IPPROTO_IP | Time to live |
+| IP_HDRINCL | IPPROTO_IP | Include IP header in raw packets |
+
+## 26.17 Blocking vs non-blocking
+
+- Blocking: calls wait until ready/completed
+- Non-blocking: return immediately (EAGAIN/EWOULDBLOCK)
+- Use `select()`, `poll()`, or async/event loops for multiplexing
+
+## 26.18 Byte order (network order)
+
+Network byte order is big-endian. Use `htons()`, `ntohs()`, `htonl()`, `ntohl()` when working with raw values/ports in some APIs. In high-level APIs often handled automatically.
+
+## 26.19 Common ports
+| Port | Service |
+|---|---|
+| 20/21 | FTP |
+| 22 | SSH |
+| 23 | Telnet |
+| 25 | SMTP |
+| 53 | DNS |
+| 67/68 | DHCP |
+| 80 | HTTP |
+| 110 | POP3 |
+| 143 | IMAP |
+| 443 | HTTPS |
+| 993 | IMAPS |
+| 995 | POP3S |
+
+## 26.20 Network troubleshooting checklist
+
+1. **Connectivity**: ping, traceroute/tracert
+2. **DNS**: nslookup/dig
+3. **Ports**: netstat/ss, nmap
+4. **Packets**: tcpdump, wireshark
+5. **Routing**: ip route/route
+6. **Interfaces**: ip addr/ifconfig
+7. **Firewall**: iptables/nftables/ufw
+
+## 26.21 Lab exercises (comprehensive)
+
+1. Draw/describe packet flow for HTTP request across all 7 OSI layers
+2. Capture TCP 3-way handshake with tcpdump (theory + practice)
+3. Write pseudocode for echo server using sockets
+4. Compare TCP vs UDP for video streaming, DNS, file transfer
+5. Explain MTU/path MTU discovery and fragmentation
+6. Demonstrate ARP resolution process
+7. Trace ICMP ping through layers
+8. List which headers appear at each layer for TCP/IP over Ethernet
+9. Explain NAT and its impact
+10. Research and document difference between IPv4 and IPv6 headers
+
+## 26.22 Further reading
+- RFC 793 (TCP), RFC 768 (UDP), RFC 791 (IP)
+- IEEE 802.3 (Ethernet)
+- Stevens' Unix Network Programming

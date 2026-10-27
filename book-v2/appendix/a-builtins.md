@@ -164,3 +164,112 @@ exit(0)
 3. Write `interleave(a, b)` using zip.
 4. Write `all_unique(lst)` using set and len.
 5. Write `flatten_dict(d)` that flattens a nested dict using recursion and dict methods.
+
+## A.12 Complete built-in function reference
+
+All built-ins are available without importing.
+
+| Function | Category | Purpose | Example | Result |
+|----------|----------|---------|---------|--------|
+| `print(*vals)` | I/O | print values to stdout | `print("hi", 42)` | hi 42 |
+| `str(x)` | conversion | to string | `str(42)` | `"42"` |
+| `int(x)` | conversion | to integer | `int("42")` | `42` |
+| `float(x)` | conversion | to float | `float("3.14")` | `3.14` |
+| `bool(x)` | conversion | to boolean | `bool(0)` | `false` |
+| `list(x)` | conversion | to list | `list("ab")` | `["a","b"]` |
+| `tuple(x)` | conversion | to tuple | `tuple([1,2])` | `#(1,2)` |
+| `set(x)` | conversion | to set | `set([1,1,2])` | `{1,2}` |
+| `dict(x)` | conversion | from pairs | `dict([["a",1]])` | `{"a":1}` |
+| `len(x)` | iteration | length | `len("abc")` | `3` |
+| `range(...)` | iteration | range | `range(5)` | `0..4` |
+| `enumerate(it)` | iteration | index+value | `enumerate(["a","b"])` | `[[0,"a"],[1,"b"]]` |
+| `zip(...)` | iteration | aggregate | `zip([1,2],["a","b"])` | `[[1,"a"],[2,"b"]]` |
+| `sorted(x)` | iteration | sorted list | `sorted([3,1,2])` | `[1,2,3]` |
+| `reversed(x)` | iteration | reversed | `reversed([1,2,3])` | `[3,2,1]` |
+| `any(it)` | iteration | any true | `any([f,t])` | `true` |
+| `all(it)` | iteration | all true | `all([t,t])` | `true` |
+| `sum(it)` | math | sum | `sum([1,2,3])` | `6` |
+| `min(it/a,b)` | math | minimum | `min([3,1,2])` | `1` |
+| `max(it/a,b)` | math | maximum | `max([3,1,2])` | `3` |
+| `abs(x)` | math | absolute value | `abs(-5)` | `5` |
+| `typeof(x)` | introspection | type name | `typeof(42)` | `"int"` |
+| `type(x)` | introspection | type (alias) | `type("x")` | `"string"` |
+| `chr(n)` | string | int to char | `chr(65)` | `"A"` |
+| `ord(s)` | string | char to int | `ord("A")` | `65` |
+| `exit(n)` | system | exit process | `exit(0)` | exits |
+| `open(path, mode)` | I/O | open file | `open("f.txt")` | file handle |
+| `assert(cond, msg?)` | debugging | assert condition | `assert x > 0` | raises if false |
+| `repr(x)` | debugging | developer repr | `repr("hi")` | `"\"hi\""` |
+
+### Type conversion details
+
+```zen
+print(int("42"))      # 42
+print(float("3.14"))  # 3.14
+print(str(42))        # "42"
+print(bool(0))        # false
+print(list("abc"))    # ["a","b","c"]
+print(tuple([1, 2]))  # #(1, 2)
+print(set([1, 1, 2])) # {1, 2}
+print(dict([["a", 1]])) # {"a": 1}
+```
+
+Parsing failures raise `ValueError` (Z0305):
+```zen
+try { int("not a number") } catch as e { print(e.msg) }
+```
+
+### Truthiness reference
+
+Falsy: `false`, `nil`, `null`.
+Truthy: everything else — including `0`, `0.0`, `""`, `[]`, `#{}`, `%{}`, `#()`.
+
+```zen
+print(bool(0))      # true
+print(bool(""))     # true
+print(bool([]))     # true
+print(bool(false))  # false
+print(bool(nil))    # false
+```
+
+### `ord`/`chr`
+
+```zen
+print(ord("A"))   # 65
+print(chr(65))    # "A"
+```
+
+### `assert`
+
+```zen
+assert x > 0, "x must be positive"
+```
+
+### `exit`
+
+```zen
+exit(0)   # success
+exit(1)   # failure
+```
+
+## A.13 Built-in constants
+
+| Constant | Value |
+|----------|-------|
+| `true` | boolean true |
+| `false` | boolean false |
+| `nil` / `null` | absence of value |
+
+## A.14 Exercises
+
+1. Predict the result of `bool([])`, `bool("")`, `bool(0)` then verify.
+2. Write `safe_int(s)` returning nil on parse failure.
+3. Demonstrate `chr`/`ord` round-trip for several characters.
+4. Use `enumerate` to print lines with line numbers.
+5. Use `zip` to pair two lists into a dict.
+6. Compare `min`/`max` on a list vs two scalars.
+7. Write `assert_positive(x)` using `assert`.
+8. Demonstrate `reversed` on a list and a string.
+9. Write `all_even(xs)` using `all`.
+10. Show `type`/`typeof` on int, float, string, list, dict, nil, func.
+

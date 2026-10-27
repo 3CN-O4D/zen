@@ -297,3 +297,80 @@ let tcp = net_raw.pack_tcp(1234, 80, "SYN")
 5. Write a simple HTTP/0.9 client that fetches the root page.
 6. Write a TCP echo server that handles one connection at a time.
 7. Write a UDP server that echoes back datagrams.
+
+
+## 34.12 Raw sockets — deep reference
+
+Raw sockets (`AF_PACKET` / `SOCK_RAW`) let you construct and inspect packets
+at the IP layer and below. Requires privileges (root/admin).
+
+### What you can do
+
+- Craft custom IP/TCP/UDP/ICMP headers.
+- Receive all packets matching a filter (promiscuous mode).
+- Implement ping (ICMP), traceroute, packet inspection.
+- Learn networking by building protocols from scratch.
+
+### What you should NOT do
+
+- Send spoofed packets on networks you don't own (illegal/unethical).
+- Flood or DoS targets.
+- Capture traffic on shared networks without permission.
+
+### IP header (IPv4, 20 bytes min)
+
+| Offset | Field | Size |
+|--------|-------|------|
+| 0 | version/IHL, DSCP/ECN | 1 byte |
+| 1 | total length | 2 bytes |
+| 3 | identification | 2 bytes |
+| 5 | flags/fragment offset | 2 bytes |
+| 7 | TTL | 1 byte |
+| 8 | protocol (TCP=6, UDP=17, ICMP=1) | 1 byte |
+| 9 | header checksum | 2 bytes |
+| 11 | source IP | 4 bytes |
+| 15 | destination IP | 4 bytes |
+
+### ICMP echo (ping)
+
+1. Build IP header + ICMP header (type 8 = echo request).
+2. Compute ICMP checksum.
+3. Send via raw socket.
+4. Wait for ICMP type 0 (echo reply).
+
+### TCP raw (SYN scan concept)
+
+1. Build TCP header with SYN flag.
+2. Send to target port.
+3. SYN-ACK = open; RST = closed.
+
+### Usage (conceptual pseudocode)
+
+```zen
+import socket
+# requires root
+let s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+s.bind(("eth0", 0))
+let packet = build_ip_packet(dst="93.184.216.34", proto=socket.IPPROTO_ICMP, ...)
+s.send(packet)
+let data, addr = s.recvfrom(65535)
+```
+
+### Checksums
+
+Internet checksum: 16-bit one's complement of the sum of 16-bit words.
+Implemented manually for ICMP/TCP/UDP when the OS doesn't compute them.
+
+### Exercises
+
+1. Describe the IPv4 header fields and their sizes.
+2. Explain the ICMP echo request/reply flow (ping).
+3. Sketch how traceroute works (TTL expiration).
+4. List raw socket privileges and risks.
+5. Write pseudocode for an ICMP ping.
+6. Explain the Internet checksum algorithm.
+7. Describe ARP: mapping IP → MAC.
+8. Explain promiscuous mode and packet capture.
+9. List protocols you can build with raw sockets (ICMP, custom TCP, etc.).
+10. Research ethical/legal boundaries of packet crafting.
+

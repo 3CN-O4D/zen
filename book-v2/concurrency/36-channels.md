@@ -207,3 +207,146 @@ channel.send(ch, nil)  // sentinel to signal completion
 3. Write `parallel_map(func, items)` that runs `func` on each item in a thread and sends results via a channel.
 4. Write a pipeline: stage1 generates numbers, stage2 squares them, stage3 prints them. Connect stages with channels.
 5. Write a program where multiple workers pull jobs from a channel channel and send results to another channel.
+
+
+## Extended Content
+
+This section provides additional depth, patterns, debugging tips, and exercises for production use.
+
+### Common pitfalls
+- Race conditions
+- Deadlocks (circular wait)
+- Starvation
+- Data races
+- Forgetting to join threads
+
+### Debugging concurrent code
+- Use logging with thread identifiers
+- Test with different interleavings
+- Consider thread sanitizers conceptually
+- Design for thread safety from start
+
+### Exercises
+1. Producer-consumer with channels
+2. Thread pool pattern
+3. Parallel map/reduce
+4. Avoiding deadlocks with lock ordering
+5. Thread-safe cache
+6. Benchmark sequential vs parallel
+
+
+## 36.12 Worked examples — channels
+
+Channels are the "share memory by communicating" primitive.
+
+### Example 1: Basic send/recv
+
+```zen
+import channels
+
+let ch = channels.Channel()
+
+func producer() {
+    for i in 0..5 {
+        ch.send(i)
+        print("sent ${i}")
+    }
+    ch.close()
+}
+
+func consumer() {
+    while true {
+        let v = ch.recv()
+        if v == nil { break }   # channel closed and empty
+        print("received ${v}")
+    }
+}
+
+let tp = threading.Thread(fn() { producer() })
+let tc = threading.Thread(fn() { consumer() })
+tp.start()
+tc.start()
+tp.join()
+tc.join()
+print("done")
+```
+
+### Example 2: Producer-consumer with buffered channel
+
+```zen
+let ch = channels.Channel(buffered=true, capacity=10)
+# producer can send up to `capacity` items without blocking
+```
+
+### Example 3: Multiple consumers (worker pool)
+
+```zen
+let jobs = channels.Channel()
+let results = channels.Channel()
+
+func worker(id) {
+    while true {
+        let job = jobs.recv()
+        if job == nil { break }
+        let out = job * job
+        results.send(#(id, out))
+    }
+}
+
+# start 4 workers
+for i in 0..4 {
+    threading.Thread(fn() { worker(i) }).start()
+}
+
+# send 20 jobs
+for i in 0..20 { jobs.send(i) }
+jobs.close()
+
+# collect 20 results
+for i in 0..20 {
+    let r = results.recv()
+    print("worker ${r[0]} -> ${r[1]}")
+}
+results.close()
+```
+
+### Example 4: select-like multiplexing
+
+Zen may not have a built-in `select`; emulate by checking channels in a loop
+or using a dedicated multiplexer. Conceptually:
+
+```zen
+# wait on the first ready channel
+```
+
+## 36.13 Channel patterns
+
+| Pattern | Use |
+|---------|-----|
+| One producer, one consumer | simple pipeline |
+| One producer, many consumers | fan-out / work distribution |
+| Many producers, one consumer | aggregation / logging |
+| Request-response | send request on ch1, receive reply on ch2 |
+| Pipeline | stage A → ch1 → stage B → ch2 → stage C |
+
+## 36.14 Common channel bugs
+
+1. **Forgetting to close** → consumers block forever on recv.
+2. **Sending on a closed channel** → error.
+3. **Unbuffered channel rendezvous** → sender blocks until receiver ready.
+4. **Deadlock** → both sides waiting to send/recv with no progress.
+5. **Not draining** → producer blocks, pipeline stalls.
+
+## 36.15 Exercises
+
+1. Build a channel, send 10 numbers, receive and sum them.
+2. Implement producer-consumer: producer sends 1..100, consumer sums.
+3. Create a worker pool of 4 workers processing a job queue.
+4. Implement a request-response channel pair.
+5. Build a 3-stage pipeline (parse → transform → write) with channels.
+6. Demonstrate what happens when you recv from an empty closed channel.
+7. Implement `fan_in(ch1, ch2)` merging two channels into one.
+8. Write a broadcast: one sender, three receivers all getting each value.
+9. Implement a bounded buffer with a channel.
+10. Simulate a chat room: multiple clients send messages to one channel.
+

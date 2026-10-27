@@ -299,3 +299,54 @@ string.ends_with("zen", "en") # true
 6. Write `to_snake_case(text)` handling spaces and hyphens.
 7. Write `strip_html_tags(text)` that removes `<...>` tags using repeated `find` and slicing.
 8. Write `format_number_with_commas(n)` that inserts commas every 3 digits.
+
+
+## 17.12 string module — complete reference
+
+Constants: `digits`, `hexdigits`, `octdigits`, `ascii_letters`,
+`ascii_lowercase`, `ascii_uppercase`, `punctuation`, `whitespace`, `printable`.
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `upper(s)` | uppercase | `string.upper("abc")` |
+| `lower(s)` | lowercase | `string.lower("ABC")` |
+| `title(s)` | title case | `string.title("hello world")` |
+| `capitalize(s)` | first char upper | `string.capitalize("hello")` |
+| `swapcase(s)` | flip case | `string.swapcase("AbC")` |
+| `strip(s)` | trim whitespace | `string.strip("  hi  ")` |
+| `lstrip(s)` / `rstrip(s)` | trim one side | `string.lstrip("  hi")` |
+| `split(s, sep=None)` | split | `string.split("a,b,c", ",")` |
+| `join(sep, parts)` | join | `string.join("-", ["a","b"])` |
+| `replace(s, old, new)` | replace | `string.replace("aaa","a","b")` |
+| `count(s, sub)` | count occurrences | `string.count("banana","an")` |
+| `find(s, sub)` | first index or -1 | `string.find("hello","ll")` |
+| `startswith(s, prefix)` | boolean | `string.startswith("hello","he")` |
+| `endswith(s, suffix)` | boolean | `string.endswith("hello","lo")` |
+| `isdigit(s)` | all digits | `string.isdigit("123")` |
+| `isalpha(s)` | all letters | `string.isalpha("abc")` |
+| `isalnum(s)` | letters/digits | `string.isalnum("abc1")` |
+| `isspace(s)` | all whitespace | `string.isspace("   ")` |
+
+### Usage
+
+```zen
+import string
+print(string.upper("zen"))        # ZEN
+print(string.digits)              # "0123456789"
+print(string.join(":", ["2024","01","15"]))  # 2024:01:15
+print(string.isdigit("42"))       # true
+```
+
+### Exercises
+
+1. Write `is_palindrome(s)` using string module case helpers.
+2. Implement `mask_all_but_last(s, n)` masking characters.
+3. Write `extract_digits(s)` keeping only digits.
+4. Implement `title_case(s)` manually and compare to `string.title`.
+5. Write `validate_username(s)` (alphanumeric, 3-16 chars).
+6. Implement `word_count(text)` using split.
+7. Write `remove_punctuation(s)` using `string.punctuation`.
+8. Implement `caesar_shift(s, k)` using `ascii_letters`.
+9. Write `is_pangram(s)` checking all letters present.
+10. Implement `wrap(s, width)` inserting newlines.
+

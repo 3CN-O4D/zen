@@ -250,3 +250,189 @@ for k in d { ... } # iterate keys (insertion order)
 6. Write `dict_intersection(d1, d2)` that returns a dict with keys present in both, using values from d1.
 7. Write `dict_diff(d1, d2)` that returns keys in d1 but not d2.
 8. Demonstrate that dict equality is order-insensitive: `{"a":1,"b":2} == {"b":2,"a":1}`.
+
+## 9.12 Dictionaries — complete reference
+
+A dict is an unordered collection of key/value pairs. Keys must be strings.
+
+```zen
+let empty = #{}
+let person = #{name: "Ada", age: 36, city: "London"}
+let mixed = #{a: 1, b: "two", c: true, d: [1, 2]}
+```
+
+### Creation
+
+| Form | Result |
+|------|--------|
+| `#{}` | empty dict |
+| `#{k: v, ...}` | literal with string keys |
+| `dict(pairs)` | from list of `[k, v]` pairs |
+| `list(d)` | list of keys |
+
+Note: Legacy `{k: v}` still parses with a deprecation warning; prefer `#{k: v}`.
+
+## 9.13 Access and mutation
+
+```zen
+let d = #{name: "Ada", age: 36}
+print(d["name"])    # Ada
+d["age"] = 37       # update
+d["city"] = "London"  # add
+print(d)            # #{name: "Ada", age: 37, city: "London"}
+```
+
+Missing key access raises an error. Use `in` or `??` to be safe:
+
+```zen
+print("name" in d)          # true
+print("country" in d)       # false
+print(d["country"] ?? "UK") # UK  (default when missing)
+```
+
+## 9.14 Dict methods
+
+| Method | Purpose | Example |
+|--------|---------|---------|
+| `keys()` | list of keys | `d.keys()` |
+| `values()` | list of values | `d.values()` |
+| `items()` | list of `[k, v]` pairs | `d.items()` |
+| `get(k, default)` | value or default | `d.get("x", 0)` |
+| `pop(k)` | remove and return value | `d.pop("age")` |
+| `clear()` | remove all entries | `d.clear()` |
+| `update(other)` | merge another dict | `d.update(#{x: 1})` |
+
+```zen
+for k, v in d.items() {
+    print(k, v)
+}
+```
+
+## 9.15 Dict iteration
+
+Iterating a dict yields keys. Use `.items()` for key/value, `.values()` for values.
+
+```zen
+for k in d { print(k) }              # keys
+for k, v in d.items() { print(k, v) } # pairs
+for v in d.values() { print(v) }     # values
+```
+
+Iteration order is not guaranteed across versions — do not rely on it.
+
+## 9.16 Dict equality and hashing
+
+Dicts compare order-insensitively with `==`:
+
+```zen
+print(#{a: 1, b: 2} == #{b: 2, a: 1})   # true
+```
+
+Keys must be strings; non-string keys raise a TypeError. There is no hashing
+of arbitrary keys in Zen 3.0.
+
+## 9.17 Common dict patterns
+
+### Counting frequencies
+
+```zen
+func count_words(words) {
+    let freqs = #{}
+    for w in words {
+        freqs[w] = (freqs[w] ?? 0) + 1
+    }
+    return freqs
+}
+print(count_words(["a", "b", "a", "c", "b", "a"]))
+# #{a: 3, b: 2, c: 1}
+```
+
+### Grouping by key
+
+```zen
+func group_by(xs, key_fn) {
+    let groups = #{}
+    for x in xs {
+        let k = key_fn(x)
+        if k in groups {
+            groups[k].push(x)
+        } else {
+            groups[k] = [x]
+        }
+    }
+    return groups
+}
+```
+
+### Merging dicts
+
+```zen
+let base = #{a: 1, b: 2}
+let overrides = #{b: 20, c: 3}
+let merged = #{}
+for k in base { merged[k] = base[k] }
+for k in overrides { merged[k] = overrides[k] }
+print(merged)   # #{a: 1, b: 20, c: 3}
+```
+
+### Default-dict pattern
+
+```zen
+func get_or_default(d, k, default) {
+    if k in d { return d[k] }
+    return default
+}
+```
+
+## 9.18 Nested dicts
+
+```zen
+let config = #{database: #{host: "localhost", port: 5432}}
+print(config["database"]["host"])   # localhost
+```
+
+Safely navigate nested dicts:
+
+```zen
+func deep_get(d, path, default = nil) {
+    var cur = d
+    for p in path {
+        if typeof(cur) != "dict" || !(p in cur) { return default }
+        cur = cur[p]
+    }
+    return cur
+}
+print(deep_get(config, ["database", "host"]))   # localhost
+print(deep_get(config, ["database", "user"], "n/a"))   # n/a
+```
+
+## 9.19 Performance notes
+
+- Key lookup is O(1) on average.
+- Dicts use more memory than lists for small collections.
+- Avoid rebuilding dicts in hot loops; mutate in place.
+- `in` on a dict checks keys, not values.
+
+## 9.20 Common dict mistakes
+
+1. **Accessing a missing key** without `??` or `in` raises an error.
+2. **Assuming iteration order.** Sort keys if order matters.
+3. **Non-string keys** are not allowed.
+4. **Aliasing:** `b = a` shares the dict; copy manually for independence.
+5. **Mutating while iterating** over keys.
+6. **Confusing `.get(k, default)` with `d[k] ?? default`** — equivalent but `??`
+   also triggers on explicit `nil` values stored in the dict.
+
+## 9.21 Exercises
+
+1. Write `invert_dict(d)` swapping keys and values (values must be strings).
+2. Implement `subtract_dicts(a, b)` removing b's keys from a.
+3. Write `deep_merge(a, b)` recursively merging nested dicts.
+4. Implement `word_frequencies(text)` using split + counting.
+5. Write `filter_dict(d, pred)` keeping entries where pred(k, v) is true.
+6. Implement `dict_from_pairs(pairs)` from `[k, v]` list.
+7. Write `common_keys(a, b)` returning keys present in both.
+8. Implement `rename_keys(d, mapping)` renaming per a mapping dict.
+9. Write `nested_set(d, path, value)` setting a value at a dotted path.
+10. Implement `dict_diff(a, b)` showing added/removed/changed keys.
+

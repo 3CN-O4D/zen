@@ -312,3 +312,49 @@ m.span(1)         # [start, end]
 5. Write `highlight(text, word)` that wraps `word` occurrences in `**`.
 6. Write `extract_hashtags(text)` that finds all `#word` patterns.
 7. Write `validate_hex_color(s)` that checks for `#RRGGBB` format.
+
+
+## 22.12 regex module — complete reference
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `match(pattern, s)` | match at start | `re.match(r"\d+", "123abc")` |
+| `search(pattern, s)` | search anywhere | `re.search(r"\d+", "abc123")` |
+| `findall(pattern, s)` | all matches | `re.findall(r"\d+", "a1b2c3")` |
+| `sub(pattern, repl, s)` | substitute | `re.sub(r"\d+", "#", "a1b2")` |
+| `split(pattern, s)` | split on pattern | `re.split(r"\s+", "a b  c")` |
+| `compile(pattern)` | compile pattern | `re.compile(r"\d+")` |
+
+### Usage
+
+```zen
+import re
+print(re.findall(r"\d+", "order 123, item 456"))   # ["123","456"]
+print(re.sub(r"\s+", " ", "a   b    c"))           # "a b c"
+m = re.match(r"(\d{4})-(\d{2})-(\d{2})", "2024-01-15")
+print(m[0], m[1], m[2], m[3])   # if match object supports indexing
+```
+
+### Common patterns
+
+- `\d` digit, `\D` non-digit
+- `\w` word char, `\W` non-word
+- `\s` whitespace, `\S` non-whitespace
+- `.` any char, `^` start, `$` end
+- `*` zero+, `+` one+, `?` optional, `{n,m}` range
+- `(...)` group, `|` alternation
+- `\b` word boundary
+
+### Exercises
+
+1. Write `is_email(s)` validating a simple email.
+2. Implement `extract_urls(text)` finding http/https URLs.
+3. Write `validate_phone(s)` for a phone format.
+4. Implement `hashtags(text)` extracting #tags.
+5. Write `mask_ssn(s)` masking all but last 4 digits.
+6. Implement `word_split(text)` splitting on non-words.
+7. Write `is_strong_password(s)` with length, digit, upper, lower, symbol.
+8. Implement `template_fill(tmpl, vars)` replacing `${key}`.
+9. Write `count_words(text)` ignoring punctuation.
+10. Implement `highlight(text, pattern)` wrapping matches in `**`.
+

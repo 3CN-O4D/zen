@@ -204,3 +204,157 @@ print(ffi.strerror(2))
 3. Call `sqrt` from `libm` and print the result as a double.
 4. Allocate memory with `ffi.malloc`, write a string, read it back, free it.
 5. Check `ffi.errno()` after a failing operation and print `ffi.strerror`.
+
+
+## Advanced Topics and Exercises
+
+### Safety considerations
+- Memory management across FFI boundary
+- Type mismatches
+- Calling conventions
+- Null pointers
+- Resource leaks
+
+### Debugging FFI
+- Check symbol names (nm, objdump)
+- Use cdecl/stdcall correctly
+- Test with simple functions first
+
+### Exercises
+1. Call simple C function from shared library
+2. Pass strings and arrays
+3. Handle pointers/structs
+4. Manage memory allocation
+5. Error handling across boundary
+6. Write wrapper module
+
+
+## 39.12 Worked examples — FFI fundamentals
+
+### Conceptual model
+
+Zen's FFI lets you call C functions in shared libraries (`.so`, `.dll`,
+`.dylib`) and pass data across the boundary. Values are marshalled: Zen ints,
+floats, strings, bytes, lists, dicts map to C primitives/pointers/opaque
+handles.
+
+Typical flow:
+1. `load_library("libfoo.so")` → library handle
+2. `get_symbol(lib, "foo_function")` → callable symbol
+3. Call the symbol with Zen arguments; Zen marshals to C.
+4. Receive the C return value, marshalled back to Zen.
+5. Close/drop the handle when done.
+
+### Example 1: Call a simple C function (conceptual pseudocode)
+
+Assuming a C library `libmathutils.so` with:
+```c
+// mathutils.c
+int add(int a, int b) { return a + b; }
+double scale(double v, double f) { return v * f; }
+```
+
+Zen side (exact API depends on build):
+```zen
+import ffi
+
+let lib = ffi.load_library("libmathutils.so")
+let add_fn = ffi.get_symbol(lib, "add")
+let result = ffi.call(add_fn, [21, 21])   # 42
+print(result)
+
+let scale_fn = ffi.get_symbol(lib, "scale")
+let scaled = ffi.call(scale_fn, [10.0, 3.5])   # 35.0
+print(scaled)
+
+ffi.close(lib)
+```
+
+### Example 2: Working with strings across FFI
+
+```zen
+let lib = ffi.load_library("libcstring.so")
+let len_fn = ffi.get_symbol(lib, "string_length")
+let n = ffi.call(len_fn, ["hello"])   # 5
+print(n)
+```
+
+Zen marshals a Zen string to a C `const char*`. The C side must not modify it
+unless the API specifies a mutable buffer (pass `bytes` or a pointer handle).
+
+### Example 3: Pointers and handles
+
+Some APIs return opaque pointers (e.g., file handles, database connections).
+Zen represents these as foreign handles. You must track their lifetime and
+release them via a C `destroy`/`free` function.
+
+```zen
+let db = ffi.call(open_db_fn, ["data.db"])   # foreign handle
+try {
+    let row = ffi.call(query_fn, [db, "SELECT * FROM t"])
+    print(row)
+} finally {
+    ffi.call(close_db_fn, [db])   # always release
+}
+```
+
+### Example 4: Callbacks (Zen function passed to C)
+
+If the C API accepts a function pointer, Zen can pass a closure. The FFI layer
+creates a trampoline so C can call back into Zen.
+
+```zen
+let cmp = ffi.get_symbol(lib, "compare")
+ffi.call(cmp, [list_a, list_b, fn(a, b) => a - b])
+```
+
+**Caution:** the Zen callback must not outlive the Zen closure's scope, and
+must not raise exceptions that cross the C boundary uncaught.
+
+## 39.13 Data type mapping (typical)
+
+| Zen type | C equivalent | Notes |
+|----------|--------------|-------|
+| int | int32_t / int64_t | sign depends on value |
+| float | double | |
+| string | const char* | NUL-terminated; Zen owns it |
+| bytes | unsigned char* | raw buffer |
+| list | array / pointer | marshalled copy |
+| dict | not directly | serialize first (JSON/msgpack) |
+| nil | NULL | |
+| handle | void* | opaque pointer |
+
+## 39.14 Safety considerations
+
+1. **Memory ownership:** know who frees what. Zen-allocated strings passed to
+   C must remain valid during the call; C-allocated memory returned to Zen
+   must be freed by Zen or the C side per convention.
+2. **Null pointers:** dereferencing a NULL handle crashes. Check before use.
+3. **Type mismatches:** passing a float where C expects int corrupts data.
+4. **Calling convention:** cdecl/stdcall must match the platform/library.
+5. **Thread safety:** a C library not thread-safe must be called with a Zen
+   Mutex held.
+6. **Exceptions across boundary:** don't let a Zen throw unwind through C
+   frames; catch at the Zen edge.
+
+## 39.15 Debugging FFI
+
+- `nm -D libfoo.so` to list exported symbols.
+- `objdump -T libfoo.so` for dynamic symbols.
+- Confirm symbol names match exactly (C name mangling).
+- Start with a trivial function (add two ints) before structs/pointers.
+- Log every FFI call and return value.
+
+## 39.16 Exercises
+
+1. Load a shared library and call a function that adds two ints.
+2. Call a C function that takes a string and returns its length.
+3. Pass a bytes buffer to C and read back modified bytes (if supported).
+4. Open an opaque handle, use it, then close it in `finally`.
+5. Pass a Zen callback to a C `qsort`-style comparison function.
+6. Write a wrapper `ZenMath` module exposing `add`, `scale` via FFI.
+7. Demonstrate a null-handle guard before calling C.
+8. Use `nm -D` to inspect a library's exported symbols.
+9. Wrap a C file-reading function with error handling.
+10. Benchmark a pure-Zen function vs the same logic via FFI.
+

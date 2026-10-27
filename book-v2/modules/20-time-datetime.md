@@ -244,3 +244,77 @@ time.strftime("%H:%M:%S")
 5. Format a datetime as "Monday, October 26, 2026 at 2:30 PM".
 6. Write `is_weekend(dt)` that returns true for Saturday/Sunday.
 7. Write `add_business_days(dt, n)` that adds n business days (skipping weekends).
+
+
+## 20.12 time/datetime module — complete reference
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `time()` | current epoch seconds | `time.time()` |
+| `sleep(ms)` | sleep milliseconds | `time.sleep(1000)` |
+| `now()` | current datetime | `datetime.now()` |
+| `today()` | current date | `datetime.today()` |
+| `strftime(fmt, t)` | format time | `datetime.strftime("%Y-%m-%d", t)` |
+| `strptime(s, fmt)` | parse time | `datetime.strptime("2024-01-15", "%Y-%m-%d")` |
+| `timestamp(dt)` | datetime to epoch | `datetime.timestamp(dt)` |
+| `fromtimestamp(ts)` | epoch to datetime | `datetime.fromtimestamp(ts)` |
+| `timedelta(...)` | duration | `datetime.timedelta(days=1)` |
+
+### Usage
+
+```zen
+import time
+import datetime
+print(time.time())              # epoch seconds
+time.sleep(500)                 # sleep 0.5s
+let now = datetime.now()
+print(datetime.strftime("%Y-%m-%d %H:%M:%S", now))
+let parsed = datetime.strptime("2024-01-15", "%Y-%m-%d")
+let later = now + datetime.timedelta(days=7)
+```
+
+### Exercises
+
+1. Write `is_leap_year(year)`.
+2. Implement `days_between(d1, d2)`.
+3. Write `age(birthdate)` in years.
+4. Implement `format_duration(seconds)` → "Xh Ym Zs".
+5. Write `is_weekend(dt)`.
+6. Implement `add_business_days(dt, n)`.
+7. Write `countdown(target)` printing seconds remaining.
+8. Implement `timer(fn)` measuring execution time.
+9. Write `cron_match(expr, dt)` conceptually.
+10. Implement `timeit(fn, n)` running fn n times and reporting avg.
+
+
+
+## 20.12 Worked example — current time and formatting
+
+```zen
+import time
+import datetime
+
+print("epoch: " + str(time.time()))
+let now = datetime.now()
+print(datetime.strftime("%Y-%m-%d %H:%M:%S", now))
+let parsed = datetime.strptime("2024-01-15", "%Y-%m-%d")
+print("parsed: " + str(parsed))
+time.sleep(500)   # sleep 0.5 s
+print("awake")
+```
+
+## 20.13 Troubleshooting time
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| wrong format | format string mismatch | check `%Y-%m-%d` vs input |
+| sleep too long | ms vs seconds confusion | verify units |
+| parse fails | invalid date string | validate input first |
+
+## 20.14 Exercises
+
+1. `is_leap_year(year)`.
+2. `days_between(d1, d2)`.
+3. `age(birthdate)` in years.
+4. `format_duration(seconds)` → "Xh Ym Zs".
+5. `is_weekend(dt)`.

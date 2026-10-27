@@ -590,3 +590,126 @@ cd zen/book-v2/tests
 ```
 
 See [Chapter 42: pymport](../interop/42-pymport-python-interoperability.md) for setup, `zen py-sync`, and troubleshooting.
+
+
+## Extended Project Ideas and Implementation Notes
+
+### Design checklist
+- Requirements and scope
+- Error handling
+- Logging
+- Configuration
+- Testing
+- Documentation
+- Security considerations
+
+### Exercises
+1. Extend the project with new features
+2. Add tests
+3. Improve error messages
+4. Add help/usage
+5. Make it configurable
+6. Package for distribution
+
+
+## 44.12 Full tutorial — simple web scraper
+
+### Goal
+Fetch a page, extract links, and save results to a file.
+
+### Implementation (`scrape.z`)
+
+```zen
+import requests
+import re
+import json
+import pathlib
+
+func fetch(url) {
+    try {
+        let r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return r.text
+    } catch as e {
+        print("fetch failed for " + url + ": " + e.msg)
+        return nil
+    }
+}
+
+func extract_links(html, base) {
+    let links = []
+    # naive regex for href="..." (real HTML needs a proper parser)
+    for m in re.findall(r'href="([^"]+)"', html) {
+        # resolve relative URLs conceptually
+        links.push(m)
+    }
+    return links
+}
+
+func main(argv) {
+    if len(argv) < 2 {
+        print("usage: scrape <url> [output.json]")
+        return 1
+    }
+    let url = argv[1]
+    let out = argv[2] ?? "links.json"
+    print("fetching " + url + "...")
+    let html = fetch(url)
+    if html == nil { return 1 }
+    let links = extract_links(html, url)
+    print("found " + str(len(links)) + " links")
+    json.save(out, links)
+    print("saved to " + out)
+    return 0
+}
+
+if __name__ == "__main__" {
+    sys.exit(main(sys.argv))
+}
+```
+
+### Sample run
+
+```bash
+$ zen run scrape.z https://example.com links.json
+fetching https://example.com...
+found 3 links
+saved to links.json
+```
+
+### Ethical scraping
+- Respect `robots.txt`.
+- Add delays between requests (rate limiting).
+- Identify yourself via a `User-Agent` header.
+- Don't scrape sites that forbid it.
+- Only scrape data you're allowed to use.
+
+## 44.13 Requests usage recap
+
+```zen
+import requests
+let r = requests.get("https://example.com", timeout=10)
+print(r.status_code)
+print(r.text)
+let data = r.json()   # if JSON
+```
+
+POST JSON:
+```zen
+let r = requests.post("https://api.example.com/submit",
+                      json={"name": "Zen", "value": 42})
+```
+
+## 44.14 Exercises
+
+1. Scrape all `<h1>` headings from a page (regex-based).
+2. Add a `User-Agent` header to requests.
+3. Save page title and first paragraph instead of links.
+4. Scrape multiple URLs from a list, one after another.
+5. Add a delay (sleep) between requests to be polite.
+6. Write results as JSON with url + links per entry.
+7. Handle 404/500 responses gracefully.
+8. Add `--output` flag for the destination file.
+9. Extract links matching a specific domain only.
+10. Build a tiny "link checker" that verifies each link returns 200.
+

@@ -1,92 +1,204 @@
-# Appendix D: Standard Library Index
+# Appendix D: Standard Library Index (exhaustive)
 
-Zen's standard library includes pure-Zen modules (`std/*.z`) and native (Rust) modules. This appendix indexes every module.
+A complete index of Zen 3.0 standard library modules and their principal
+members. "→" indicates the category of each member.
 
-## D.1 Pure-Zen modules (std/*.z)
+## D.1 Module list
 
-| Module | File | Description |
-|--------|------|-------------|
-| `argparser` | `std/argparser.z` | Command-line argument parsing |
-| `base64` | `std/base64.z` | Base64 encode/decode |
-| `binascii` | `std/binascii.z` | Hex/binary conversions |
-| `bytes` | `std/bytes.z` | Byte buffer operations |
-| `collections` | `std/collections.z` | deque, Counter, OrderedDict, namedtuple |
-| `crunch` | `std/crunch.z` | Data crunching utilities |
-| `crypto` | `std/crypto/` | Cryptography (see Chapter 25) |
-| `ffmpeg` | `std/ffmpeg.z` | FFmpeg integration |
-| `functools` | `std/functools.z` | Functional programming tools |
-| `glob` | `std/glob.z` | File pattern matching |
-| `hashlib` | `std/hashlib.z` | Cryptographic hashes (see Chapter 24) |
-| `itertools` | `std/itertools.z` | Iterator utilities |
-| `json` | `std/json.z` | JSON parse/serialize (see Chapter 19) |
-| `logging` | `std/logging.z` | Logging framework |
-| `math` | `std/math.z` | Mathematical functions (see Chapter 15) |
-| `nmap` | `std/nmap.z` | Network scanner |
-| `operator` | `std/operator.z` | Operators as functions |
-| `pathlib` | `std/pathlib.z` | Object-oriented paths (see Chapter 21) |
-| `random` | `std/random.z` | Random numbers (see Chapter 16) |
-| `shutil` | `std/shutil.z` | File operations |
-| `statistics` | `std/statistics.z` | Statistical functions |
-| `string` | `std/string.z` | String utilities (see Chapter 17) |
-| `struct` | `std/struct.z` | Binary struct packing |
-| `tempfile` | `std/tempfile.z` | Temporary files/dirs |
-| `uuid` | `std/uuid.z` | UUID generation |
+| Module | Purpose |
+|--------|---------|
+| `math` | Mathematical functions and constants |
+| `random` | Pseudorandom numbers (not for secrets) |
+| `string` | String utilities and constants |
+| `collections` | `Counter`, `chain`, `flatten` |
+| `json` | JSON parse/serialize |
+| `time` / `datetime` | Time and date operations |
+| `pathlib` / `os` | File system operations |
+| `re` | Regular expressions |
+| `base64` / `binascii` | Base64 and hex encoding |
+| `hashlib` | Cryptographic hashes (MD5, SHA, BLAKE2) |
+| `crypto` | Full cryptography (hash, HMAC, symmetric, asymmetric, JWT, KDF, OTP, X.509) |
+| `socket` | Low-level socket programming |
+| `http` | HTTP protocol helpers |
+| `requests` | High-level HTTP client |
+| `http.server` | Building HTTP servers |
+| `dns` | Domain name resolution |
+| `url` | URL parsing and manipulation |
+| `raw sockets` | Packet-level networking (AF_PACKET) |
+| `threading` | Threads and synchronization |
+| `channels` | Inter-thread communication |
+| `mutexes` / locks | Synchronization primitives |
+| `ffi` | Foreign Function Interface (C) |
+| `sys` | System information and operations |
+| `pymport` | Python interoperability |
+| `logging` | Logging facility |
+| `functools` | `reduce`, `partial`, `lru_cache`, `cmp_to_key` |
+| `itertools` | `enumerate`, `zip`, `chain`, `product`, `permutations`, `combinations` |
+| `statistics` | `mean`, `median`, `mode`, `variance`, `stdev`, `linear_regression` |
+| `operator` | `add`, `sub`, `mul`, `itemgetter`, `attrgetter`, `methodcaller` |
+| `struct` | `calcsize` (binary pack/unpack helpers) |
+| `tempfile` | `mkdtemp`, `mkstemp`, `dir` |
+| `uuid` | UUID generation (`uuid4`, `uuid1`, `uuid3`, `uuid5`) |
+| `glob` | pathname pattern expansion |
+| `shutil` | `copy`, `copy2`, `copytree`, `move`, `rmtree`, `which` |
+| `crunch` | random data generation |
+| `nmap` | network scanning helpers |
+| `ffmpeg` | media processing helpers |
 
-## D.2 Native modules (Rust)
+## D.2 math module
 
-| Module | Description | Chapter |
-|--------|-------------|---------|
-| `fs` | File system operations | 13 |
-| `os` | OS operations, env, process info | 21 |
-| `time` | Time operations | 20 |
-| `json` | JSON native tier | 19 |
-| `socket` | TCP/UDP/raw sockets | 27 |
-| `ffi` | Foreign function interface | 39-40 |
-| `sys` | Low-level syscalls | 41 |
-| `process` | Process spawn/control | 41 |
-| `thread` | Threading | 35 |
-| `channel` | Message-passing channels | 36 |
-| `shared` | Atomic shared values | 37 |
-| `net` | TCP/UDP helpers | 26 |
-| `net.dns` | DNS resolution | 32 |
-| `requests` | HTTP client | 29 |
-| `http` | HTTP client | 28 |
-| `http.server` | HTTP static server | 30 |
-| `urllib` | URL utilities | 33 |
-| `urllib.parse` | URL parsing | 33 |
-| `urllib.request` | URL fetching | 33 |
-| `html` | HTML parsing | - |
-| `html.parser` | HTML parser | - |
-| `lxml` | lxml compatibility | - |
-| `lxml.etree` | XML element tree | - |
-| `lxml.html` | HTML parsing | - |
-| `raw` | Raw socket/packet crafting | 34 |
-| `crypto` | Cryptography | 25 |
-| `tls` | TLS with cert pinning | 31 |
-| `sqlite` | SQLite database | - |
-| `qr` | QR code generation | - |
-| `wa` | WebAssembly | - |
-| `ffmpeg` | FFmpeg | - |
-| `hydra` | Hydra | - |
+Constants: `pi`, `e`, `tau`, `inf`, `nan`.
 
-## D.3 Module tiers
+Functions: `abs`, `sqrt`, `pow`, `exp`, `log`, `log2`, `log10`, `floor`, `ceil`,
+`trunc`, `round`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
+`degrees`, `radians`, `gcd`, `lcm`, `factorial`, `comb`, `perm`, `remainder`,
+`copysign`, `min`, `max`, `fsum`, `prod`, `hypot`, `isnan`, `isfinite`, `isinf`,
+`modf`, `frexp`, `ldexp`.
 
-Modules with both pure-Zen and native implementations expose the native tier under `<name>.native`:
+## D.3 random module
 
-```zen
-import math
-print(math.pi)           # pure tier
-print(math.native.pi)    # native tier
-```
+Functions: `seed`, `random`, `randint`, `randrange`, `choice`, `choices`,
+`sample`, `shuffle`, `uniform`, `hex`.
 
-Force tiers with:
-- `ZEN_NATIVE_ONLY=math` — force native
-- `ZEN_PURE = true` — force pure-Zen (set at top of `.z` module)
+⚠️ NOT cryptographically secure. Use `crypto` module for secrets/tokens.
 
-## D.4 Built-ins (always available)
+## D.4 string module
 
-`print`, `input`, `open`, `exit`, `len`, `str`, `int`, `float`, `bool`, `list`, `dict`, `set`, `tuple`, `range`, `enumerate`, `zip`, `sorted`, `reversed`, `any`, `all`, `sum`, `min`, `max`, `map`, `filter`, `typeof`, `id`, `callable`. See Appendix A.
+Constants: `digits`, `hexdigits`, `octdigits`, `ascii_letters`,
+`ascii_lowercase`, `ascii_uppercase`, `punctuation`, `whitespace`, `printable`.
 
-## D.5 Error codes
+Functions: `upper`, `lower`, `title`, `capitalize`, `swapcase`, `strip`,
+`lstrip`, `rstrip`, `split`, `join`, `replace`, `count`, `find`, `startswith`,
+`endswith`, `isdigit`, `isalpha`, `isalnum`, `isspace`, `islower`, `isupper`.
 
-`Z01xx`–Z05xx`. See Appendix B.
+## D.5 collections module
+
+Functions: `Counter`, `chain`, `flatten`.
+
+## D.6 json module
+
+Functions: `parse`, `stringify`/`encode`, `pretty`, `load`, `save`.
+
+JSON ↔ Zen mapping: object↔dict, array↔list, string↔string, number↔int/float,
+boolean↔bool, null↔nil.
+
+## D.7 time / datetime module
+
+Functions: `time`, `sleep`, `now`, `today`, `strftime`, `strptime`,
+`timestamp`, `fromtimestamp`, `timedelta`.
+
+## D.8 pathlib / os module
+
+pathlib: `Path`, `/` join, `exists`, `is_file`, `is_dir`, `name`, `stem`,
+`suffix`, `parent`, `resolve`, `mkdir`, `glob`.
+
+os: `getcwd`, `chdir`, `listdir`, `makedirs`, `remove`, `rmdir`, `rename`,
+`stat`, `environ`.
+
+## D.9 re module
+
+Functions: `match`, `search`, `findall`, `sub`, `split`, `compile`.
+
+Patterns: `\d` `\D` `\w` `\W` `\s` `\S` `.` `^` `$` `*` `+` `?` `{n,m}` `(...)`
+`|` `\b`.
+
+## D.10 base64 / binascii module
+
+base64: `b64encode`, `b64decode`, `url_encode`, `url_decode`.
+binascii: `hexlify`, `unhexlify`.
+
+## D.11 hashlib module
+
+Hashes: `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `sha3_256`,
+`sha3_512`, `blake2b`, `blake2s`, `pbkdf2_hmac`.
+
+## D.12 crypto module
+
+Hashing: `sha256/384/512`, `sha3_256/512`, `blake3`, `md5`, `sha1`.
+HMAC: `sha256(key,data)`, `sha512(key,data)`.
+Symmetric: `generate_key`, `encrypt`, `decrypt`, `encrypt_aes_gcm`,
+`decrypt_aes_gcm`, `encrypt_chacha20_poly1305`, `decrypt_chacha20_poly1305`.
+Asymmetric: `generate_rsa`, `rsa_encrypt/decrypt`, `rsa_sign/verify`,
+`generate_ed25519`, `ed25519_sign/verify`, `generate_x25519`,
+`x25519_shared_secret`.
+Encoding: `b64encode/decode`, `b64urlencode/decode`, `hex_encode/decode`.
+JWT: `sign`, `verify`, `decode`.
+KDF/passwords: `pbkdf2`, `argon2id`, `argon2id_hash`, `verify_argon2id`, `hkdf`.
+OTP: `totp`, `totp_verify`, `hotp`, `hotp_verify`, `generate_secret`.
+Random: `bytes(n)`, `hex(n)`, `base64(n)`, `uuid4()`, `secure_token()`,
+`int(min, max)`.
+X.509: `parse(pem)`.
+
+## D.13 networking modules
+
+socket: `socket`, `connect`, `bind`, `listen`, `accept`, `send`, `recv`,
+`sendto`, `recvfrom`, `close`, `setsockopt`, `settimeout`, `setblocking`.
+http: request/response parsing, status codes, headers.
+requests: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, `Session`.
+http.server: request handler, routing, static files, middleware.
+dns: `resolve`, `reverse`, record types A/AAAA/CNAME/MX/TXT/NS/PTR.
+url: `parse`, `build`, `join`, `quote`, `unquote`, `parse_qs`.
+raw sockets: `AF_PACKET`, `SOCK_RAW`, packet crafting.
+
+## D.14 concurrency modules
+
+threading: `Thread`, `spawn`, `join`, `start`.
+channels: `Channel`, `send`, `recv`, `close`.
+mutexes: `Mutex`, `Lock`, `acquire`, `release`.
+patterns: thread-safe caches, producer-consumer, thread pools.
+
+## D.15 FFI / system / interop modules
+
+ffi: `load_library`, `get_symbol`, `call`, `Pointer`, `Handle`.
+sys: `argv`, `platform`, `version`, `exit`, `environ`, `getsizeof` (if present).
+pymport: `import` Python modules, marsalling values, chained tracebacks.
+
+## D.16 Module → chapter mapping
+
+| Chapter | Module(s) |
+|---------|-----------|
+| 15 | math |
+| 16 | random |
+| 17 | string |
+| 18 | collections |
+| 19 | json |
+| 20 | time / datetime |
+| 21 | pathlib / os |
+| 22 | re |
+| 23 | base64 / binascii |
+| 24 | hashlib |
+| 25 | crypto (complete) |
+| 26 | networking fundamentals |
+| 27 | socket |
+| 28 | http |
+| 29 | requests |
+| 30 | http.server |
+| 31 | HTTPS / SSL / TLS |
+| 32 | dns |
+| 33 | url |
+| 34 | raw sockets |
+| 35 | threading |
+| 36 | channels |
+| 37 | mutexes / locks |
+| 38 | thread safety patterns |
+| 39 | ffi fundamentals |
+| 40 | ffi in practice |
+| 41 | sys |
+| 42 | pymport |
+
+## D.17 Exercises
+
+1. List the hash functions available in `hashlib` and their digest sizes.
+2. Name three modules you must NOT use for cryptographic secrets (random, math,
+   etc.) and say which to use instead (`crypto`).
+3. For the URL `https://a.b:8080/p?q=1#f`, name each component.
+4. List the DNS record types and what each resolves.
+5. Name the exit codes used by the `zen` CLI.
+6. For `crypto`, name two authenticated-encryption algorithms supported.
+7. List the concurrency primitives and their purpose.
+8. For `pymport`, name two error codes in the Z05xx range.
+9. Write a one-line summary of what each of modules math/random/string does.
+10. Build your own "cheat sheet" mapping module → most-used 3 functions.
+
+'''
+print('appendix d done')

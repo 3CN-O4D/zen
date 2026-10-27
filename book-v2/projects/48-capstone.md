@@ -363,3 +363,163 @@ ZEN=../../../target/release/zen
 3. Add email/Slack notifications to the uptime monitor when a site goes down.
 4. Extend the password checker to check against a common-passwords list.
 5. Add HTML report generation to the log analyzer.
+
+
+## Extended Project Ideas and Implementation Notes
+
+### Design checklist
+- Requirements and scope
+- Error handling
+- Logging
+- Configuration
+- Testing
+- Documentation
+- Security considerations
+
+### Exercises
+1. Extend the project with new features
+2. Add tests
+3. Improve error messages
+4. Add help/usage
+5. Make it configurable
+6. Package for distribution
+
+
+## 48.12 Capstone — personal network toolkit
+
+### Goal
+Combine networking, CLI, file, and crypto into one tool:
+`pkit <command>` with subcommands:
+- `get <url>` — fetch a page (HTTP)
+- `hash <file>` — SHA-256 of a file
+- `scan <host> <port>` — check if a TCP port is open
+- `totp <secret>` — generate a TOTP token
+- `genkey` — generate a secure random token
+
+### Implementation (`pkit.z`)
+
+```zen
+import sys
+import requests
+import hashlib
+import socket
+import crypto
+
+func cmd_get(args) {
+    if len(args) < 1 { print("usage: pkit get <url>"); return 1 }
+    try {
+        let r = requests.get(args[0], timeout=10)
+        print("status=" + str(r.status_code))
+        print(r.text[0:500])
+    } catch as e {
+        print("error: " + e.msg)
+        return 1
+    }
+    return 0
+}
+
+func cmd_hash(args) {
+    if len(args) < 1 { print("usage: pkit hash <file>"); return 1 }
+    try {
+        print(hashlib.sha256(args[0]))
+    } catch as e {
+        print("error: " + e.msg)
+        return 1
+    }
+    return 0
+}
+
+func cmd_scan(args) {
+    if len(args) < 2 { print("usage: pkit scan <host> <port>"); return 1 }
+    let host = args[0]
+    let port = int(args[1])
+    let s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2.0)
+    try {
+        s.connect((host, port))
+        print(host + ":" + str(port) + " OPEN")
+    } catch as e {
+        print(host + ":" + str(port) + " closed/unreachable (" + e.msg + ")")
+    } finally {
+        s.close()
+    }
+    return 0
+}
+
+func cmd_totp(args) {
+    if len(args) < 1 { print("usage: pkit totp <secret>"); return 1 }
+    print(crypto.totp(args[0]))
+    return 0
+}
+
+func cmd_genkey(_) {
+    print(crypto.secure_token())
+    return 0
+}
+
+func main(argv) {
+    if len(argv) < 2 {
+        print("pkit - personal network toolkit")
+        print("commands: get <url> | hash <file> | scan <host> <port> | totp <secret> | genkey")
+        return 1
+    }
+    let cmd = argv[1]
+    let rest = []
+    for i in 2..len(argv) { rest.push(argv[i]) }
+    if cmd == "get" { return cmd_get(rest) }
+    elif cmd == "hash" { return cmd_hash(rest) }
+    elif cmd == "scan" { return cmd_scan(rest) }
+    elif cmd == "totp" { return cmd_totp(rest) }
+    elif cmd == "genkey" { return cmd_genkey(rest) }
+    else { print("unknown command: " + cmd); return 1 }
+}
+
+if __name__ == "__main__" { sys.exit(main(sys.argv)) }
+```
+
+### Sample session
+
+```bash
+$ zen run pkit.z genkey
+aB3xK9mP2vR5wL8n
+$ zen run pkit.z hash pkit.z
+e3b0c442...  (SHA-256)
+$ zen run pkit.z scan localhost 80
+localhost:80 closed/unreachable (ConnectionRefusedError)
+$ zen run pkit.z totp JBSWY3DPEHPK3PXP
+742193
+$ zen run pkit.z get https://example.com
+status=200
+<!doctype html>...
+```
+
+### Extending the capstone
+- Add `post <url> <json>` for POST requests.
+- Add `resolve <host>` for DNS lookup.
+- Add `--timeout` flag globally.
+- Add config file for default settings.
+- Add colors/progress indicators.
+- Add tests for each subcommand.
+
+## 48.13 Capstone lessons
+
+1. **Compose** modules (requests, socket, hashlib, crypto, sys).
+2. **Dispatch** on subcommands cleanly.
+3. **Handle errors** per subcommand without crashing the whole tool.
+4. **Use timeouts** on all network calls.
+5. **Keep each subcommand small** and focused.
+6. **Document** usage in the `main` help text.
+
+## 48.14 Exercises
+
+1. Add `post` subcommand sending JSON.
+2. Add `resolve <host>` using the dns module.
+3. Add a global `--timeout N` flag.
+4. Add `ports <host> <start>-<end>` scanning a range.
+5. Add `--output <file>` to save results.
+6. Add colors to output (ANSI escape codes).
+7. Write tests verifying `hash` output matches `hashlib.sha256`.
+8. Add `scan` concurrent port scanning (threading).
+9. Create a config file `pkit.toml` with defaults.
+10. Build and distribute with `zen build pkit.z -o pkit`.
+

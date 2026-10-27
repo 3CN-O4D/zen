@@ -441,3 +441,183 @@ chr(128512)         # "😀"
 8. Write `camel_to_snake(name)` that converts `camelCase` to `camel_case` by inserting `_` before uppercase letters and lowercasing.
 9. Benchmark: build a 100,000-character string with `+` in a loop vs `join`, and compare.
 10. Write `strip_quotes(s)` that removes matching surrounding quotes (`"` or `'`) if present.
+
+## 7.12 String encoding and code points vs bytes
+
+Zen strings are sequences of Unicode characters (code points). Indexing and
+slicing operate on *characters*, not raw bytes, unless you explicitly work with
+`bytes`.
+
+```zen
+let s = "Zen"           # 3 code points, 3 bytes
+print(len(s))           # 3
+
+let s2 = "Zën"          # ë is one code point, 2 bytes in UTF-8
+print(len(s2))          # 3 (characters, not bytes)
+```
+
+Convert between strings and bytes explicitly:
+
+```zen
+let b = s2.encode("utf-8")   # bytes
+let s3 = b.decode("utf-8")   # back to string
+print(s2 == s3)              # true
+```
+
+### Byte-oriented operations (when you need them)
+
+Work on `bytes` if you need raw offsets, binary protocols, or fixed-width
+encodings:
+
+```zen
+let b = bytes([72, 101, 108, 108, 111])  # "Hello" in ASCII
+print(len(b))   # 5
+```
+
+## 7.13 Indexing, slicing, and negative indices
+
+Strings support `s[i]` and `s[start:end]` (end-exclusive, like lists).
+Negative indices count from the end.
+
+```zen
+let s = "Zen 3.0"
+print(s[0])     # "Z"
+print(s[-1])    # "0"
+print(s[0:3])   # "Zen"
+print(s[4:])    # "3.0"
+print(s[:3])    # "Zen"
+print(s[-3:])   # "3.0"
+print(s[0:100]) # "Zen 3.0"  (out-of-range end clamps)
+```
+
+Slicing produces a *new* string; strings are immutable.
+
+## 7.14 String immutability
+
+You cannot assign to `s[i]`. Any "modification" creates a new string.
+
+```zen
+let s = "hello"
+# s[0] = "H"   # error: strings are immutable
+let s2 = "H" + s[1:]
+print(s2)   # "Hello"
+print(s)    # "hello"  (unchanged)
+```
+
+## 7.15 String methods — complete reference
+
+Common methods. If a method is missing from your stdlib build, implement it
+manually; the behavior shown is the canonical semantics.
+
+| Method | Purpose | Example | Result |
+|--------|---------|---------|--------|
+| `upper()` | to uppercase | `"abc".upper()` | `"ABC"` |
+| `lower()` | to lowercase | `"ABC".lower()` | `"abc"` |
+| `title()` | title case | `"hello world".title()` | `"Hello World"` |
+| `capitalize()` | first char upper | `"hello".capitalize()` | `"Hello"` |
+| `swapcase()` | flip case | `"AbC".swapcase()` | `"aBc"` |
+| `strip()` | trim whitespace | `"  hi  ".strip()` | `"hi"` |
+| `lstrip()` | trim left | `"  hi".lstrip()` | `"hi"` |
+| `rstrip()` | trim right | `"hi  ".rstrip()` | `"hi"` |
+| `split(sep)` | split on separator | `"a,b,c".split(",")` | `["a","b","c"]` |
+| `splitlines()` | split on newlines | `"a\nb\nc".splitlines()` | `["a","b","c"]` |
+| `join(iter)` | join with separator | `"-".join(["a","b"])` | `"a-b"` |
+| `replace(old, new)` | replace occurrences | `"aaa".replace("a","b")` | `"bbb"` |
+| `count(sub)` | count occurrences | `"banana".count("an")` | `2` |
+| `find(sub)` | first index or -1 | `"hello".find("ll")` | `2` |
+| `rfind(sub)` | last index or -1 | `"hello".rfind("l")` | `3` |
+| `startswith(prefix)` | boolean | `"hello".startswith("he")` | `true` |
+| `endswith(suffix)` | boolean | `"hello".endswith("lo")` | `true` |
+| `contains(sub)` | boolean | `"hello".contains("ell")` | `true` |
+| `ljust(width)` | pad left | `"hi".ljust(5)` | `"hi   "` |
+| `rjust(width)` | pad right | `"hi".rjust(5)` | `"   hi"` |
+| `center(width)` | center pad | `"hi".center(5)` | `" hi "` |
+| `zfill(width)` | zero pad | `"42".zfill(5)` | `"00042"` |
+| `isdigit()` | all digits | `"123".isdigit()` | `true` |
+| `isalpha()` | all letters | `"abc".isalpha()` | `true` |
+| `isalnum()` | letters/digits | `"abc1".isalnum()` | `true` |
+| `isspace()` | all whitespace | `"   ".isspace()` | `true` |
+| `islower()` | all lowercase | `"abc".islower()` | `true` |
+| `isupper()` | all uppercase | `"ABC".isupper()` | `true` |
+
+```zen
+print("hello world".replace("world", "Zen"))   # hello Zen
+print("-".join(["2024", "01", "15"]))          # 2024-01-15
+print("  spaced  ".strip())                    # spaced
+print("PYTHON".lower())                        # python
+print("hello".count("l"))                      # 2
+```
+
+## 7.16 Formatting and interpolation
+
+Double-quoted and triple-quoted strings support `${expr}` interpolation:
+
+```zen
+let name = "Ada"
+let age = 36
+print("Name: ${name}, Age: ${age}")   # Name: Ada, Age: 36
+print("${name} is ${age + 1} next year")   # Ada is 37 next year
+```
+
+Escapes work inside interpolation strings: `\n \t \\ \" \' \xNN \u{NNNN}`.
+Single-quoted and backtick strings do not interpolate:
+
+```zen
+print('Cost: ${price}')   # literal: Cost: ${price}
+print(`Cost: ${price}`)   # literal, raw
+```
+
+Inside `${...}`, the expression is parsed normally; escapes in the surrounding
+string are not processed inside the interpolation.
+
+For older-style formatting without interpolation, concatenate or use `str()`:
+
+```zen
+print("Value: " + str(42))   # Value: 42
+```
+
+## 7.17 String comparison and ordering
+
+Strings compare lexicographically by code point. Uppercase sorts before
+lowercase in ASCII/Unicode order.
+
+```zen
+print("apple" < "banana")   # true
+print("Z" < "a")            # true  (uppercase before lowercase)
+print("a" == "A")           # false
+print("hello" == "hello")   # true
+```
+
+For case-insensitive comparison, normalize:
+
+```zen
+func ieq(a, b) { return a.lower() == b.lower() }
+print(ieq("Zen", "ZEN"))   # true
+```
+
+## 7.18 Common string pitfalls
+
+1. **Assuming `len` is byte length.** It counts characters/code points.
+2. **Indexing multi-byte characters.** Indexing is by character, so `s[1]` of
+   `"Zën"` is `ë`, not a raw byte.
+3. **Strings are immutable.** `s[i] = x` is an error; build a new string.
+4. **Case folding for Unicode.** `lower()`/`upper()` handle ASCII well; full
+   Unicode case folding may need explicit handling.
+5. **Trailing newline in `splitlines`.** A string ending in `\n` may or may not
+   produce a trailing empty element depending on the build.
+6. **`find` returns -1 when not found**, not `nil` — check for `-1`.
+7. **Interpolation inside `${...}` does not process surrounding escapes.**
+
+## 7.19 Exercises
+
+1. Write `is_palindrome(s)` ignoring case and spaces.
+2. Implement `count_vowels(s)` returning a dict of vowel counts.
+3. Write `mask_card(number)` showing only the last 4 digits.
+4. Implement `slugify(text)` → lowercase, spaces to hyphens, strip.
+5. Write `format_bytes(n)` producing human-readable sizes (KB, MB).
+6. Implement `wrap_text(text, width)` inserting newlines.
+7. Write `extract_emails(text)` using `find`/slicing manually.
+8. Implement `caesar_cipher(text, shift)` for letters only.
+9. Write `validate_password(pw)` checking length, digit, upper, lower.
+10. Implement `abbreviate(sentence)` taking first letters of words.
+

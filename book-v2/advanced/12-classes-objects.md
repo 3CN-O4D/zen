@@ -254,3 +254,185 @@ super.method()   # from within a child method
 4. Implement a `Queue` class with `enqueue` and `dequeue`.
 5. Create an `Animal` base class with `speak()`, then `Dog` and `Cat`
    subclasses that override `speak()`.
+
+## 12.12 Classes and objects — complete reference
+
+Zen supports classes with single inheritance, constructors, methods, instance
+fields, and `pub` visibility.
+
+```zen
+class Point {
+    var x = 0.0
+    var y = 0.0
+
+    func init(x, y) {
+        self.x = x
+        self.y = y
+    }
+
+    func distance_to(other) {
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        return (dx * dx + dy * dy) ** 0.5
+    }
+
+    func __str__() {
+        return "Point(${self.x}, ${self.y})"
+    }
+}
+
+let p = new Point(3.0, 4.0)
+print(p.x, p.y)          # 3.0 4.0
+print(p.distance_to(new Point(0.0, 0.0)))   # 5.0
+print(p)                 # Point(3.0, 4.0)
+```
+
+### Class members
+
+| Member | Declaration | Purpose |
+|--------|-------------|---------|
+| instance field | `var name = default` | per-object state |
+| method | `func name(params) { ... }` | behavior on self |
+| constructor | `func init(params) { ... }` | runs on `new` |
+| static/class method | `pub func name(...) { ... }` | namespace member (no self) |
+
+### `self` / `this`
+
+Inside a method, `self` is the receiver. `this` is an accepted alias. Use
+`self.field` to read/write fields and `self.method()` to call siblings.
+
+```zen
+class Counter {
+    var n = 0
+    func inc() { self.n += 1 }
+    func value() { return self.n }
+}
+```
+
+### Instantiation
+
+`new ClassName(args)` calls `init`. Fields default to their declared values
+when not provided in `init`.
+
+```zen
+let c = new Counter()
+print(c.value())   # 0
+c.inc()
+print(c.value())   # 1
+```
+
+### Single inheritance
+
+```zen
+class Animal {
+    var name = ""
+    func init(name) { self.name = name }
+    func speak() { return "..." }
+}
+
+class Dog extends Animal {
+    func speak() { return self.name + " says woof" }
+}
+
+let d = new Dog("Rex")
+print(d.speak())   # Rex says woof
+```
+
+Call the parent constructor explicitly if needed (`super` where supported;
+otherwise re-initialize parent fields in `init`).
+
+### Method overriding
+
+Subclasses override methods by redefining them with the same name.
+
+```zen
+class Cat extends Animal {
+    func speak() { return self.name + " says meow" }
+}
+```
+
+### Visibility (`pub`)
+
+`pub` members are accessible outside the module; non-`pub` are private to the
+file.
+
+```zen
+class BankAccount {
+    var balance = 0.0
+    pub func deposit(amount) { self.balance += amount }
+    func _apply_fee() { self.balance -= 1.0 }   # private
+}
+```
+
+### `__str__` and representation
+
+Define `__str__()` for a human-readable string form used by `print`/string
+interpolation. If absent, a default representation is used.
+
+### Object equality
+
+By default, `==` on instances compares identity (same object). Override
+`__eq__` for value equality if desired.
+
+```zen
+func __eq__(other) {
+    return self.x == other.x and self.y == other.y
+}
+```
+
+### Instance vs class state
+
+Fields declared with `var` at class body level become instance fields (each
+`new` gets its own). Class-level shared state (if supported) uses module-level
+variables or `shared`.
+
+### Common patterns
+
+#### Value object (immutable-ish)
+
+```zen
+class Money {
+    var amount = 0.0
+    var currency = "USD"
+    func init(amount, currency) { self.amount = amount; self.currency = currency }
+    func add(other) {
+        if self.currency != other.currency { throw "currency mismatch" }
+        return new Money(self.amount + other.amount, self.currency)
+    }
+}
+```
+
+#### Service object
+
+```zen
+class Emailer {
+    var host = ""
+    func init(host) { self.host = host }
+    func send(to, body) { print("sending to ${to} via ${self.host}") }
+}
+```
+
+## 12.13 Common OOP mistakes
+
+1. **Forgetting `self.`** on field access inside methods.
+2. **Not calling parent init** when overriding (fields stay at defaults).
+3. **Mutating shared mutable default** across instances (e.g. `var items = []`
+   shared — be careful; each `new` should initialize its own).
+4. **Relying on `==` for value equality** without overriding `__eq__`.
+5. **Overusing inheritance** when composition is clearer.
+6. **Exposing internal state** via public fields; prefer methods.
+
+## 12.14 Exercises
+
+1. Create a `Rectangle` class with `width`, `height`, `area()`, `perimeter()`.
+2. Create a `BankAccount` class with `deposit`, `withdraw`, `balance`, and
+   overdraft protection.
+3. Build an `Animal` hierarchy: `Dog`, `Cat`, `Bird` with `speak()`.
+4. Implement a `Stack` class using a list (`push`, `pop`, `peek`, `is_empty`).
+5. Implement a `Queue` class (`enqueue`, `dequeue`, `is_empty`).
+6. Create a `Fraction` class with `__eq__` and `__str__`.
+7. Build a `Shape` base class with `area()`; subclasses `Circle`, `Rectangle`.
+8. Implement a `Point` class with `__add__` vector addition if supported.
+9. Write a `Logger` class with `info`, `warn`, `error` methods and a level.
+10. Create a `Config` class wrapping a dict with typed getters.
+

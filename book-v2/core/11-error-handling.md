@@ -334,3 +334,163 @@ try {
 5. Write `parse_int_or_default(s, default)` that uses `try`/`catch` around `int(s)`.
 6. Create a custom error type by throwing an object and inspecting `e.msg`.
 7. Write a nested try/catch where the inner catch handles one error type and the outer catch handles another.
+
+## 11.12 Error handling — complete reference
+
+Zen uses `try`/`catch`/`finally` and `throw`. Errors carry coded diagnostics
+`Z01xx`–`Z05xx` and `zen explain` shows details.
+
+### Syntax
+
+```zen
+try {
+    # code that may fail
+} catch [Type] as name {
+    # handle specific error type
+} catch as name {
+    # handle any error
+} finally {
+    # always runs (cleanup)
+}
+```
+
+Multiple `catch` clauses are checked in order; the first matching type wins.
+
+### Throwing
+
+```zen
+throw "something went wrong"
+throw Error("detail", code: "Z0308")   # if structured errors supported
+throw ValueError("bad input")
+```
+
+Catching:
+
+```zen
+try {
+    int("not a number")
+} catch as e {
+    print(e.msg)      # error message
+    print(e.code)     # e.g. Z0308, if available
+}
+```
+
+### Error codes Z01xx–Z05xx
+
+| Range | Category | Examples |
+|-------|----------|----------|
+| Z01xx | Lexer / syntax | invalid token, bad number literal |
+| Z02xx | Parser | unexpected token, unbalanced braces |
+| Z03xx | Runtime | type mismatch, division by zero, index out of range |
+| Z04xx | I/O / system | file not found, network, permission |
+| Z05xx | FFI / interop | symbol not found, pymport failure, handle error |
+
+Use `zen explain Z0308` to see the full explanation and suggested fix.
+
+```bash
+zen explain Z0308
+```
+
+### `finally` semantics
+
+`finally` runs whether the `try` block completes normally, throws, returns,
+breaks, or continues. It is the place for resource cleanup.
+
+```zen
+func read_file(path) {
+    let f = open(path)
+    try {
+        return f.read()
+    } catch as e {
+        print("read failed: " + e.msg)
+        return nil
+    } finally {
+        f.close()
+    }
+}
+```
+
+Even `return` inside `try` still runs `finally` before returning.
+
+### Best practices
+
+1. **Catch specific errors first**, broad `catch as e` last.
+2. **Don't swallow errors silently** — log or rethrow.
+3. **Use `finally` for cleanup** (close files, sockets, locks).
+4. **Throw early, catch late** — validate at boundaries, handle at policy level.
+5. **Don't use exceptions for control flow** in hot loops.
+6. **Include context** when rethrowing: `throw "load_config failed: " + e.msg`.
+7. **Document which errors a function throws.**
+
+### Result-style pattern (no exceptions)
+
+For fallible operations, return `nil` or a `#{ok, value}` / `#{ok, error}` dict:
+
+```zen
+func safe_div(a, b) {
+    if b == 0 { return #{ok: false, error: "division by zero"} }
+    return #{ok: true, value: a / b}
+}
+
+let result = safe_div(10, 0)
+if !result["ok"] { print(result["error"]) }
+```
+
+### Error chaining (pymport)
+
+Python errors raised under `pymport` are chained under Zen frames, preserving
+the original traceback. See Chapter 42.
+
+## 11.13 Common runtime errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| Z0301 TypeError | wrong type for operation | check types before operating |
+| Z0302 IndexError | index out of range | check `len` first |
+| Z0303 KeyError | missing dict key | use `in` or `??` |
+| Z0304 DivideByZero | dividing by zero | check divisor != 0 |
+| Z0305 ValueError | bad value (e.g. `int("x")`) | validate input |
+| Z0401 FileNotFound | file doesn't exist | check before open |
+| Z0402 PermissionDenied | insufficient rights | fix permissions |
+
+## 11.14 Defensive programming
+
+Validate inputs at function boundaries:
+
+```zen
+func process_user(user) {
+    if typeof(user) != "dict" { throw "user must be a dict" }
+    if !("name" in user) { throw "user missing 'name'" }
+    if typeof(user["name"]) != "string" { throw "name must be string" }
+    # ... proceed safely
+}
+```
+
+Use assertions for internal invariants:
+
+```zen
+assert len(xs) > 0, "xs must not be empty"
+```
+
+## 11.15 Debugging with `zen explain`
+
+```bash
+zen explain Z0308
+zen explain Z0401
+```
+
+Each code prints: meaning, common causes, and a suggested fix.
+
+## 11.16 Exercises
+
+1. Write `safe_div(a, b)` returning `nil` on division by zero.
+2. Write `safe_int(s)` returning `nil` on parse failure.
+3. Implement `read_first_line(path)` handling FileNotFound and empty file.
+4. Build a `validate_age(age)` throwing if age < 0 or > 150.
+5. Demonstrate `finally` running after `return`.
+6. Write `retry(fn, n)` catching errors and retrying up to `n` times.
+7. Implement `partition(xs, pred)` without exceptions.
+8. Create a function that throws different error types based on input.
+9. Show `zen explain` output for Z0301 and Z0401.
+10. Write a batch processor that logs errors per item but continues.
+

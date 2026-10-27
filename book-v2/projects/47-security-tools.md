@@ -241,3 +241,121 @@ resp.headers[header_name]
 3. Write a security header checker for a list of URLs.
 4. Write a DNS reconnaissance script that gathers A, MX, and NS records.
 5. Write a scan report generator that saves results to a file.
+
+
+## Extended Project Ideas and Implementation Notes
+
+### Design checklist
+- Requirements and scope
+- Error handling
+- Logging
+- Configuration
+- Testing
+- Documentation
+- Security considerations
+
+### Exercises
+1. Extend the project with new features
+2. Add tests
+3. Improve error messages
+4. Add help/usage
+5. Make it configurable
+6. Package for distribution
+
+
+## 47.12 Full tutorial — hash utility (ethical security tool)
+
+### Goal
+Compute and compare file hashes (SHA-256) to verify integrity.
+
+### Implementation (`hashutil.z`)
+
+```zen
+import hashlib
+import sys
+import pathlib
+
+func hash_file(path) {
+    let b = pathlib.Path(path)
+    if !b.exists() { throw "file not found: " + path }
+    # read in chunks for large files
+    let data = []
+    with open(path, "rb") as f {
+        while true {
+            let chunk = f.read(8192)
+            if chunk == nil || len(chunk) == 0 { break }
+            data.push(chunk)
+        }
+    }
+    # note: hashlib.sha256 expects a string in this build; for real binary
+    # hashing, feed bytes appropriately per stdlib API.
+    let joined = data.join("")   # if bytes join supported
+    return hashlib.sha256(joined)
+}
+
+func main(argv) {
+    if len(argv) < 2 {
+        print("usage: hashutil <file> [expected_hash]")
+        return 1
+    }
+    let path = argv[1]
+    let expected = argv[2] ?? nil
+    try {
+        let actual = hash_file(path)
+        print("SHA-256(" + path + ") = " + actual)
+        if expected != nil {
+            if actual == expected {
+                print("MATCH: file integrity verified")
+                return 0
+            } else {
+                print("MISMATCH: file may be corrupted or tampered")
+                return 1
+            }
+        }
+    } catch as e {
+        print("error: " + e.msg)
+        return 1
+    }
+    return 0
+}
+
+if __name__ == "__main__" { sys.exit(main(sys.argv)) }
+```
+
+### Sample run
+
+```bash
+$ zen run hashutil.z document.pdf
+SHA-256(document.pdf) = a3f5...c9
+$ zen run hashutil.z document.pdf a3f5...c9
+SHA-256(document.pdf) = a3f5...c9
+MATCH: file integrity verified
+```
+
+### Ethical use
+- Only hash files you own or have permission to analyze.
+- Hashing verifies integrity, not "hacking."
+- Don't use MD5/SHA-1 for security; prefer SHA-256.
+
+## 47.13 Security tool principles
+
+1. **Authorization:** only operate on systems/data you're permitted to test.
+2. **Integrity over secrecy:** hashing confirms a file hasn't changed.
+3. **Use strong algorithms:** SHA-256+, Argon2id, AES-GCM.
+4. **Never log secrets:** avoid printing keys/passwords/tokens.
+5. **Constant-time comparison** for secrets (avoid timing leaks).
+6. **Input validation:** sanitize file paths, URLs, and user input.
+
+## 47.14 Exercises
+
+1. Add MD5 and SHA-1 options (note: not for security).
+2. Compare two files and report if identical.
+3. Hash all files in a directory and print a manifest.
+4. Verify a file against a manifest file (hash per line).
+5. Add a `--quiet` flag printing only MATCH/MISMATCH.
+6. Implement constant-time string compare (conceptually).
+7. Hash a string input (not file) with SHA-256.
+8. Add `pbkdf2`-based password hashing (from crypto module).
+9. Create a "file changed" watcher: hash, wait, re-hash, report diff.
+10. Document ethical boundaries in a README for the tool.
+

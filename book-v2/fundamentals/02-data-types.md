@@ -437,3 +437,140 @@ x == "42"      # false
 5. Show that `{"a": 1, "b": 2} == {"b": 2, "a": 1}` (dict order-insensitive equality).
 6. Compute `-7 // 2` and `-7 % 2` and explain the results (floor division).
 7. Write `type_name(x)` that returns a human-readable string for any value using `typeof()` and special-casing `nan`/`inf`.
+
+## 2.11 Type coercion matrix (extended)
+
+| From | To int | To float | To string | To bool | Notes |
+|---|---|---|---|---|---|
+| int | identity | widen | decimal | 0→false else true |  |
+| float | trunc toward zero? | identity | repr | 0.0/NaN? false if 0.0, else true (NaN is true) | check implementation |
+| string | parse int (base 10) or error | parse float or error | identity | non-empty string is true | whitespace? |
+| bool | true→1, false→0 | true→1.0,false→0.0 | "true"/"false" | identity |  |
+| nil | error | error | "nil" | false |  |
+| list | error | error | repr | empty false else true |  |
+| dict | error | error | repr | empty false else true |  |
+| set | error | error | repr | empty false else true |  |
+| tuple | error | error | repr | empty false else true |  |
+| bytes | error | error | repr or utf8? | non-empty true |  |
+
+**Note:** In Zen, truthiness follows common rules: `false` and `nil` are falsy; everything else is truthy (including `0`, `0.0`, empty strings `""` are truthy in Python-like languages? Wait - check Zen behavior. In Python empty collections/strings/numbers-zero are falsy; in some languages 0 is falsy. Let us verify.) 
+
+## 2.12 Bytes and buffers (deep dive)
+
+`bytes` is an immutable sequence of bytes (values 0-255).
+
+```zen
+let b = bytes([65, 66, 67])  # "ABC"
+print(b[0])                  # 65
+let s = b.decode("utf-8")    # "ABC"
+let b2 = "ABC".encode("utf-8")
+print(len(b))
+```
+
+### bytes methods (common)
+- `len(b)`, indexing/slicing
+- `b.decode(encoding="utf-8", errors="strict")`
+- `bytes([..])`, `b.hex()`, `b.fromhex(s)`
+
+## 2.13 Tuples (immutable sequences)
+
+```zen
+let t = #(1, "a", true)
+print(t[0], len(t))
+# t[0] = 5  # error: immutable
+```
+
+Tuples are useful for fixed-size heterogeneous data and multiple return values.
+
+## 2.14 Sets
+
+```zen
+let s = {1, 2, 2, 3}
+print(s)      # {1,2,3} (order may vary)
+print(2 in s) # true
+s.add(4)
+s.remove(2)
+```
+
+## 2.15 Numeric edge cases in depth
+
+### Integer precision
+Integers are arbitrary precision (big ints) in Zen 3.0 - no fixed 64-bit overflow in normal operations.
+
+```zen
+let big = 10 ** 100
+print(big + 1)
+```
+
+### Float special values
+```zen
+let inf = 1.0 / 0.0      # inf
+let ninf = -1.0 / 0.0    # -inf
+let nan = 0.0 / 0.0      # nan
+print(inf > 1000000)     # true
+print(nan == nan)        # false (IEEE 754)
+print(nan != nan)        # true
+```
+
+### Division semantics
+- `/` is true division returning float (or appropriate numeric type)
+- `//` is floor division
+- `%` follows floor division (sign of divisor matters in some languages; check)
+
+## 2.16 Type checking patterns
+
+```zen
+func describe(x) {
+    if typeof(x) == "int" { return "integer" }
+    if typeof(x) == "float" { return "float" }
+    if typeof(x) == "string" { return "string" }
+    if typeof(x) == "bool" { return "boolean" }
+    if x is nil { return "nil" }
+    if typeof(x) == "list" { return "list" }
+    if typeof(x) == "dict" { return "dict" }
+    if typeof(x) == "set" { return "set" }
+    if typeof(x) == "tuple" { return "tuple" }
+    return "unknown"
+}
+```
+
+`is` operator checks type identity/instance; `typeof()` returns type name string.
+
+## 2.17 Identity vs equality
+
+- `==` structural/value equality
+- `is` identity (same object/reference)
+
+```zen
+let a = [1,2,3]
+let b = [1,2,3]
+print(a == b)  # true (value equal)
+print(a is b)  # false (different objects)
+let c = a
+print(a is c)  # true
+```
+
+## 2.18 Common pitfalls
+1. Modifying a list while iterating over it can skip elements
+2. Using mutable default arguments (if supported) - better to use nil sentinel
+3. Dict key type errors - only strings work as keys
+4. Integer/string concatenation requires explicit conversion
+5. Truthiness confusion with 0/"" depending on language - always test
+6. Float comparison with == is dangerous; use epsilon
+
+```zen
+func approx_eq(a, b, eps) {
+    if eps == nil { eps = 1e-9 }
+    return abs(a-b) < eps
+}
+```
+
+## 2.19 Deep exercises
+1. Implement a type coercion helper that tries int, then float, then bool for strings.
+2. Write a function to detect NaN using `x != x`.
+3. Build a mini type registry using dict mapping type names to handlers.
+4. Demonstrate integer big number arithmetic with powers.
+5. Show the difference between `is` and `==` with lists, strings, ints.
+6. Create a tuple and try to mutate - observe error.
+7. Implement `flatten_once(lst)` for nested lists.
+8. Write `deep_copy` conceptually (lists of lists) - note shallow vs deep.

@@ -163,3 +163,117 @@ hashlib.blake2s("hello")    # blake2s hex
 5. Compare `hashlib.md5` vs `hashlib.sha256` output lengths.
 6. Write `verify_download(url, expected_hash)` that downloads and verifies.
 7. Write `hash_compare(h1, h2)` that compares two hashes case-insensitively.
+
+
+## 24.12 hashlib module — complete reference
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `md5(data)` | MD5 digest | `hashlib.md5("hello")` |
+| `sha1(data)` | SHA-1 digest | `hashlib.sha1("hello")` |
+| `sha224(data)` | SHA-224 | `hashlib.sha224("hello")` |
+| `sha256(data)` | SHA-256 | `hashlib.sha256("hello")` |
+| `sha384(data)` | SHA-384 | `hashlib.sha384("hello")` |
+| `sha512(data)` | SHA-512 | `hashlib.sha512("hello")` |
+| `sha3_256(data)` | SHA3-256 | `hashlib.sha3_256("hello")` |
+| `sha3_512(data)` | SHA3-512 | `hashlib.sha3_512("hello")` |
+| `blake2b(data)` | BLAKE2b | `hashlib.blake2b("hello")` |
+| `blake2s(data)` | BLAKE2s | `hashlib.blake2s("hello")` |
+| `pbkdf2_hmac(pass, salt, iters)` | key derivation | `hashlib.pbkdf2_hmac(...)` |
+
+### Usage
+
+```zen
+import hashlib
+print(hashlib.sha256("hello"))   # hex digest
+print(hashlib.md5("hello"))      # 32 hex chars
+print(hashlib.sha256("hello") == hashlib.sha256("hello"))  # true
+print(hashlib.sha256("Hello") != hashlib.sha256("hello"))  # true (case sensitive)
+```
+
+### Properties
+
+- Deterministic: same input → same output.
+- One-way: cannot reverse to input.
+- Avalanche: tiny input change → very different output.
+- Collision-resistant (for secure hashes like SHA-256).
+
+### Exercises
+
+1. Compute SHA-256 of a string and verify it matches a known value.
+2. Write `file_hash(path)` hashing a file's contents.
+3. Implement `verify_checksum(data, expected)`.
+4. Write `hash_password(password, salt)` combining salt + hash.
+5. Implement `find_collision_prefix(prefix)` brute-force conceptually.
+6. Compare MD5 vs SHA-256 output lengths.
+7. Write `dedupe_files(paths)` grouping identical files by hash.
+8. Implement `merkle_root(hashes)` conceptually.
+9. Write `constant_time_compare(a, b)` conceptually.
+10. Implement `pbkdf2` key derivation using hashlib.pbkdf2_hmac.
+
+
+
+## 24.12 Worked example — file integrity checker
+
+```zen
+import hashlib
+import sys
+import pathlib
+
+func file_sha256(path) {
+    let b = pathlib.Path(path)
+    if !b.exists() { throw "not found: " + path }
+    let data = b.read_bytes()   # if supported; otherwise read chunks
+    return hashlib.sha256(data)
+}
+
+func main(argv) {
+    if len(argv) < 2 {
+        print("usage: hashutil <file> [expected]")
+        return 1
+    }
+    let path = argv[1]
+    let expected = argv[2] ?? nil
+    try {
+        let actual = file_sha256(path)
+        print("SHA-256(" + path + ") = " + actual)
+        if expected != nil {
+            if actual == expected { print("MATCH") }
+            else { print("MISMATCH"); return 1 }
+        }
+    } catch as e {
+        print("error: " + e.msg)
+        return 1
+    }
+    return 0
+}
+
+if __name__ == "__main__" { sys.exit(main(sys.argv)) }
+```
+
+Sample:
+```
+$ zen run hashutil.z document.pdf
+SHA-256(document.pdf) = a3f5...c9
+$ zen run hashutil.z document.pdf a3f5...c9
+SHA-256(document.pdf) = a3f5...c9
+MATCH
+```
+
+## 24.13 Troubleshooting hashing
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| different hash for same file | file changed or encoding differs | re-hash exact bytes |
+| hash mismatch expected vs actual | wrong algorithm or corrupted file | verify algorithm & source |
+| slow on large files | reading whole file at once | hash in chunks |
+
+Use SHA-256 or SHA-512 for integrity; avoid MD5/SHA-1 for security.
+
+## 24.14 Exercises
+
+1. SHA-256 a string and compare to a known value.
+2. Hash a file and save the digest to a sidecar `.sha256` file.
+3. Verify a file against a digest file.
+4. Hash all files in a folder into a manifest.
+5. Compare MD5 vs SHA-256 digest lengths.

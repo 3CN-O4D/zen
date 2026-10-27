@@ -479,3 +479,154 @@ ZEN_NATIVE_ONLY=math  # force native tier
 5. Use `zen check` and `zen lint` on a project with intentional errors and unused variables.
 6. Create two modules that import each other (circular) and observe the behavior.
 7. Use `include` to splice a file's contents and compare with `import`.
+
+## 10.12 Modules and imports — complete reference
+
+Zen's module system maps `import a.b.c` to `a/b/c.z` or `a/b/c/mod.z`.
+The `mod.z` file is the canonical package entry point; `main.z` is deprecated.
+
+### Import forms
+
+| Form | Meaning |
+|------|---------|
+| `import module` | bind module namespace |
+| `import module as alias` | shorten the name |
+| `import mod.sub.mod as alias` | nested module |
+| `from module import name, name as alias` | bind specific members |
+| `from module import *` | import all public members |
+
+### Visibility
+
+`pub` prefix on `func`, `var`, `const`, `class` exports the symbol.
+Non-`pub` is private to the file.
+
+```zen
+# utils.z
+pub func add(a, b) { return a + b }   # exported
+func helper() { return 42 }            # private
+
+# main.z
+import utils
+print(utils.add(2, 3))   # 5
+# utils.helper()  # error: not exported
+```
+
+### Module resolution order
+
+1. Standard library modules (e.g. `math`, `json`, `socket`)
+2. Local files relative to the importing file / project root
+3. `ZEN_PATH` entries (colon-separated)
+4. Site-packages / installed modules
+
+### Circular imports
+
+Circular imports can cause partially-initialized modules. Design modules as
+DAGs; put shared definitions in a third module imported by both.
+
+```zen
+# a.z imports b.z; b.z imports a.z  -> avoid
+```
+
+### Reloading and caching
+
+Modules are typically loaded once and cached. Re-importing returns the cached
+module. To pick up changes, restart the process.
+
+### `ZEN_PATH`
+
+Colon-separated list of directories searched for user modules:
+
+```bash
+export ZEN_PATH="$HOME/zen/lib:/opt/zen/modules"
+zen run app.z
+```
+
+### `__name__`
+
+A module's `__name__` (if exposed) is `"__main__"` when run directly and the
+module path when imported. Use it for guard clauses:
+
+```zen
+# entry.z
+func main() { print("running directly") }
+if __name__ == "__main__" { main() }
+```
+
+### Packages
+
+A directory with `mod.z` is a package:
+
+```
+mypkg/
+    mod.z        # package entry point
+    sub/
+        mod.z    # mypkg.sub
+```
+
+Import: `import mypkg`, `import mypkg.sub`.
+
+### stdlib module list (selected)
+
+- math, random, string, collections, json, datetime/time
+- pathlib, os, re, base64, binascii, hashlib, crypto
+- socket, http, requests, dns, url
+- threading, channels, mutexes
+- ffi, sys, pymport
+
+See Appendix D for the full index.
+
+## 10.13 Writing your own modules
+
+```zen
+# geometry.z
+pub const PI = 3.141592653589793
+
+pub func circle_area(r) {
+    return PI * r * r
+}
+
+pub func circle_circumference(r) {
+    return 2 * PI * r
+}
+
+func _internal() { return "not exported" }
+```
+
+```zen
+import geometry
+print(geometry.circle_area(5))   # 78.5398...
+```
+
+### Module docstrings / documentation
+
+Place a comment at the top of each `.z` file describing purpose, exports, and
+usage. Some tooling may extract leading comments as docs.
+
+## 10.14 Import performance
+
+- Import once at the top of the file.
+- Avoid imports inside hot loops.
+- Local (relative) imports resolve faster than deep stdlib lookups.
+
+## 10.15 Common import mistakes
+
+1. **Missing `pub`** means the symbol is unavailable to importers.
+2. **Wrong path:** `import foo.bar` looks for `foo/bar.z` or `foo/bar/mod.z`.
+3. **Name shadowing:** naming a local file `math.z` shadows stdlib `math`.
+4. **Circular imports** lead to partially initialized modules.
+5. **Assuming re-import re-runs code.** Modules are cached.
+6. **`from module import *`** brings only `pub` members; be explicit.
+
+## 10.16 Exercises
+
+1. Create a `utils.z` with `pub func` helpers and import it in `main.z`.
+2. Build a `geometry` package with `mod.z` and `sub/area.z`.
+3. Demonstrate `import module as alias` shortening a long name.
+4. Use `from module import name` to bind `math.sin` locally.
+5. Show that two files importing the same module share state.
+6. Write a module with a `pub const` and read it from another file.
+7. Demonstrate `if __name__ == "__main__"` guard behavior.
+8. Set `ZEN_PATH` and import a module from a non-default directory.
+9. Create a name-shadowing file `json.z` and observe stdlib being hidden.
+10. Write a module that exports both functions and constants; document each.
+

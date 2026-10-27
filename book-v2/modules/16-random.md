@@ -252,3 +252,84 @@ random.seed(42)        # deterministic
 5. Use `random.seed` to make a simulation reproducible.
 6. Write `weighted_choice(items, weights)` that picks an item with probability proportional to its weight.
 7. Write `bootstrap_sample(data, k)` that samples `k` elements with replacement from `data`.
+
+
+## 16.12 random module — complete reference
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `seed(n)` | seed the generator | `random.seed(42)` |
+| `random()` | float in [0, 1) | `random.random()` |
+| `randint(a, b)` | int in [a, b] inclusive | `random.randint(1, 6)` |
+| `randrange(start, stop=None, step=1)` | int from range | `random.randrange(0, 10, 2)` |
+| `choice(seq)` | random element | `random.choice(["a","b"])` |
+| `choices(seq, k=1)` | k elements with replacement | `random.choices([1,2], k=3)` |
+| `sample(seq, k)` | k unique elements | `random.sample([1,2,3], 2)` |
+| `shuffle(seq)` | shuffle in place | `random.shuffle(xs)` |
+| `uniform(a, b)` | float in [a, b] | `random.uniform(1.0, 2.0)` |
+| `hex(n)` | n random hex chars | `random.hex(16)` |
+
+### Usage
+
+```zen
+import random
+random.seed(42)
+print(random.random())     # deterministic given seed
+print(random.randint(1, 100))
+print(random.choice(["rock","paper","scissors"]))
+let deck = list(range(1, 53))
+random.shuffle(deck)
+print(deck[:5])
+```
+
+### Cryptographic randomness
+
+For security-sensitive tokens, do NOT use `random`. Use `crypto` module
+functions (`crypto.generate_secret`, `crypto.secure_token`, `crypto.bytes`).
+
+### Exercises
+
+1. Roll a die 1000 times and count frequencies.
+2. Shuffle a list and verify it's a permutation.
+3. Generate a random password of length 12 from letters+digits.
+4. Pick a random element weighted by a list of weights (manual).
+5. Simulate coin flips until 3 heads in a row; count flips.
+6. Generate 6 unique lottery numbers from 1..49.
+7. Compare `random()` distribution (bucket into 10 bins).
+8. Seed twice with same value; confirm identical sequences.
+9. Implement `dice(sides, count)` returning sum.
+10. Use `crypto.secure_token()` for a session token instead of `random`.
+
+
+
+## 16.12 Worked example — dice and shuffle
+
+```zen
+import random
+
+random.seed(42)
+print(random.randint(1, 6))       # die roll
+let deck = list(range(1, 53))
+random.shuffle(deck)
+print(deck[:5])                   # first 5 shuffled cards
+print(random.choice(["rock","paper","scissors"]))
+print(random.uniform(1.0, 2.0))   # random float
+```
+
+## 16.13 Troubleshooting randomness
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| same sequence every run | seed fixed | use different seed or no seed |
+| not secure | `random` is not CSPRNG | use `crypto.secure_token` for secrets |
+| out of range | bad args to randint | check bounds |
+
+Never use `random` for passwords/tokens; use `crypto`.
+
+## 16.14 Exercises
+
+1. Roll a die 1000 times; count frequencies.
+2. Shuffle a list; verify it's a permutation.
+3. Generate a 12-char password (letters+digits).
+4. Pick 6 unique lottery numbers from 1..49.
+5. Simulate coin flips until 3 heads in a row.

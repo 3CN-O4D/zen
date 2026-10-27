@@ -237,3 +237,240 @@ let f = fn(x) { if x < 0 { return -1 } return x * 2 }
 5. Demonstrate the loop-capture bug and fix it with `make_fn`.
 6. Write `twice(f)` returning `fn(x) { return f(f(x)) }`.
 7. Write `curry(f)` for a two-argument function: `curry(f)(a)(b)` equals `f(a, b)`.
+
+
+## 6.12 Lambda and anonymous-function syntax — complete reference
+
+Zen offers several spellings for anonymous functions. All are values and can be stored,
+passed, returned, and called immediately.
+
+| Form | Example | Notes |
+|------|---------|-------|
+| `fn(params) { ... }` | `fn(x) { return x * 2 }` | block body, explicit return |
+| `fn(params) => expr` | `fn(x) => x * 2` | expression body, implicit return |
+| `(params) => expr` | `(x, y) => x + y` | parens required around params |
+| `lambda params : expr` | `lambda x : x * 2` | legacy alias |
+
+### Expression-bodied vs block-bodied
+
+```zen
+# block body: explicit return, multiple statements allowed
+let a = fn(x) { let y = x + 1; return y * 2 }
+
+# expression body: implicit return
+let b = fn(x) => (x + 1) * 2
+let c = (x) => x * x
+```
+
+### Arrow operator vs range operator
+
+`->` in signature/range position is also the inclusive range operator; in the
+context `(x) => ...` it is parsed as the arrow, not a range. When you write
+ranges, `0 -> 5` means inclusive values 0..5; `0 .. 5` means exclusive 0..4.
+
+## 6.13 First-class functions as values
+
+Functions can be stored in variables, lists, dicts, returned from other
+functions, and passed as arguments.
+
+```zen
+let ops = #{
+    add: fn(a, b) => a + b,
+    sub: fn(a, b) => a - b,
+    mul: fn(a, b) => a * b,
+}
+let pick = ops["add"]
+print(pick(2, 3))   # 5
+
+func apply(op, a, b) { return op(a, b) }
+print(apply(ops["mul"], 4, 5))   # 20
+```
+
+A function value can itself return a function:
+
+```zen
+func multiplier(n) {
+    return fn(x) => n * x
+}
+
+let double = multiplier(2)
+let triple = multiplier(3)
+print(double(7))   # 14
+print(triple(7))   # 21
+```
+
+
+## 6.14 Closures and capture semantics
+
+A closure "closes over" variables from its defining scope. The inner function
+remembers those bindings even after the outer function returns.
+
+```zen
+func make_counter(start = 0) {
+    var n = start
+    return fn() {
+        n += 1
+        return n
+    }
+}
+
+let c = make_counter()
+print(c())   # 1
+print(c())   # 2
+print(c())   # 3
+
+let d = make_counter(10)
+print(d())   # 11
+print(d())   # 12
+```
+
+Each call to `make_counter` creates a fresh binding, so each counter is independent.
+
+### The late-binding loop variable trap
+
+```zen
+let fns = []
+for i in 0..3 {
+    fns.push(fn() => i)
+}
+for f in fns { print(f()) }
+```
+
+If all closures print the same final value, the loop variable is shared across
+iterations. Fix by capturing a copy through a factory function:
+
+```zen
+func make_constant(v) { return fn() => v }
+
+let fns2 = []
+for i in 0..3 { fns2.push(make_constant(i)) }
+for f in fns2 { print(f()) }   # 0 1 2
+```
+
+## 6.15 Partial application and currying
+
+```zen
+func partial(f, a) { return fn(b) => f(a, b) }
+func curry(f) { return fn(a) => fn(b) => f(a, b) }
+
+let add = fn(a, b) => a + b
+let add5 = partial(add, 5)
+print(add5(10))   # 15
+
+let curried = curry(add)
+print(curried(3)(4))   # 7
+```
+
+## 6.16 Function composition
+
+```zen
+func compose(f, g) { return fn(x) => f(g(x)) }
+
+let double = fn(x) => x * 2
+let inc = fn(x) => x + 1
+let inc_then_double = compose(double, inc)
+print(inc_then_double(3))   # 8  (double(inc(3)) = double(4) = 8)
+
+func compose_all(fns) {
+    return fn(x) {
+        var acc = x
+        for i in (len(fns) - 1)..-1 {
+            acc = fns[i](acc)
+        }
+        return acc
+    }
+}
+```
+
+## 6.17 Memoization
+
+```zen
+func memoize(f) {
+    let cache = #{}
+    return fn(n) {
+        let key = str(n)
+        if key in cache { return cache[key] }
+        let v = f(n)
+        cache[key] = v
+        return v
+    }
+}
+
+let fib = memoize(fn(n) {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+})
+
+print(fib(50))   # 12586269025
+```
+
+The self-reference works because `fib` is bound before any call executes.
+
+## 6.18 Callbacks and sorting with comparator functions
+
+```zen
+func sort_by(xs, key_fn) {
+    # simple insertion sort using the key function
+    let out = list(xs)
+    for i in 1..len(out) {
+        let key = out[i]
+        var j = i - 1
+        while j >= 0 and key_fn(out[j]) > key_fn(key) {
+            out[j + 1] = out[j]
+            j -= 1
+        }
+        out[j + 1] = key
+    }
+    return out
+}
+
+let words = ["banana", "apple", "cherry", "kiwi"]
+print(sort_by(words, fn(w) => len(w)))   # shorter first
+```
+
+Passing comparator/key functions is the standard way to customize behavior.
+
+## 6.19 Closures over mutable state
+
+Captured `var` bindings can be mutated from inside the closure, creating shared
+state between the closure and its enclosing scope.
+
+```zen
+func adder_factory(init) {
+    var total = init
+    return fn(x) {
+        total += x
+        return total
+    }
+}
+
+let acc = adder_factory(0)
+print(acc(5))   # 5
+print(acc(7))   # 12
+print(acc(3))   # 15
+```
+
+## 6.20 Common closure pitfalls
+
+1. **Late binding**: loop variables are shared; use a factory to capture values.
+2. **Stale closures**: a closure captures the binding, not a snapshot, so later
+   mutations are visible inside the closure.
+3. **Mutating captured variables**: surprising when multiple closures share one
+   variable — prefer explicit state passed as arguments.
+4. **Returning closures that reference `nil`-initialized variables**: initialize
+   before returning.
+5. **Deeply nested closures**: hard to read; name intermediate functions.
+
+## 6.21 Exercises
+
+1. Write `make_multiplier(n)` returning a function that multiplies by `n`.
+2. Implement `compose(f, g)` and verify `compose(double, inc)(3) == 8`.
+3. Write `repeater(f, n)` returning a function that calls `f` `n` times.
+4. Build `memoize` and apply it to Fibonacci; time the difference.
+5. Implement `curry2(f)` for two-argument functions.
+6. Write `pipe(value, fns)` that threads a value through functions left-to-right.
+7. Sort a list of dicts by a chosen key using a comparator closure.
+8. Write `once(f)` that invokes `f` only on the first call.
+9. Create `counter()` closures that can increment, decrement, and reset.
+10. Demonstrate the late-binding trap and two ways to fix it.
+

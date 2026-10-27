@@ -274,3 +274,137 @@ thread.current()
 3. Write a `parallel_map(func, items)` that runs `func` on each item in a separate thread and collects results via a channel.
 4. Use a shared boolean flag to gracefully stop a background thread.
 5. Write a thread-safe counter class using `shared.create` and methods.
+
+
+## Extended Content
+
+This section provides additional depth, patterns, debugging tips, and exercises for production use.
+
+### Common pitfalls
+- Race conditions
+- Deadlocks (circular wait)
+- Starvation
+- Data races
+- Forgetting to join threads
+
+### Debugging concurrent code
+- Use logging with thread identifiers
+- Test with different interleavings
+- Consider thread sanitizers conceptually
+- Design for thread safety from start
+
+### Exercises
+1. Producer-consumer with channels
+2. Thread pool pattern
+3. Parallel map/reduce
+4. Avoiding deadlocks with lock ordering
+5. Thread-safe cache
+6. Benchmark sequential vs parallel
+
+
+## 37.12 Worked examples — mutexes and locks
+
+### Example 1: Fixing the race counter with a Mutex
+
+```zen
+import threading
+import mutexes
+
+var counter = 0
+let mu = mutexes.Mutex()
+
+func increment(times) {
+    for i in 0..times {
+        mu.lock()
+        counter = counter + 1
+        mu.unlock()
+    }
+}
+
+let t1 = threading.Thread(fn() { increment(100000) })
+let t2 = threading.Thread(fn() { increment(100000) })
+t1.start()
+t2.start()
+t1.join()
+t2.join()
+print(counter)   # 200000 — correct!
+```
+
+### Example 2: Lock with try/finally (always unlock)
+
+```zen
+func safe_increment() {
+    mu.lock()
+    try {
+        counter = counter + 1
+    } finally {
+        mu.unlock()
+    }
+}
+```
+
+### Example 3: Deadlock — and how to avoid it
+
+```zen
+# BAD: potential deadlock
+let mu1 = mutexes.Mutex()
+let mu2 = mutexes.Mutex()
+
+func thread_a() {
+    mu1.lock()
+    mu2.lock()   # if thread_b holds mu2 and waits for mu1 -> deadlock
+    ...
+    mu2.unlock()
+    mu1.unlock()
+}
+
+func thread_b() {
+    mu2.lock()
+    mu1.lock()   # opposite order!
+    ...
+    mu1.unlock()
+    mu2.unlock()
+}
+```
+
+**Fix:** Always acquire locks in the same global order (mu1 before mu2).
+
+```zen
+# GOOD
+func thread_b_fixed() {
+    mu1.lock()   # same order as thread_a
+    mu2.lock()
+    ...
+    mu2.unlock()
+    mu1.unlock()
+}
+```
+
+### Example 4: Read-write pattern (conceptual)
+
+If your build has `RWMutex`, multiple readers can hold it simultaneously, but
+a writer needs exclusive access. Otherwise, use a plain Mutex for all access.
+
+## 37.13 Locking guidelines
+
+1. **Lock order:** global, consistent order prevents deadlocks.
+2. **Fine-grained locks:** lock only what's necessary; don't lock the whole
+   data structure for a small update.
+3. **Short critical sections:** minimize work inside `lock/unlock`.
+4. **Never call blocking code** (sleep, network) while holding a lock.
+5. **Use `finally`** to guarantee unlock even on error.
+6. **Prefer channels** over shared+lock when the design allows.
+
+## 37.14 Exercises
+
+1. Protect a shared counter with a Mutex; verify exact final value.
+2. Implement a thread-safe stack using a Mutex and a list.
+3. Implement a thread-safe cache (dict + Mutex) with get/put.
+4. Demonstrate deadlock with two locks in opposite order, then fix it.
+5. Write `with_lock(mu, fn)` that locks, runs fn, unlocks in finally.
+6. Protect a shared bank account: deposit/transfer from many threads.
+7. Implement `increment_n(mu, counter, n)` using lock/unlock.
+8. Show that reading without a lock can see torn/stale values (conceptually).
+9. Implement a thread-safe counter class wrapping Mutex + int.
+10. Benchmark locked vs unlocked (single-threaded) to measure lock cost.
+

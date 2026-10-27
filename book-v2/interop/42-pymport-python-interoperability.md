@@ -348,3 +348,142 @@ try {
 3. Use `pymport selenium.webdriver` to open a headless browser and print the page title.
 4. Write `py_len(x)` that calls `builtins.len(x)` on any value.
 5. Demonstrate that `pymport` of a missing module is catchable with `try`/`catch`.
+
+
+## Advanced Topics and Exercises
+
+### Safety considerations
+- Memory management across FFI boundary
+- Type mismatches
+- Calling conventions
+- Null pointers
+- Resource leaks
+
+### Debugging FFI
+- Check symbol names (nm, objdump)
+- Use cdecl/stdcall correctly
+- Test with simple functions first
+
+### Exercises
+1. Call simple C function from shared library
+2. Pass strings and arrays
+3. Handle pointers/structs
+4. Manage memory allocation
+5. Error handling across boundary
+6. Write wrapper module
+
+
+## 42.12 Worked examples — pymport
+
+`pymport` lets Zen import Python modules (stdlib, venv, project-local `.py`)
+and call Python functions, with value marshalling and chained tracebacks.
+
+Setup:
+```bash
+# activate a venv first
+source .venv/bin/activate
+# or set PYTHONPATH
+export PYTHONPATH="$PWD/pylibs"
+```
+
+### Example 1: Import Python's math module
+
+```zen
+import pymport
+let pymath = pymport.import("math")
+print(pymath.sqrt(16))   # 4.0
+print(pymath.pi)         # 3.14159...
+```
+
+### Example 2: Call a Python function with Zen args
+
+```zen
+let pymath = pymport.import("math")
+print(pymath.pow(2, 10))   # 1024.0
+print(pymath.floor(3.7))   # 3.0
+```
+
+### Example 3: Import a local Python module
+
+`pylibs/hello.py`:
+```python
+def greet(name):
+    return f"Hello, {name} from Python"
+```
+
+Zen:
+```zen
+let hello = pymport.import("hello")
+print(hello.greet("Zen"))   # Hello, Zen from Python
+```
+
+### Example 4: Marshalling values
+
+Zen ↔ Python conversion (typical):
+- Zen int → Python int
+- Zen float → Python float
+- Zen string → Python str
+- Zen bool → Python bool
+- Zen nil → Python None
+- Zen list → Python list
+- Zen dict → Python dict
+- Zen bytes → Python bytes
+
+### Example 5: Error chaining
+
+When Python raises, Zen surfaces it with a chained traceback showing both Zen
+and Python frames:
+
+```
+Z0508: PythonError: ZeroDivisionError: division by zero
+  at app.z:10
+  caused by Python: ZeroDivisionError at hello.py:3
+```
+
+Catch it in Zen:
+```zen
+try {
+    let bad = pymport.import("bad_module")
+    bad.divide_by_zero()
+} catch as e {
+    print("Python error: " + e.msg)
+}
+```
+
+### Example 6: Passing a Zen callback to Python
+
+Some Python APIs accept callbacks. Zen can pass a function; pymport wraps it
+so Python can call it back.
+
+```zen
+let funcs = pymport.import("my_python_module")
+funcs.register_callback(fn(x) => x * 2)
+```
+
+**Caution:** the Zen closure must outlive the Python-side registration, and
+Python exceptions raised inside the callback propagate back to Zen.
+
+## 42.13 pymport best practices
+
+1. Activate the correct venv before importing Python modules.
+2. Set `PYTHONPATH` for project-local `.py` files.
+3. Only pass simple types across the boundary; complex objects need
+   explicit serialization (JSON).
+4. Catch Python errors at the Zen edge; don't let them propagate uncaught.
+5. Don't hold the Python GIL across long Zen operations.
+6. Document which Python modules your project depends on.
+
+## 42.14 Exercises
+
+1. Import Python `math` and compute `sqrt(2)`, `pow(2, 10)`.
+2. Import Python `json` and `parse`/`dumps` a value from Zen.
+3. Create `pylibs/greeter.py` with a function; call it from Zen.
+4. Pass a Zen list to Python and print its length from Python.
+5. Demonstrate error chaining: call a Python function that raises, catch in Zen.
+6. Read a Python env var (`os.environ`) via pymport.
+7. Import `datetime` from Python and format the current time.
+8. Compare `pymport.import("math")` vs Zen `math` module.
+9. Write a Zen function that delegates a heavy computation to Python/NumPy
+   (conceptually).
+10. Build a small hybrid app: Zen CLI + Python computation module.
+

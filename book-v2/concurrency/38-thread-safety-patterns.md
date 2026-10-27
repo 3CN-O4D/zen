@@ -227,3 +227,195 @@ for t in threads { thread.join(t) }
 3. Write a `parallel_map` that runs a function on each item concurrently.
 4. Use a shared flag to stop all workers when one encounters an error.
 5. Write a program that counts lines across multiple "files" (lists) in parallel threads and sums the total.
+
+
+## Extended Content
+
+This section provides additional depth, patterns, debugging tips, and exercises for production use.
+
+### Common pitfalls
+- Race conditions
+- Deadlocks (circular wait)
+- Starvation
+- Data races
+- Forgetting to join threads
+
+### Debugging concurrent code
+- Use logging with thread identifiers
+- Test with different interleavings
+- Consider thread sanitizers conceptually
+- Design for thread safety from start
+
+### Exercises
+1. Producer-consumer with channels
+2. Thread pool pattern
+3. Parallel map/reduce
+4. Avoiding deadlocks with lock ordering
+5. Thread-safe cache
+6. Benchmark sequential vs parallel
+
+
+## 38.12 Worked examples — thread safety patterns
+
+### Example 1: Producer-consumer with channel + mutex
+
+```zen
+import threading, channels, mutexes
+
+let buffer = channels.Channel(capacity=5)
+let mu = mutexes.Mutex()
+var produced = 0
+var consumed = 0
+
+func producer() {
+    for i in 0..20 {
+        buffer.send(i)
+        mu.lock(); produced = produced + 1; mu.unlock()
+        print("produced ${i}")
+    }
+    buffer.close()
+}
+
+func consumer() {
+    while true {
+        let v = buffer.recv()
+        if v == nil { break }
+        mu.lock(); consumed = consumed + 1; mu.unlock()
+        print("consumed ${v}")
+    }
+}
+
+let tp = threading.Thread(fn() { producer() })
+let tc = threading.Thread(fn() { consumer() })
+tp.start()
+tc.start()
+tp.join()
+tc.join()
+print("produced=${produced} consumed=${consumed}")
+```
+
+### Example 2: Thread-safe lazy initialization (double-checked locking)
+
+```zen
+import mutexes
+
+let init_mu = mutexes.Mutex()
+var instance = nil
+var initialized = false
+
+func get_instance() {
+    if initialized { return instance }
+    init_mu.lock()
+    try {
+        if !initialized {
+            instance = #(value: 42)
+            initialized = true
+        }
+    } finally {
+        init_mu.unlock()
+    }
+    return instance
+}
+```
+
+### Example 3: Thread pool (fixed number of workers)
+
+```zen
+import threading, channels
+
+func thread_pool(num_workers, jobs) {
+    let job_ch = channels.Channel()
+    let result_ch = channels.Channel()
+    let done = channels.Channel()
+
+    for w in 0..num_workers {
+        threading.Thread(fn() {
+            while true {
+                let job = job_ch.recv()
+                if job == nil { break }
+                let r = job * job
+                result_ch.send(r)
+            }
+            done.send(nil)
+        }).start()
+    }
+
+    for j in jobs { job_ch.send(j) }
+    job_ch.close()
+    # wait for all workers to finish
+    for w in 0..num_workers { done.recv() }
+    result_ch.close()
+    return result_ch   # caller drains results
+}
+```
+
+### Example 4: Parallel map
+
+```zen
+func parallel_map(xs, f, num_workers) {
+    let results = channels.Channel(capacity=len(xs))
+    let job_ch = channels.Channel()
+    let done = channels.Channel()
+
+    for w in 0..num_workers {
+        threading.Thread(fn() {
+            while true {
+                let item = job_ch.recv()
+                if item == nil { break }
+                results.send(f(item))
+            }
+            done.send(nil)
+        }).start()
+    }
+
+    for x in xs { job_ch.send(x) }
+    job_ch.close()
+    for w in 0..num_workers { done.recv() }
+    results.close()
+
+    let out = []
+    while true {
+        let r = results.recv()
+        if r == nil { break }
+        out.push(r)
+    }
+    return out
+}
+
+print(parallel_map([1,2,3,4,5], fn(x) => x * x, 2))   # [1,4,9,16,25] (order varies)
+```
+
+### Example 5: Reader-writer preference
+
+If many readers and rare writers, use a read-write lock if available; otherwise
+guard all access with one Mutex. Readers serialize (safe but not maximal
+concurrency).
+
+## 38.13 Pattern catalog
+
+| Pattern | When to use | Primitive |
+|---------|-------------|-----------|
+| Guarded shared state | occasional updates | Mutex |
+| Producer-consumer | pipeline stages | Channel |
+| Worker pool | many independent jobs | Channel + Threads |
+| Parallel map | transform a collection | Channel + Threads |
+| Lazy init | one-time expensive setup | Mutex + flag |
+| Request-response | client/server in-proc | two Channels |
+| Pub/sub | one event, many listeners | Channel per subscriber |
+
+## 38.14 Exercises
+
+1. Implement a thread-safe counter class with `increment`, `decrement`,
+   `get` using a Mutex.
+2. Build a producer-consumer where the producer is faster than the consumer
+   (use a bounded channel to apply backpressure).
+3. Implement a thread pool and use it to compute squares of 1..100.
+4. Write `parallel_map` and verify results match sequential map.
+5. Implement double-checked lazy initialization; call from 3 threads; confirm
+   single initialization.
+6. Create a request-response channel: client sends request, server replies.
+7. Implement a simple pub/sub: publisher broadcasts to N subscriber channels.
+8. Build a thread-safe LRU cache (dict + Mutex + order tracking).
+9. Demonstrate a race without synchronization, then fix with a Mutex.
+10. Write a concurrent web fetcher (conceptually) using a thread pool.
+

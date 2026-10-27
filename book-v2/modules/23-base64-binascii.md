@@ -177,3 +177,77 @@ binascii.unhexlify("68656c6c6f")  # hello
 5. Write `round_trip(data)` that base64-encodes then decodes and verifies.
 6. Write `is_valid_hex(s)` that checks if a string is valid hexadecimal.
 7. Write `hex_to_bytes(s)` that converts hex to a list of byte values.
+
+
+## 23.12 base64 & binascii — complete reference
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `b64encode(data)` | base64 encode | `base64.b64encode("hello")` |
+| `b64decode(s)` | base64 decode | `base64.b64encode(...)` → back |
+| `url_encode(s)` / `url_decode(s)` | URL-safe base64 | `base64.url_encode(data)` |
+| `hexlify(b)` | bytes to hex | `binascii.hexlify(bytes)` |
+| `unhexlify(s)` | hex to bytes | `binascii.unhexlify("4865")` |
+
+### Usage
+
+```zen
+import base64
+import binascii
+let enc = base64.b64encode("hello")
+print(enc)               # aGVsbG8=
+print(base64.b64decode(enc))   # hello
+let hx = binascii.hexlify(bytes([72,101,108,108,111]))
+print(hx)                # 48656c6c6f
+print(binascii.unhexlify(hx))
+```
+
+### Exercises
+
+1. Encode a string to base64 and decode back; verify round-trip.
+2. Encode an image/file's bytes to base64.
+3. Implement `decode_b64url(s)` using url_decode.
+4. Write `hex_dump(b)` printing bytes as hex rows.
+5. Implement `compare_hex(a, b)` case-insensitive hex compare.
+6. Write `encode_file(path)` reading and base64-encoding contents.
+7. Implement `is_valid_base64(s)`.
+8. Write `rot13` conceptually (not base64, but a transform).
+9. Implement `hex_to_bytes(s)` manually.
+10. Write `bytes_to_hex(b)` manually.
+
+
+
+## 23.12 Worked example — encode/decode round trip
+
+```zen
+import base64
+import binascii
+
+let text = "Hello, Zen!"
+let enc = base64.b64encode(text)
+print(enc)                          # base64 string
+let dec = base64.b64decode(enc)
+print(dec == text)                  # true
+
+let raw = bytes([72, 101, 108, 108, 111])  # "Hello"
+let hx = binascii.hexlify(raw)
+print(hx)                           # 48656c6c6f
+let back = binascii.unhexlify(hx)
+print(back == raw)                  # true
+```
+
+## 23.13 Troubleshooting encoding
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| decode error | input isn't valid base64 | check padding / alphabet |
+| mismatch round-trip | encoding altered data | use bytes, not string |
+| wrong hex case | upper vs lower | normalize case before compare |
+
+## 23.14 Exercises
+
+1. Base64-encode a string and decode back; verify round-trip.
+2. Hex-encode `bytes([1,2,3])` and decode back.
+3. Encode a file's contents to base64.
+4. Implement `is_valid_base64(s)`.
+5. Write `hex_dump(b)` printing bytes as hex rows.

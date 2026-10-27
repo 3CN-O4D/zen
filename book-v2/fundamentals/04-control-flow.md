@@ -544,3 +544,435 @@ let grade = when {
 4. Use `for` with `continue` to sum only the odd numbers in a list.
 5. Write a function that uses `try`/`catch`/`finally` to guarantee a
    cleanup message prints regardless of success or failure.
+
+## 4.12 `if` / `elif` / `else` — complete semantics
+
+The condition is evaluated with the truthiness rule from Chapter 3: only
+`false`, `nil`, and `null` are falsy. `elif` is evaluated only if all previous
+conditions were falsy. `else` runs when no branch matched.
+
+```zen
+func classify(n) {
+    if n < 0 {
+        return "negative"
+    } elif n == 0 {
+        return "zero"
+    } elif n < 10 {
+        return "small"
+    } else {
+        return "large"
+    }
+}
+```
+
+Braces are mandatory; there is no significant indentation. Single-statement
+bodies may be written on one line with `;`.
+
+```zen
+if x > 0 { print("positive") }
+if x > 0 { print("positive"); print("indeed") }
+```
+
+The ternary form is an expression, not a statement:
+
+```zen
+let label = x > 0 ? "pos" : "non-pos"
+let label2 = "pos" if x > 0 else "non-pos"   # Python-style, also valid
+```
+
+`if` itself can also be used as an expression in many positions:
+
+```zen
+let msg = if x > 0 { "positive" } else { "non-positive" }
+```
+
+## 4.13 `while` loops
+
+`while cond { ... }` re-evaluates `cond` before every iteration. `break`
+leaves the innermost loop; `continue` jumps to the next condition check.
+
+```zen
+var i = 0
+while i < 5 {
+    i += 1
+    if i == 3 { continue }
+    if i == 4 { break }
+    print(i)     # 1, 2
+}
+```
+
+### Guard against infinite loops
+
+Because `while true { ... }` is common for servers and REPLs, always ensure a
+reachable `break`, `return`, `throw`, or external stop condition.
+
+```zen
+var attempts = 0
+while true {
+    attempts += 1
+    if attempts > 3 { break }
+}
+```
+
+### Loop with a post-condition
+
+Zen has no `do/while`. Emulate it:
+
+```zen
+var n = 0
+while true {
+    n += 1
+    if n >= 3 { break }
+}
+```
+
+## 4.14 `for` loops
+
+`for x in iterable { ... }` iterates over lists, tuples, sets, dict keys,
+strings (characters), ranges, and generators. The loop variable is a fresh
+binding per iteration for scalars.
+
+```zen
+for x in [10, 20, 30] { print(x) }
+for ch in "abc" { print(ch) }
+for k in #{a: 1, b: 2} { print(k) }
+for i in 0..3 { print(i) }
+```
+
+### Multi-variable iteration
+
+Dict `.items()` yields `#(key, value)` tuples, but the loop can destructure
+them directly:
+
+```zen
+for k, v in #{a: 1, b: 2}.items() {
+    print(k, v)
+}
+```
+
+The same works for lists of pairs:
+
+```zen
+for a, b in [#(1, "x"), #(2, "y")] {
+    print(a, b)
+}
+```
+
+### `enumerate`
+
+`enumerate(iter)` returns a list of `[index, value]` pairs.
+
+```zen
+for i, v in enumerate(["a", "b"]) {
+    print(i, v)   # 0 a / 1 b
+}
+```
+
+### Nested loops and labels
+
+Zen has no loop labels. Use a flag or a helper function to break out of outer
+loops.
+
+```zen
+func find_pair(rows, target) {
+    for i, row in enumerate(rows) {
+        for j, v in enumerate(row) {
+            if v == target { return #(i, j) }
+        }
+    }
+    return nil
+}
+```
+
+### Mutating a collection while iterating
+
+Do not add/remove elements of a list or dict while iterating it. Iterate over
+a copy instead:
+
+```zen
+for x in list(items) {        # copy
+    if x < 0 { items.remove(x) }
+}
+```
+
+For dicts, collect keys first:
+
+```zen
+for k in list(d.keys()) {
+    if d[k] == nil { d.remove(k) }
+}
+```
+
+## 4.15 `break`, `continue`, and `return` inside loops
+
+- `break` exits the nearest enclosing loop.
+- `continue` skips to the next iteration of the nearest loop.
+- `return` exits the entire function immediately, even from nested loops.
+
+```zen
+func first_negative(xs) {
+    for x in xs {
+        if x < 0 { return x }
+    }
+    return nil
+}
+```
+
+## 4.16 `match` expressions
+
+`match` compares a value against patterns. Arms are separated by `=>`, `->`,
+or `:`; each arm yields an expression or a block.
+
+```zen
+func http_text(code) {
+    return match code {
+        200 => "OK",
+        201 => "Created",
+        301 | 302 | 307 | 308 => "Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "Unknown",
+    }
+}
+```
+
+### Pattern kinds
+
+| Pattern | Example | Matches |
+|---------|---------|---------|
+| wildcard | `_` | anything |
+| binding | `n` | anything, binds to `n` |
+| literal int | `42` | exactly 42 |
+| literal string | `"ok"` | exactly `"ok"` |
+| literal bool/nil | `true`, `nil` | exactly that |
+| list | `[a, b]` | two-element list, binds a,b |
+| list with rest | `[head, ...tail]` | non-empty list |
+| tuple | `#(x, y)` | two-tuple |
+| dict | `#{type: t}` | dict containing key `type` |
+| or-pattern | `1 | 2 | 3` | any of them |
+| guard | `n if n > 0` | pattern plus condition |
+
+### List destructuring
+
+```zen
+func describe(xs) {
+    return match xs {
+        [] => "empty",
+        [x] => "one: ${x}",
+        [x, y] => "two: ${x}, ${y}",
+        [head, ...rest] => "many starting with ${head}",
+    }
+}
+```
+
+### Dict patterns
+
+```zen
+func handle_event(ev) {
+    return match ev {
+        #{type: "click", x, y} => "click at ${x},${y}",
+        #{type: "key", key} => "key ${key}",
+        #{type: t} => "unknown event ${t}",
+        _ => "malformed",
+    }
+}
+```
+
+### Guards
+
+```zen
+func sign(n) {
+    return match n {
+        x if x < 0 => -1,
+        0 => 0,
+        _ => 1,
+    }
+}
+```
+
+### Exhaustiveness
+
+The runtime does not require exhaustiveness, but an unmatched value raises an
+error. Always include `_` unless you are certain the domain is closed.
+
+## 4.17 `when` expressions
+
+`when` is a cond-style chain: each arm has a boolean condition rather than a
+pattern.
+
+```zen
+let grade = when {
+    score >= 90 => "A",
+    score >= 80 => "B",
+    score >= 70 => "C",
+    score >= 60 => "D",
+    _ => "F",
+}
+```
+
+`when` is often clearer than a long `if/elif` chain when you want a value.
+
+## 4.18 `try` / `catch` / `finally` as control flow
+
+`try` is covered fully in Chapter 11, but control-flow interactions matter:
+`return` inside `try` still runs `finally`; `break`/`continue` inside `try`
+also run `finally`.
+
+```zen
+func f() {
+    try {
+        return 1
+    } finally {
+        print("cleanup")   # runs before returning
+    }
+}
+```
+
+## 4.19 Early-return style
+
+Deeply nested `if`s are hard to read. Prefer guard clauses with early return.
+
+```zen
+# hard to read
+func process(user) {
+    if user != nil {
+        if user.active {
+            if user.email != nil {
+                send(user.email)
+            }
+        }
+    }
+}
+
+# easier
+func process2(user) {
+    if user == nil { return }
+    if !user.active { return }
+    if user.email == nil { return }
+    send(user.email)
+}
+```
+
+## 4.20 State machines with `match`
+
+`match` on a state string is a clean way to write state machines.
+
+```zen
+class TrafficLight {
+    var state = "red"
+
+    func tick() {
+        self.state = match self.state {
+            "red" => "green",
+            "green" => "yellow",
+            "yellow" => "red",
+            _ => "red",
+        }
+    }
+}
+```
+
+For larger machines, define transition tables declaratively:
+
+```zen
+let transitions = #{
+    red: #{green: "green"},
+    green: #{yellow: "yellow"},
+    yellow: #{red: "red"},
+}
+
+func next_state(state, event) {
+    let row = transitions[state] ?? #{}
+    return row[event] ?? state
+}
+```
+
+## 4.21 Retry loops
+
+A common pattern: retry an operation with backoff and a maximum attempt count.
+
+```zen
+func retry(fn, attempts, delay_ms) {
+    var last_err = nil
+    for i in 0..attempts {
+        try {
+            return fn()
+        } catch as e {
+            last_err = e
+            sleep(delay_ms * (i + 1))
+        }
+    }
+    throw last_err
+}
+```
+
+## 4.22 Infinite event loops and shutdown
+
+Servers and UIs run an event loop until a stop flag is set.
+
+```zen
+var running = true
+
+func shutdown() { running = false }
+
+while running {
+    let event = poll_event()
+    if event == nil { continue }
+    handle(event)
+}
+```
+
+For multi-threaded programs, use an atomic/`shared` flag or a channel close
+signal instead of a plain bool.
+
+## 4.23 Loop performance notes
+
+- Prefer `for x in list` over index loops when you do not need the index.
+- Cache `len(xs)` in a local if the loop body cannot change it.
+- Avoid building strings with `+=` in a hot loop; collect into a list and
+  `join`.
+- `break` early when searching.
+- Avoid `try` inside tight loops when an error is expected frequently; test a
+  condition first.
+
+```zen
+# slow
+var s = ""
+for w in words { s += w + " " }
+
+# fast
+let parts = []
+for w in words { parts.push(w) }
+let s2 = parts.join(" ")
+```
+
+## 4.24 Common control-flow mistakes
+
+1. Using `=` instead of `==` in a condition (assignment is not an expression).
+2. Forgetting braces.
+3. Modifying a list while iterating it.
+4. Assuming `0` is falsy.
+5. Missing `_` in `match`, causing runtime errors on unhandled values.
+6. Using `continue` inside a `finally` (avoid; confusing semantics).
+7. Infinite loops without a reachable exit.
+8. Off-by-one with `..` (exclusive) vs `->` (inclusive).
+9. Deep recursion instead of iteration for large inputs.
+10. Relying on dict iteration order across versions (use `.items()` if order matters).
+
+## 4.25 Exercises
+
+1. Write `fizzbuzz(n)` using `when` or `match`.
+2. Implement a guessing game loop that exits on correct input or `quit`.
+3. Write `sum_evens(xs)` using a `for` loop and `continue`.
+4. Implement `binary_search(sorted, target)` with a `while` loop.
+5. Rewrite a nested `if` pyramid using guard clauses.
+6. Implement a simple calculator state machine with `match`.
+7. Write `count_words(text)` using a dict and a loop.
+8. Implement `flatten(nested)` with recursion and a loop.
+9. Build a retry helper with exponential backoff.
+10. Write `first_duplicate(xs)` returning the first repeated element or nil.
+11. Implement `collatz_steps(n)` and guard against non-positive input.
+12. Print a multiplication table using nested loops with aligned columns.

@@ -236,3 +236,172 @@ exit(0)
 3. Write a `cp` clone that copies one file to another.
 4. Write a `find` clone that lists files matching a pattern.
 5. Write a CLI config tool that reads/writes a JSON config file.
+
+
+## Extended Project Ideas and Implementation Notes
+
+### Design checklist
+- Requirements and scope
+- Error handling
+- Logging
+- Configuration
+- Testing
+- Documentation
+- Security considerations
+
+### Exercises
+1. Extend the project with new features
+2. Add tests
+3. Improve error messages
+4. Add help/usage
+5. Make it configurable
+6. Package for distribution
+
+
+## 43.12 Full tutorial — building a CLI todo manager
+
+### Requirements
+- Add, list, mark done, delete tasks
+- Store tasks in a JSON file
+- Accept subcommands: `add`, `list`, `done`, `delete`
+- Print usage when no args or `--help`
+
+### Implementation (`todo.z`)
+
+```zen
+import sys
+import json
+import os
+import pathlib
+
+let TASKS_FILE = pathlib.Path("tasks.json")
+
+func load_tasks() {
+    if !TASKS_FILE.exists() { return [] }
+    try {
+        return json.load(str(TASKS_FILE))
+    } catch as e {
+        print("warn: could not load tasks: " + e.msg)
+        return []
+    }
+}
+
+func save_tasks(tasks) {
+    json.save(str(TASKS_FILE), tasks)
+}
+
+func cmd_add(args) {
+    if len(args) < 1 { print("usage: todo add <task>"); return }
+    let tasks = load_tasks()
+    let task = #{id: len(tasks) + 1, title: args[0], done: false}
+    tasks.push(task)
+    save_tasks(tasks)
+    print("added: " + args[0])
+}
+
+func cmd_list(_) {
+    let tasks = load_tasks()
+    if len(tasks) == 0 { print("no tasks"); return }
+    for t in tasks {
+        let mark = if t["done"] { "[x]" } else { "[ ]" }
+        print("${mark} ${t["id"]}. ${t["title"]}")
+    }
+}
+
+func cmd_done(args) {
+    if len(args) < 1 { print("usage: todo done <id>"); return }
+    let id = int(args[0])
+    let tasks = load_tasks()
+    var found = false
+    for t in tasks {
+        if t["id"] == id { t["done"] = true; found = true }
+    }
+    if found { save_tasks(tasks); print("marked ${id} done") }
+    else { print("no task with id ${id}") }
+}
+
+func cmd_delete(args) {
+    if len(args) < 1 { print("usage: todo delete <id>"); return }
+    let id = int(args[0])
+    let tasks = load_tasks()
+    let filtered = []
+    for t in tasks { if t["id"] != id { filtered.push(t) } }
+    save_tasks(filtered)
+    print("deleted ${id}")
+}
+
+func main(argv) {
+    if len(argv) < 2 {
+        print("Todo Manager")
+        print("usage: todo <add|list|done|delete> [args]")
+        return 0
+    }
+    let cmd = argv[1]
+    let rest = []
+    for i in 2..len(argv) { rest.push(argv[i]) }
+    if cmd == "add" { cmd_add(rest) }
+    elif cmd == "list" { cmd_list(rest) }
+    elif cmd == "done" { cmd_done(rest) }
+    elif cmd == "delete" { cmd_delete(rest) }
+    elif cmd == "--help" || cmd == "help" {
+        print("usage: todo <add|list|done|delete> [args]")
+    } else {
+        print("unknown command: " + cmd)
+    }
+    return 0
+}
+
+if __name__ == "__main__" {
+    sys.exit(main(sys.argv))
+}
+```
+
+### Sample session
+
+```bash
+$ zen run todo.z add "Learn Zen"
+added: Learn Zen
+$ zen run todo.z add "Build a CLI"
+added: Build a CLI
+$ zen run todo.z list
+[ ] 1. Learn Zen
+[ ] 2. Build a CLI
+$ zen run todo.z done 1
+marked 1 done
+$ zen run todo.z list
+[x] 1. Learn Zen
+[ ] 2. Build a CLI
+$ zen run todo.z delete 2
+deleted 2
+```
+
+### Design notes
+- Tasks are dicts in a list, serialized to JSON.
+- IDs are simple (len+1); not robust to deletion gaps but fine for a demo.
+- `save_tasks` rewrites the whole file each time (simple, safe).
+- Errors are caught so a corrupt JSON file doesn't crash the app.
+
+## 43.13 CLI design checklist
+
+1. **Parse args** from `sys.argv` (first element is the program).
+2. **Dispatch** on subcommand.
+3. **Validate** argument count and types before use.
+4. **Print usage** on `--help`, missing args, or unknown command.
+5. **Return exit codes:** 0 success, non-zero on error.
+6. **Persist** state to a file (JSON/text) if stateful.
+7. **Handle errors** gracefully (missing file, bad input).
+8. **Document** each subcommand.
+
+## 43.14 Exercises
+
+1. Add a `priority` field to tasks and sort `list` by priority.
+2. Add `clear` command to remove all tasks.
+3. Add `--file` option to choose a different storage path.
+4. Add `edit <id> <new title>` command.
+5. Validate that `done`/`delete` IDs exist before operating.
+6. Add timestamps (`created_at`, `completed_at`) to tasks.
+7. Print overdue tasks (conceptually, with due dates).
+8. Write `todo count` showing number of pending/done.
+9. Add tab-completion hints (usage text only).
+10. Package the CLI with `zen build todo.z -o todo`.
+

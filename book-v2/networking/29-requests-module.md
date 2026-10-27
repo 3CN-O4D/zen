@@ -295,3 +295,100 @@ requests.raise_for_status(resp)
 5. Add basic auth and custom headers to a request.
 6. Write a function `get_json(url)` that fetches and parses JSON, returning `nil` on failure.
 7. Write a retry function that retries a GET up to 3 times on failure.
+
+
+## 29.10 Advanced usage patterns
+
+### Sessions (connection reuse)
+```zen
+import requests
+let s = requests.Session()
+s.headers.update({"User-Agent": "ZenBot/1.0"})
+let r1 = s.get("https://httpbin.org/headers")
+let r2 = s.get("https://httpbin.org/cookies/set?x=1")
+```
+
+### Custom headers and auth
+```zen
+let r = requests.get(url, headers={"Authorization": "Bearer token"}, auth=("user","pass"))
+```
+
+### Query parameters
+```zen
+let r = requests.get("https://httpbin.org/get", params={"q": "zen", "page": 1})
+```
+
+### POST forms and JSON
+```zen
+let r = requests.post(url, data={"key": "val"})  # form
+let r = requests.post(url, json={"key": "val"}) # JSON
+```
+
+### File uploads
+```zen
+let files = {"file": open("doc.txt", "rb")}
+let r = requests.post(url, files=files)
+```
+
+### Timeouts and retries
+```zen
+let r = requests.get(url, timeout=5)
+```
+
+### Streaming
+```zen
+let r = requests.get(url, stream=true)
+# iterate over r.iter_content()
+```
+
+### Response object details
+- `r.status_code`, `r.reason`
+- `r.text`, `r.content` (bytes)
+- `r.json()`
+- `r.headers`, `r.cookies`
+- `r.url`, `r.elapsed`
+
+### SSL verification
+```zen
+let r = requests.get(url, verify=true)  # default
+# let r = requests.get(url, verify=false)  # dangerous, only for testing
+```
+
+### Proxies
+```zen
+let proxies = {"http": "http://proxy:8080", "https": "http://proxy:8080"}
+let r = requests.get(url, proxies=proxies)
+```
+
+### Redirects
+```zen
+let r = requests.get(url, allow_redirects=true)
+```
+
+## 29.11 Error handling
+```zen
+import requests
+try {
+    let r = requests.get("https://invalid.example", timeout=2)
+    r.raise_for_status()
+} catch(e) {
+    print(e)
+}
+```
+
+## 29.12 Best practices
+- Always use timeouts
+- Handle exceptions
+- Check status codes
+- Respect robots.txt and rate limits
+- Use sessions for multiple requests
+- Don't disable verify in production
+
+## 29.13 Exercises
+1. GET request and parse JSON
+2. POST JSON to API
+3. Use session with cookies
+4. Download file with streaming
+5. Handle errors and timeouts
+6. Set custom headers
+7. Follow redirects and inspect history

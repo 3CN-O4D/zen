@@ -332,3 +332,124 @@ resp.headers
 3. Add retry logic with exponential backoff.
 4. Write a CLI that takes a URL and method and prints the response.
 5. Build a small config client that reads/writes JSON config via REST.
+
+
+## Extended Project Ideas and Implementation Notes
+
+### Design checklist
+- Requirements and scope
+- Error handling
+- Logging
+- Configuration
+- Testing
+- Documentation
+- Security considerations
+
+### Exercises
+1. Extend the project with new features
+2. Add tests
+3. Improve error messages
+4. Add help/usage
+5. Make it configurable
+6. Package for distribution
+
+
+## 45.12 Full tutorial — REST API client
+
+### Goal
+A small client for a JSON REST API with GET/POST/PUT/DELETE and auth.
+
+### Implementation (`api.z`)
+
+```zen
+import requests
+import json
+
+class ApiClient {
+    var base_url = ""
+    var token = nil
+
+    func init(base_url, token = nil) {
+        self.base_url = base_url
+        self.token = token
+    }
+
+    func headers() {
+        let h = #{}
+        h["Content-Type"] = "application/json"
+        if self.token != nil { h["Authorization"] = "Bearer " + self.token }
+        return h
+    }
+
+    func request(method, path, body = nil) {
+        let url = self.base_url + path
+        try {
+            let r = nil
+            if method == "GET" { r = requests.get(url, headers=self.headers(), timeout=10) }
+            elif method == "POST" { r = requests.post(url, headers=self.headers(), json=body, timeout=10) }
+            elif method == "PUT" { r = requests.put(url, headers=self.headers(), json=body, timeout=10) }
+            elif method == "DELETE" { r = requests.delete(url, headers=self.headers(), timeout=10) }
+            else { throw "unsupported method: " + method }
+            r.raise_for_status()
+            let ct = r.headers["Content-Type"] ?? ""
+            if ct.contains("json") { return r.json() }
+            return r.text
+        } catch as e {
+            throw "API request failed (" + method + " " + path + "): " + e.msg
+        }
+    }
+
+    func get(path) { return self.request("GET", path) }
+    func post(path, body) { return self.request("POST", path, body) }
+    func put(path, body) { return self.request("PUT", path, body) }
+    func delete(path) { return self.request("DELETE", path) }
+}
+
+func main(argv) {
+    let client = new ApiClient("https://api.example.com", "my-token")
+    try {
+        let users = client.get("/users")
+        print("users: " + json.stringify(users))
+        let created = client.post("/users", #{name: "Zen User"})
+        print("created: " + json.stringify(created))
+    } catch as e {
+        print(e.msg)
+        return 1
+    }
+    return 0
+}
+
+if __name__ == "__main__" { sys.exit(main(sys.argv)) }
+```
+
+### Key design points
+- `base_url` + path composition.
+- Bearer token auth header.
+- Central error handling with context (method + path).
+- Content-type check before `r.json()`.
+- Timeout on every request (never hang forever).
+
+## 45.13 REST client checklist
+
+1. **Base URL** stored once; paths appended.
+2. **Auth header** (Bearer/API key) added to every request.
+3. **Timeouts** on all requests.
+4. **`raise_for_status`** or manual status checks.
+5. **Parse JSON only when Content-Type is JSON.**
+6. **Wrap errors** with method + path context.
+7. **Retry** transient failures (optional).
+8. **Pagination** support (optional: follow `Link` header or `page` param).
+
+## 45.14 Exercises
+
+1. Add `patch` method to the client.
+2. Add automatic retry (3 attempts) on 5xx errors.
+3. Add pagination: follow `next` URL until none.
+4. Add query-parameter support to `get`.
+5. Add file upload (`files=` param) support.
+6. Add a `--verbose` flag printing each request URL.
+7. Implement OAuth2 bearer token refresh (conceptually).
+8. Write tests against a local mock server.
+9. Add rate-limit handling (respect `Retry-After`).
+10. Turn the client into a reusable module `api_client.z`.
+

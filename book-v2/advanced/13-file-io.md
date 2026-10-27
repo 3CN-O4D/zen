@@ -292,3 +292,182 @@ pathlib.Path("file.txt").write_text("data")
 3. Write `grep_file(pattern, path)` that prints lines containing `pattern`.
 4. Write a file tailer that reads the last `n` lines of a file.
 5. Use `with fs.open(...)` to read a file and count its words.
+
+## 13.12 File I/O — complete reference
+
+Zen reads/writes files with `open(path, mode)` and the `with` statement for
+automatic closing.
+
+### Modes
+
+| Mode | Meaning |
+|------|---------|
+| `"r"` | read (text) — default |
+| `"w"` | write (text), truncate |
+| `"a"` | append (text) |
+| `"rb"` | read binary |
+| `"wb"` | write binary |
+| `"ab"` | append binary |
+| `"r+"` | read and write |
+
+### Reading
+
+```zen
+# read whole file
+let f = open("data.txt", "r")
+let text = f.read()
+f.close()
+
+# with statement (recommended)
+with open("data.txt", "r") as f {
+    let text = f.read()
+}   # f closed automatically
+```
+
+### Reading line by line
+
+```zen
+with open("data.txt", "r") as f {
+    for line in f {
+        print(line)
+    }
+}
+```
+
+### Writing
+
+```zen
+with open("out.txt", "w") as f {
+    f.write("hello\n")
+    f.write("world\n")
+}
+
+# append
+with open("out.txt", "a") as f {
+    f.write("more\n")
+}
+```
+
+### Binary I/O
+
+```zen
+with open("image.bin", "rb") as f {
+    let data = f.read()   # bytes
+}
+
+with open("copy.bin", "wb") as f {
+    f.write(data)
+}
+```
+
+### `os`/`pathlib` helpers
+
+Use `pathlib.Path` for path manipulation and `os` for filesystem operations:
+
+```zen
+import pathlib
+import os
+
+let p = pathlib.Path("data.txt")
+print(p.exists())
+print(p.is_file())
+print(p.name)
+print(p.stem)
+print(p.suffix)
+
+let files = os.listdir(".")   # list directory
+print(os.getcwd())
+os.makedirs("a/b/c", exist_ok=true)
+os.remove("temp.txt")
+```
+
+### File methods
+
+| Method | Purpose |
+|--------|---------|
+| `read()` | read all contents |
+| `read(n)` | read n bytes/chars |
+| `readline()` | read one line |
+| `readlines()` | read all lines into a list |
+| `write(s)` | write string/bytes |
+| `flush()` | flush buffers |
+| `close()` | close the file |
+| `seek(offset)` | move position |
+| `tell()` | current position |
+
+### Working directory and paths
+
+```zen
+print(os.getcwd())           # current dir
+os.chdir("/tmp")             # change dir
+let abspath = pathlib.Path("data.txt").resolve()
+```
+
+### Error handling
+
+File operations raise errors (Z04xx range) on failure:
+
+```zen
+try {
+    with open("missing.txt", "r") as f {
+        print(f.read())
+    }
+} catch as e {
+    print("cannot open: " + e.msg)
+}
+```
+
+### Best practices
+
+1. Always use `with` so files close even on error.
+2. Prefer binary mode for non-text data.
+3. Specify encoding when reading/writing text across platforms.
+4. Flush before reading what another process wrote.
+5. Use absolute paths or resolve relative to a known base.
+6. Close network/resources promptly.
+
+## 13.13 Temporary files
+
+If `tempfile` is available:
+
+```zen
+import tempfile
+let path = tempfile.mkstemp()
+# ... use path ...
+os.remove(path)
+```
+
+Otherwise, create files in `os.getcwd()` or a known temp dir and clean up.
+
+## 13.14 CSV-like parsing (manual)
+
+```zen
+func parse_csv(text) {
+    let lines = text.splitlines()
+    let header = lines[0].split(",")
+    let rows = []
+    for i in 1..len(lines) {
+        let vals = lines[i].split(",")
+        let row = #{}
+        for j in 0..len(header) {
+            row[header[j]] = vals[j]
+        }
+        rows.push(row)
+    }
+    return rows
+}
+```
+
+## 13.15 Exercises
+
+1. Write `read_all(path)` returning file contents or nil on error.
+2. Write `write_all(path, text)` creating/overwriting a file.
+3. Implement `copy_file(src, dst)` reading and writing in chunks.
+4. Write `line_count(path)` counting lines without loading all.
+5. Implement `grep_file(path, pattern)` printing matching lines.
+6. Write `append_log(path, message)` appending a timestamped line.
+7. Create `list_files(dir)` returning files (not subdirs).
+8. Write `ensure_dir(path)` creating parent dirs if missing.
+9. Implement `read_csv(path)` returning a list of dicts.
+10. Write `find_files(dir, suffix)` recursively listing files by suffix.
+

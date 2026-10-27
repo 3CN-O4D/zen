@@ -128,3 +128,127 @@ http.server.guess_type(filename)
 3. Create an HTML file, serve it, and verify the `Content-Type` header.
 4. Write a script that serves a directory in a thread while doing other work.
 5. Test that `..` in a URL path is rejected (directory traversal protection).
+
+
+## 30.10 Building a more complete server
+
+### Routing
+```zen
+# simple router pattern
+fn handle(req) {
+    if req.path == "/" { return "index" }
+    if req.path == "/api/data" { return json.dumps({"ok": true}) }
+    return "not found"
+}
+```
+
+### Serving static files
+Read file, set Content-Type based on extension, return bytes/text.
+
+### Handling POST data
+Parse form data or JSON from body based on Content-Type.
+
+### Middleware pattern
+```zen
+fn middleware(next_handler) {
+    return fn(req) {
+        print(req.method + " " + req.path)
+        return next_handler(req)
+    }
+}
+```
+
+### CORS headers
+```zen
+# Add headers: Access-Control-Allow-Origin, etc.
+```
+
+### Error responses
+Return proper status codes and JSON error bodies.
+
+## 30.11 Production considerations
+- Use proper server (gunicorn-like) not just dev server
+- Handle concurrent requests (threading/async)
+- Set timeouts
+- Validate input
+- Add logging
+- Use HTTPS
+- Rate limiting
+- Security headers
+
+## 30.12 Exercises
+1. Multi-route server
+2. JSON API endpoints (GET/POST)
+3. Serve static HTML/CSS/JS
+4. Form handling
+5. 404 and error pages
+6. Request logging middleware
+7. Simple REST CRUD API
+
+
+## 30.12 Worked example — a small HTTP server with routing
+
+```zen
+import http.server
+
+let routes = #{}
+
+func route(path, handler) {
+    routes[path] = handler
+}
+
+func not_found(req) {
+    return #(404, #{}, "Not Found")
+}
+
+func handle(req) {
+    let h = routes[req.path] ?? not_found
+    return h(req)
+}
+
+route("/", fn(req) {
+    return #(200, #{}, "<h1>Zen HTTP Server</h1>")
+})
+
+route("/time", fn(req) {
+    import datetime
+    return #(200, #{}, "time=" + datetime.now())
+})
+
+route("/echo", fn(req) {
+    return #(200, {"Content-Type": "text/plain"}, req.body ?? "")
+})
+
+let server = http.server.Server(port=8080, handler=handle)
+print("server on http://localhost:8080")
+server.start()
+```
+
+Test with curl:
+```bash
+$ curl http://localhost:8080/
+<h1>Zen HTTP Server</h1>
+$ curl http://localhost:8080/time
+time=...
+$ curl -d "hello" http://localhost:8080/echo
+hello
+```
+
+## 30.13 Troubleshooting HTTP servers
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| connection refused | server not started / wrong port | start server, check port |
+| port already in use | another process on 8080 | use SO_REUSEADDR or a different port |
+| 404 on known route | path mismatch (trailing slash) | normalize paths |
+| client hangs | handler never returns | check for blocking code |
+| large payload truncated | read limit | read full body / stream |
+
+## 30.14 Exercises
+
+1. Add a `/health` route returning `{status: "ok"}`.
+2. Return JSON from a route (`Content-Type: application/json`).
+3. Add request logging (method + path) for every request.
+4. Handle POST body parsing for `/echo`.
+5. Add a 500 error route handler for exceptions.
+6. Make the port configurable via an argument/env var.

@@ -218,3 +218,129 @@ fs.rmtree(dir)
 5. Write `csv_to_json(path)` that converts a CSV file to JSON.
 6. Write `count_lines(path)` that counts non-empty lines in a file.
 7. Write `merge_files(paths, output)` that concatenates multiple files into one.
+
+
+## Extended Project Ideas and Implementation Notes
+
+### Design checklist
+- Requirements and scope
+- Error handling
+- Logging
+- Configuration
+- Testing
+- Documentation
+- Security considerations
+
+### Exercises
+1. Extend the project with new features
+2. Add tests
+3. Improve error messages
+4. Add help/usage
+5. Make it configurable
+6. Package for distribution
+
+
+## 46.12 Full tutorial — file processing pipeline
+
+### Goal
+Read a CSV-like file, transform each row, write results to another file.
+
+### Implementation (`process.z`)
+
+```zen
+import os
+import pathlib
+
+func read_lines(path) {
+    let lines = []
+    with open(path, "r") as f {
+        for line in f {
+            lines.push(line)
+        }
+    }
+    return lines
+}
+
+func parse_csv_line(line) {
+    return line.strip().split(",")
+}
+
+func transform(row) {
+    # row: ["name", "age", "city"]
+    if len(row) < 3 { return nil }
+    return #{name: row[0], age: int(row[1]), city: row[2]}
+}
+
+func format_record(r) {
+    return r["name"] + "," + str(r["age"]) + "," + r["city"] + "\n"
+}
+
+func process(input_path, output_path) {
+    let lines = read_lines(input_path)
+    let results = []
+    for line in lines {
+        let row = parse_csv_line(line)
+        let r = transform(row)
+        if r != nil { results.push(format_record(r)) }
+    }
+    with open(output_path, "w") as f {
+        for r in results { f.write(r) }
+    }
+    print("processed " + str(len(results)) + " records -> " + output_path)
+}
+
+func main(argv) {
+    if len(argv) < 3 {
+        print("usage: process <input.csv> <output.csv>")
+        return 1
+    }
+    process(argv[1], argv[2])
+    return 0
+}
+
+if __name__ == "__main__" { sys.exit(main(sys.argv)) }
+```
+
+### Sample data (`input.csv`)
+
+```
+Ada,36,London
+Alan,42,Manchester
+Grace,85,New York
+```
+
+### Sample run
+
+```bash
+$ zen run process.z input.csv output.csv
+processed 3 records -> output.csv
+```
+
+### Design notes
+- `with` ensures the file closes even on error.
+- `transform` returns `nil` on malformed rows; the pipeline skips them.
+- Output written only after all rows transform successfully (simple).
+
+## 46.13 File processing patterns
+
+| Pattern | Use |
+|---------|-----|
+| Read → transform → write | ETL pipeline |
+| Stream line-by-line | large files (low memory) |
+| Chunked binary copy | large binary files |
+| Filter + aggregate | reports/summaries |
+| Parse-validate-load | data import |
+
+## 46.14 Exercises
+
+1. Add a header row detection (skip first line).
+2. Support a delimiter flag (`,`, `\t`, `;`).
+3. Filter rows where `age > 40`.
+4. Sort output by age.
+5. Write a summary line: total, min, max, average age.
+6. Handle missing input file gracefully.
+7. Write output incrementally (streaming) instead of collecting all.
+8. Support `.tsv` input automatically by extension.
+9. Add a `--dry-run` flag that prints without writing.
+10. Process all `.csv` files in a directory.
+

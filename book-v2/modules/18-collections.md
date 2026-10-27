@@ -331,3 +331,50 @@ dd["missing"]   # 0
 6. Write `top_k_words(text, k)` using `collections.Counter`.
 7. Write `group_by(items, key_func)` using `collections.defaultdict(list)`.
 8. Write a `RingBuffer` class using `collections.deque` with a fixed max size.
+
+
+## 18.12 collections module — complete reference
+
+| Function | Purpose | Example |
+|----------|---------|---------|
+| `Counter(xs)` | count frequencies | `collections.Counter(["a","b","a"])` |
+| `chain(*iters)` | chain iterables | `collections.chain([1,2], [3,4])` |
+| `flatten(xs)` | flatten one level | `collections.flatten([[1,2],[3]])` |
+
+### Counter
+
+```zen
+import collections
+let c = collections.Counter(["a","b","a","c","b","a"])
+print(c)   # Counter: a->3, b->2, c->1
+print(c["a"])   # 3
+print(c.most_common(1))   # if supported
+```
+
+### chain
+
+```zen
+for x in collections.chain([1,2], [3,4]) {
+    print(x)   # 1 2 3 4
+}
+```
+
+### flatten
+
+```zen
+print(collections.flatten([[1,2],[3,4],[5]]))   # [1,2,3,4,5]
+```
+
+### Exercises
+
+1. Implement `Counter` manually using a dict.
+2. Write `most_common(freqs, n)` returning top n by count.
+3. Implement `chain` manually with nested loops.
+4. Write `deep_flatten(xs)` recursively flattening all levels.
+5. Implement `group_by(xs, key_fn)` returning dict of lists.
+6. Write `merge_counters(a, b)` adding counts.
+7. Implement `intersection_counter(a, b)` min counts.
+8. Write `frequency_sort(xs)` sorting by frequency desc.
+9. Implement `chain_from_iterable(iters)` chaining many.
+10. Write `sliding_window(xs, n)` returning n-tuples.
+

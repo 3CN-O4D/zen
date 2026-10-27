@@ -246,3 +246,79 @@ zen run main.z
   arithmetic, comparison, logic, `?.` safe access, `??` coalescing.
 - [Chapter 4: Control Flow](./fundamentals/04-control-flow.md) — conditionals,
   loops, `match`, `when`, `try`/`catch`.
+
+
+## 1.5 Command-line interface reference (deep)
+
+The `zen` CLI has multiple modes. Complete reference:
+
+| Command | Purpose | Examples |
+|---|---|---|
+| `zen` / `zen repl` | Interactive REPL | `zen` |
+| `zen run <file>` | Execute script | `zen run app.z` |
+| `zen -m <module>` | Run module as main | `zen -m http.server` |
+| `zen -e <code>` | Inline execution | `zen -e 'print(1+1)'` |
+| `zen check <file>` | Type/compile check without run | `zen check lib.z` |
+| `zen lint <file>` | Static analysis warnings | `zen lint app.z` |
+| `zen explain <code>` | Explain error code | `zen explain Z0308` |
+| `zen build <file>` | Bundle to standalone executable | `zen build app.z -o app` |
+| `zen test` | Run tests in project | `zen test` |
+| `zen fmt` | Format sources | `zen fmt .` |
+| `zen help` | Help | `zen help` |
+| `zen --version` | Version | `zen --version` |
+
+### Environment variables
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `ZEN_PATH` | Module search paths (colon-separated) | platform dependent |
+| `ZEN_DEBUG` | Enable debug logging | unset |
+| `PYTHONPATH` | Used by pymport for Python module resolution | inherited |
+| `VIRTUAL_ENV` | Python venv used by pymport | inherited |
+
+## 1.6 Project layout conventions
+
+A typical Zen project:
+```
+myproject/
+├── main.z           # entry point
+├── lib/             # local modules
+│   ├── utils.z
+│   └── config.z
+├── tests/           # tests
+└── README.md
+```
+
+Import local modules:
+```zen
+import lib.utils
+from lib.config import get_config
+```
+
+## 1.7 Running as script vs module
+
+When run as script (`zen run main.z`), `__name__` is typically `"__main__"` or script path. When imported, different. Check module behavior.
+
+## 1.8 Debugging workflow
+
+1. Use `print()` for quick debugging
+2. Run with `ZEN_DEBUG=1 zen run app.z` for verbose output
+3. Use `zen check` to catch compile errors
+4. Use `zen explain ZXXXX` for detailed error explanations
+5. Use REPL to experiment interactively
+
+## 1.9 Common first-run issues
+- **Command not found**: Add install dir to PATH
+- **Permission denied**: `chmod +x zen`
+- **Module not found**: Check ZEN_PATH and file locations
+- **Import errors with pymport**: Ensure Python and deps installed in active env
+
+## 1.10 Exercises (extended)
+1. Install/locate `zen` binary and print version
+2. Write `hello.z` that prints your name and run it
+3. Use `zen -e` to compute `2**10`
+4. Start REPL, define function, call it, exit
+5. Create a multi-file project with local imports
+6. Use `zen explain` on a made-up code? Or find real error
+7. Write a script that reads args (see sys.argv patterns)
+8. Compare `zen run` vs compiling concepts

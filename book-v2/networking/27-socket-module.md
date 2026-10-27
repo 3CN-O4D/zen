@@ -344,3 +344,89 @@ let client = socket.accept(sock)
 5. Write a TCP echo server that handles one connection at a time.
 6. Write a UDP server that echoes back datagrams.
 7. Combine client and server in one script (server in a thread, client in main).
+
+
+## 27.12 Advanced socket patterns
+
+### Timeouts
+```zen
+import socket
+let s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(5.0)
+try {
+    s.connect(("example.com", 80))
+} catch(e) {
+    print("timeout or error")
+}
+```
+
+### Reuse address
+```zen
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+```
+
+### Non-blocking
+```zen
+s.setblocking(false)
+```
+
+### Sending all data
+```zen
+def sendall(sock, data) {
+    let total = 0
+    let bytes_data = data.encode() if typeof(data) == "string" else data
+    while total < len(bytes_data) {
+        let sent = sock.send(bytes_data[total:])
+        if sent == 0 { raise "connection broken" }
+        total = total + sent
+    }
+}
+```
+
+## 27.13 select/poll multiplexing concept
+
+For handling multiple clients:
+```zen
+import select
+# read_list = [server]
+# readable, writable, exceptional = select.select(read_list, [], [], timeout)
+```
+
+## 27.14 Unix domain sockets
+```zen
+# server
+import socket, os
+let path = "/tmp/zen.sock"
+try { os.unlink(path) } catch(e) {}
+let s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path)
+s.listen(1)
+```
+
+## 27.15 SSL/TLS over sockets (preview)
+Use `ssl` module or wrap socket. See Chapter 31.
+
+## 27.16 Common errors
+| Error | Cause |
+|---|---|
+| ConnectionRefusedError | No server listening |
+| TimeoutError | connect/recv timeout |
+| OSError: [Errno 98] Address already in use | Need SO_REUSEADDR |
+| OSError: [Errno 32] Broken pipe | Peer closed |
+| gaierror | DNS resolution failed |
+
+## 27.17 Debugging tips
+- Use `netcat`/`nc` to test servers
+- Use `tcpdump -i lo port 8080` to inspect
+- Check with `ss -tlnp` or `netstat`
+- Log all sends/receives
+- Test with curl/wget
+
+## 27.18 Exercises
+1. Echo server and client (TCP)
+2. UDP echo server/client
+3. Chat server handling multiple clients
+4. Port scanner (educational, only scan localhost/own machines)
+5. File transfer over TCP
+6. HTTP request with raw socket
+7. Implement timeout and retry logic

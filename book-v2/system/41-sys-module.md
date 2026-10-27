@@ -201,3 +201,144 @@ sys.syscall(num, args...)      // raw syscall
 3. Use `sys.fork` to create a child process that prints its PID.
 4. Use `sys.kill` to send SIGTERM to a child process and `sys.wait` for it.
 5. Use `sys.lseek` to read the last 100 bytes of a file.
+
+
+## Advanced Topics and Exercises
+
+### Safety considerations
+- Memory management across FFI boundary
+- Type mismatches
+- Calling conventions
+- Null pointers
+- Resource leaks
+
+### Debugging FFI
+- Check symbol names (nm, objdump)
+- Use cdecl/stdcall correctly
+- Test with simple functions first
+
+### Exercises
+1. Call simple C function from shared library
+2. Pass strings and arrays
+3. Handle pointers/structs
+4. Manage memory allocation
+5. Error handling across boundary
+6. Write wrapper module
+
+
+## 41.12 Worked examples — sys module
+
+Typical `sys` members (exact set depends on build): `argv`, `platform`,
+`version`, `exit`, `environ`, `path`, `modules`.
+
+### Example 1: Read command-line arguments
+
+```zen
+import sys
+print(sys.argv)       # ["app.z", "arg1", "arg2"]
+print(len(sys.argv))  # argument count
+```
+
+### Example 2: Platform detection
+
+```zen
+if sys.platform == "linux" {
+    print("running on Linux")
+} elif sys.platform == "darwin" {
+    print("running on macOS")
+} elif sys.platform == "windows" {
+    print("running on Windows")
+} else {
+    print("unknown platform: " + sys.platform)
+}
+```
+
+### Example 3: Environment variables
+
+```zen
+print(sys.environ["PATH"])
+let port = sys.environ["PORT"] ?? "8080"
+print("port=" + port)
+```
+
+### Example 4: Graceful exit
+
+```zen
+func main() {
+    # ... work ...
+    sys.exit(0)
+}
+```
+
+### Example 5: Inspect loaded modules
+
+```zen
+print(sys.modules)   # list/dict of loaded modules
+```
+
+## 41.13 Platform differences
+
+| Area | Linux | macOS | Windows |
+|------|-------|-------|---------|
+| Path separator | `/` | `/` | `\` |
+| Line ending | `\n` | `\n` | `\r\n` |
+| Shared lib ext | `.so` | `.dylib` | `.dll` |
+| Executable ext | (none) | (none) | `.exe` |
+| Case sensitivity | sensitive | insensitive | insensitive |
+| Signals | SIGINT/SIGTERM | similar | Ctrl-C/console handler |
+
+Write portable code: use `pathlib.Path` (joins correctly), avoid hardcoding
+`/`, test on each target.
+
+## 41.14 Exercises
+
+1. Print `sys.argv`, `sys.platform`, `sys.version`.
+2. Write a script that behaves differently on Linux vs Windows.
+3. Read `PORT` env var with a default of 8080.
+4. Implement `exit_with_code(code)` calling `sys.exit`.
+5. List all loaded modules at startup.
+6. Write `get_env(name, default)` using `sys.environ`.
+7. Detect if running under a debugger/CI via env vars.
+8. Build a small CLI that prints platform info.
+9. Compare `sys.path` entries before/after an import.
+10. Write a portable temp-file path using `pathlib`.
+
+
+
+## 41.12 Worked example — platform-aware script
+
+```zen
+import sys
+import pathlib
+import os
+
+print("argv: " + str(sys.argv))
+print("platform: " + sys.platform)
+print("version: " + sys.version)
+print("cwd: " + os.getcwd())
+print("HOME: " + str(sys.environ["HOME"] ?? ""))
+
+let p = pathlib.Path("data") / "config.txt"
+print("path: " + str(p))
+print("exists: " + str(p.exists()))
+
+if sys.platform == "windows" {
+    print("running on Windows")
+}
+```
+
+## 41.13 Troubleshooting sys
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| argv empty | no args passed | pass args after script |
+| wrong platform | running on unexpected OS | check sys.platform |
+| env var missing | not set | use `??` default |
+
+## 41.14 Exercises
+
+1. Print argv, platform, version.
+2. Read `PORT` env var with default 8080.
+3. List loaded modules at startup.
+4. Build a portable temp path with pathlib.
+5. Detect Windows vs Linux behavior.

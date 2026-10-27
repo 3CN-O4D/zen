@@ -250,3 +250,73 @@ p.port        // (none)
 5. Write `normalize_url(url)` that ensures a scheme and trailing slash.
 6. Write `get_query_param(url, key)` that extracts a single query parameter value.
 7. Write `merge_url_params(url, params)` that merges new params into existing URL.
+
+
+## 33.12 URL module — deep reference
+
+### URL anatomy
+
+```
+https://user:pass@example.com:8080/path/to/page?q=1&x=2#section
+ \__/   \___/ \_______/ \_______/ \_____/ \______/\______/
+scheme  auth     host       port    path   query    fragment
+```
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| scheme | protocol (http, https, ftp, ws) |
+| host | domain or IP |
+| port | TCP port (default 80/443) |
+| path | resource path |
+| query | key=value pairs after `?` |
+| fragment | anchor after `#` |
+| username/password | basic auth (deprecated/insecure) |
+
+### Usage
+
+```zen
+import url
+let u = url.parse("https://example.com:8080/path?q=1#sec")
+print(u.scheme)    # https
+print(u.host)      # example.com
+print(u.port)      # 8080
+print(u.path)      # /path
+print(u.query)     # q=1
+print(u.fragment)  # sec
+
+let built = url.build(scheme="https", host="example.com", path="/search", query="q=zen")
+print(built)   # https://example.com/search?q=zen
+
+let joined = url.join("https://example.com/base/", "sub/page")
+print(joined)  # https://example.com/sub/page
+
+let encoded = url.quote("hello world")
+print(encoded)   # hello%20world
+let decoded = url.unquote("hello%20world")
+print(decoded)   # hello world
+
+let params = url.parse_qs("q=1&x=2&q=3")
+print(params)   # #{q: ["1","3"], x: ["2"]}
+```
+
+### Encoding rules
+
+- `quote`: percent-encode a path segment.
+- `quote_plus`: like quote but space → `+`.
+- `unquote`/`unquote_plus`: reverse.
+
+### Exercises
+
+1. Parse a URL and print all components.
+2. Build a URL from components.
+3. Join a base URL with a relative path.
+4. Percent-encode/decode a search query.
+5. Parse query string into a dict of lists.
+6. Write `extract_domain(url)` returning just the host.
+7. Write `add_query_param(url, k, v)` adding/updating a param.
+8. Explain why `&` and `=` need encoding in query values.
+9. Write a tiny URL shortener encoder (conceptually).
+10. Compare `quote` vs `quote_plus`.
+

@@ -70,12 +70,20 @@ This comprehensive guide is organized into detailed sections covering every aspe
 47. [Network Security Tools](projects/47-security-tools.md) - Ethical hacking utilities
 48. [Capstone Projects](projects/48-capstone.md) - Full applications
 
+### Part 9: Runtime Internals
+50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
+51. [Type System In Depth](advanced/51-type-system-in-depth.md) - types, coercion, equality
+52. [Bytecode Reference](advanced/52-bytecode-reference.md) - bytecode opcodes and execution
+53. [Garbage Collection](advanced/53-garbage-collection.md) - memory management and cycles
+54. [Cranelift JIT Compiler](advanced/54-jit-compiler.md) - JIT, inline caches, OSR, deopt
+
 ### Appendices
 - [Appendix A: Built-in Functions](appendix/a-builtins.md)
 - [Appendix B: Error Codes Reference](appendix/b-error-codes.md)
 - [Appendix C: Zen CLI Reference](appendix/c-cli-reference.md)
 - [Appendix D: Standard Library Index](appendix/d-stdlib-index.md)
 - [Appendix E: Quick Reference Card](appendix/e-quick-reference.md)
+- [Appendix F: Complete Language Reference](appendix/f-complete-reference.md)
 
 ## About This Book
 

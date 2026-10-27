@@ -232,3 +232,83 @@ math.fsum([0.1, 0.2, 0.3])  # 0.6
 8. Demonstrate `math.fsum` is more accurate than naive sum for `[0.1, 0.2, 0.3]`.
 9. Write `is_perfect_square(n)` using `math.sqrt`.
 10. Write `greatest_common_divisor_list(nums)` using `math.gcd` repeatedly.
+
+
+## 15.12 math module — complete function reference
+
+Constants: `pi`, `e`, `tau`, `inf`, `nan`.
+
+| Function | Purpose | Example | Result |
+|----------|---------|---------|--------|
+| `abs(x)` | absolute value | `abs(-5)` | `5` |
+| `sqrt(x)` | square root | `sqrt(16)` | `4.0` |
+| `pow(a, b)` | power | `pow(2, 3)` | `8.0` |
+| `exp(x)` | e^x | `exp(1)` | `2.718...` |
+| `log(x, base=None)` | logarithm | `log(100, 10)` | `2.0` |
+| `log2(x)` | base-2 log | `log2(8)` | `3.0` |
+| `log10(x)` | base-10 log | `log10(100)` | `2.0` |
+| `floor(x)` | floor | `floor(3.7)` | `3.0` |
+| `ceil(x)` | ceiling | `ceil(3.2)` | `4.0` |
+| `trunc(x)` | truncate toward zero | `trunc(-3.7)` | `-3.0` |
+| `round(x)` | round nearest | `round(3.5)` | `4.0` |
+| `sin(x)` | sine (radians) | `sin(0)` | `0.0` |
+| `cos(x)` | cosine | `cos(0)` | `1.0` |
+| `tan(x)` | tangent | `tan(0)` | `0.0` |
+| `asin(x)` | arcsine | `asin(1)` | `1.570...` |
+| `acos(x)` | arccosine | `acos(1)` | `0.0` |
+| `atan(x)` | arctangent | `atan(1)` | `0.785...` |
+| `atan2(y, x)` | atan of y/x | `atan2(1, 1)` | `0.785...` |
+| `degrees(x)` | radians to degrees | `degrees(pi)` | `180.0` |
+| `radians(x)` | degrees to radians | `radians(180)` | `3.141...` |
+| `gcd(a, b)` | greatest common divisor | `gcd(12, 8)` | `4` |
+| `lcm(a, b)` | least common multiple | `lcm(4, 6)` | `12` |
+| `factorial(n)` | factorial | `factorial(5)` | `120` |
+| `comb(n, k)` | combinations | `comb(5, 2)` | `10` |
+| `perm(n, k=None)` | permutations | `perm(5, 2)` | `20` |
+| `remainder(x, y)` | remainder | `remainder(7, 3)` | `1` |
+| `copysign(x, y)` | sign of y to x | `copysign(1, -2)` | `-1.0` |
+| `min(a, b=None)` | minimum | `min(3, 1)` | `1` |
+| `max(a, b=None)` | maximum | `max(3, 1)` | `3` |
+| `fsum(a, b=None)` | precise sum | `fsum([0.1,0.2])` | `0.3` |
+| `prod(a, b=None)` | product | `prod([2,3,4])` | `24` |
+| `hypot(a, b=None)` | hypotenuse | `hypot(3, 4)` | `5.0` |
+| `isnan(x)` | is NaN | `isnan(nan)` | `true` |
+| `isfinite(x)` | is finite | `isfinite(inf)` | `false` |
+| `isinf(x)` | is infinite | `isinf(inf)` | `true` |
+| `modf(x)` | fractional+integral | `modf(3.5)` | `#(0.5, 3.0)` |
+| `frexp(x)` | mantissa/exponent | `frexp(8.0)` | `#(0.5, 4)` |
+| `ldexp(x, exp)` | x * 2^exp | `ldexp(0.5, 3)` | `4.0` |
+
+### Usage
+
+```zen
+import math
+print(math.pi)           # 3.141592653589793
+print(math.sqrt(25))     # 5.0
+print(math.hypot(3, 4))  # 5.0
+print(math.factorial(5)) # 120
+print(math.gcd(48, 18))  # 6
+print(math.isnan(0/0))   # true (if 0/0 yields nan)
+```
+
+### Edge cases
+
+- `sqrt(-1)` raises a domain error.
+- `log(0)` or `log(negative)` raises a domain error.
+- `factorial` of negative raises a ValueError.
+- `inf` and `nan` propagate through most operations per IEEE 754.
+- `nan != nan` is true.
+
+## 15.13 Exercises
+
+1. Compute the area of a circle: `pi * r * r`.
+2. Implement `distance(x1, y1, x2, y2)` using `hypot`.
+3. Write `degrees_to_radians` and `radians_to_degrees` wrappers.
+4. Verify `sin(x)**2 + cos(x)**2 == 1` for several x.
+5. Implement `nth_root(x, n)` using `pow(x, 1/n)`.
+6. Write `is_perfect_square(n)` using `sqrt`.
+7. Compute compound interest: `P * (1 + r/n)**(n*t)`.
+8. Implement `greatest_common_divisor` via `math.gcd`.
+9. Write `safe_log(x)` returning nil for x <= 0.
+10. Create a trigonometric table for 0, 30, 45, 60, 90 degrees.
+
