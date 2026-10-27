@@ -1,24 +1,22 @@
 # Chapter 40: FFI in Practice
 
-This chapter covers practical FFI patterns: capability gates, calling real
-libraries, error handling, and safe integration.
+This chapter covers practical FFI patterns: capability gates, calling real libraries, error handling, and safe integration.
 
 ## 40.1 FFI capability gates
 
-WARNING:️ FFI can load arbitrary shared libraries and call arbitrary functions. Use
-`ffi.allow` and `ffi.deny` to restrict which libraries can be loaded.
+⚠️ FFI can load arbitrary shared libraries and call arbitrary functions. Use `ffi.allow` and `ffi.deny` to restrict which libraries can be loaded.
 
 ```zen
 import ffi
 
-# Deny loading from dangerous locations
+// Deny loading from dangerous locations
 ffi.deny(["/tmp/", "/var/tmp/"])
 
-# Only allow loading from trusted directories
+// Only allow loading from trusted directories
 ffi.allow(["/usr/lib/", "/lib/"])
 
-# Now ffi.load("/tmp/evil.so") raises an error
-# ffi.load("/usr/lib/libc.so.6") works
+// Now ffi.load("/tmp/evil.so") raises an error
+// ffi.load("/usr/lib/libc.so.6") works
 ```
 
 ### Behavior
@@ -38,12 +36,12 @@ import ffi
 ffi.allow(["/usr/lib/", "/lib/"])
 let libc = ffi.load("libc.so.6")
 
-# getpid() → int
+// getpid() → int
 let getpid = ffi.symbol(libc, "getpid")
 let pid = ffi.call(getpid, [])
 print("PID: " + str(pid))
 
-# sleep(seconds) → int (seconds remaining)
+// sleep(seconds) → int (seconds remaining)
 let sleep = ffi.symbol(libc, "sleep")
 let remaining = ffi.call(sleep, [1])
 print("slept, remaining: " + str(remaining))
@@ -58,7 +56,7 @@ import ffi
 
 let libc = ffi.load("libc.so.6")
 
-# gethostname(buf, len) → int
+// gethostname(buf, len) → int
 let gethostname = ffi.symbol(libc, "gethostname")
 let buf = ffi.malloc(256)
 ffi.call(gethostname, [buf, 256])
@@ -81,7 +79,7 @@ ffi.write(src, "HelloWorld")
 let dst = ffi.malloc(16)
 ffi.call(memcpy, [dst, src, 11])
 let copied = ffi.read(dst, 11)
-print(copied)  # HelloWorld
+print(copied)  // HelloWorld
 
 ffi.free(src)
 ffi.free(dst)
@@ -92,7 +90,7 @@ ffi.free(dst)
 ```zen
 import ffi
 
-# ffi.load raises on failure
+// ffi.load raises on failure
 var lib = nil
 try {
     lib = ffi.load("/nonexistent/lib.so")
@@ -101,7 +99,7 @@ try {
     lib = nil
 }
 
-# ffi.symbol raises if symbol not found
+// ffi.symbol raises if symbol not found
 if lib != nil {
     try {
         let addr = ffi.symbol(lib, "nonexistent_func")
@@ -113,8 +111,7 @@ if lib != nil {
 
 ## 40.6 Calling conventions and types
 
-Zen's FFI uses the platform's default C calling convention (cdecl on x86,
-System V AMD64 ABI on x86_64). Supported argument types:
+Zen's FFI uses the platform's default C calling convention (cdecl on x86, System V AMD64 ABI on x86_64). Supported argument types:
 
 - Zen `int` → C `int`/`long`
 - Zen `float` → C `double`
@@ -124,9 +121,7 @@ System V AMD64 ABI on x86_64). Supported argument types:
 
 Return types: `int` (default), `double`, `void`, `str`, bytes.
 
-> WARNING:️ Zen FFI does **not** support Zen closures as C callbacks. If a C
-> function needs a callback, you must pass a native function pointer
-> obtained from `ffi.symbol`.
+> ⚠️ Zen FFI does **not** support Zen closures as C callbacks. If a C function needs a callback, you must pass a native function pointer obtained from `ffi.symbol`.
 
 ## 40.7 Complete example: libc time
 
@@ -136,12 +131,12 @@ import ffi
 ffi.allow(["/usr/lib/", "/lib/"])
 let libc = ffi.load("libc.so.6")
 
-# time(NULL) → time_t (int)
+// time(NULL) → time_t (int)
 let time_fn = ffi.symbol(libc, "time")
 let now = ffi.call(time_fn, [nil])
 print("Unix time: " + str(now))
 
-# getpid() → int
+// getpid() → int
 let getpid = ffi.symbol(libc, "getpid")
 let pid = ffi.call(getpid, [])
 print("Process ID: " + str(pid))
@@ -152,26 +147,26 @@ print("Process ID: " + str(pid))
 ```zen
 import ffi
 
-# Security
+// Security
 ffi.allow(["/usr/lib/"])
 ffi.deny(["/tmp/"])
 
-# Load + symbol
+// Load + symbol
 let lib = ffi.load("libc.so.6")
 let addr = ffi.symbol(lib, "function_name")
 
-# Call
+// Call
 let r = ffi.call(addr, [arg1, arg2], "int")
 let r = ffi.call(addr, [4.5], "double")
 
-# Memory
+// Memory
 let ptr = ffi.malloc(1024)
 ffi.write(ptr, "data")
 let s = ffi.read(ptr, 10)
 let str = ffi.str(ptr)
 ffi.free(ptr)
 
-# Types
+// Types
 ffi.sizeof("int")
 ffi.alignof("double")
 ffi.errno()

@@ -1,25 +1,21 @@
 # Chapter 39: FFI Fundamentals
 
-Zen's `ffi` module lets you call functions in native C shared libraries
-(`.so`, `.dll`, `.dylib`) using libffi, with true C ABI support. This chapter
-covers loading libraries, finding symbols, calling functions, and managing
-memory.
+Zen's `ffi` module lets you call functions in native C shared libraries (`.so`, `.dll`, `.dylib`) using libffi, with true C ABI support. This chapter covers loading libraries, finding symbols, calling functions, and managing memory.
 
 ## 39.1 Loading a library
 
 ```zen
 import ffi
 
-# Load a shared library
-let libc = ffi.load("libc.so.6")        # Linux
-# let libc = ffi.load("libc.dylib")     # macOS
-# let libc = ffi.load("msvcrt.dll")     # Windows
+// Load a shared library
+let libc = ffi.load("libc.so.6")        // Linux
+// let libc = ffi.load("libc.dylib")     // macOS
+// let libc = ffi.load("msvcrt.dll")     // Windows
 
-print(libc)  # library handle (integer)
+print(libc)  // library handle (integer)
 ```
 
-`ffi.load(path)` returns a library handle you pass to `ffi.symbol` and
-`ffi.call`.
+`ffi.load(path)` returns a library handle you pass to `ffi.symbol` and `ffi.call`.
 
 ## 39.2 Finding symbols
 
@@ -28,12 +24,12 @@ import ffi
 
 let libc = ffi.load("libc.so.6")
 
-# Get the address of a function
+// Get the address of a function
 let puts_addr = ffi.symbol(libc, "puts")
 let printf_addr = ffi.symbol(libc, "printf")
 
-print(puts_addr)    # integer address
-print(printf_addr)  # integer address
+print(puts_addr)    // integer address
+print(printf_addr)  // integer address
 ```
 
 `ffi.symbol(lib, name)` returns the address of `name` in `lib`.
@@ -46,9 +42,9 @@ import ffi
 let libc = ffi.load("libc.so.6")
 let puts_addr = ffi.symbol(libc, "puts")
 
-# Call puts("hello") — returns int
+// Call puts("hello") — returns int
 let result = ffi.call(puts_addr, ["hello"], {"type": "int"})
-print(result)  # number of chars printed (or 0)
+print(result)  // number of chars printed (or 0)
 ```
 
 ### `ffi.call(address, args, ret?)`
@@ -84,18 +80,18 @@ import ffi
 
 let libc = ffi.load("libc.so.6")
 
-# puts("hello") → int
+// puts("hello") → int
 let r1 = ffi.call(ffi.symbol(libc, "puts"), ["hello"])
 print(r1)
 
-# printf("value: %d\n", 42) → int
+// printf("value: %d\n", 42) → int
 let r2 = ffi.call(ffi.symbol(libc, "printf"), ["value: %d\n", 42])
 print(r2)
 
-# sqrt(2.0) → double
+// sqrt(2.0) → double
 let sqrt_addr = ffi.symbol(libc, "sqrt")
 let r3 = ffi.call(sqrt_addr, [{"type": "double", "value": 2.0}], "double")
-print(r3)  # 1.4142135623730951
+print(r3)  // 1.4142135623730951
 ```
 
 ## 39.4 Memory management
@@ -103,38 +99,38 @@ print(r3)  # 1.4142135623730951
 ```zen
 import ffi
 
-# Allocate memory
+// Allocate memory
 let ptr = ffi.malloc(1024)
-print(ptr)  # address
+print(ptr)  // address
 
-# Reallocate
+// Reallocate
 let ptr2 = ffi.realloc(ptr, 2048)
 
-# Free
+// Free
 ffi.free(ptr)
 
-# Read / write memory
+// Read / write memory
 ffi.write(ptr, "hello")
 let s = ffi.read(ptr, 5)
-print(s)  # hello
+print(s)  // hello
 
-# String conversion
+// String conversion
 let s2 = ffi.str(ptr)
-print(s2)  # hello
+print(s2)  // hello
 
-# Set bytes at offset
-ffi.set(ptr, 0, {"buf": "776f726c64"})  # "world" in hex
+// Set bytes at offset
+ffi.set(ptr, 0, {"buf": "776f726c64"})  // "world" in hex
 let s3 = ffi.read(ptr, 5)
-print(s3)  # world
+print(s3)  // world
 
-# Size of types
+// Size of types
 print(ffi.sizeof("int"))    # 4
 print(ffi.sizeof("double")) # 8
 
-# Alignment
+// Alignment
 print(ffi.alignof("double")) # 8
 
-# errno
+// errno
 print(ffi.errno())
 print(ffi.strerror(ffi.errno()))
 ```
@@ -163,23 +159,21 @@ import ffi
 let libc = ffi.load("libc.so.6")
 let qsort_addr = ffi.symbol(libc, "qsort")
 
-# qsort(base, nel, width, compar)
-# We'd need a callback for compar — FFI doesn't support Zen closures as
-# C callbacks directly. See Chapter 40 for workarounds.
+// qsort(base, nel, width, compar)
+// We'd need a callback for compar — FFI doesn't support Zen closures as
+// C callbacks directly. See Chapter 40 for workarounds.
 
 print("qsort loaded at " + str(qsort_addr))
 ```
 
 ## 39.6 Safety warnings
 
-WARNING:️ **FFI is unsafe.** Zen cannot validate:
+⚠️ **FFI is unsafe.** Zen cannot validate:
 - Whether the address is a real function
 - Whether argument types match the C signature
 - Whether memory accesses are in bounds
 
-Misuse can crash the process or corrupt memory. Only load libraries you
-trust, and use `ffi.allow`/`ffi.deny` to restrict which libraries can be
-loaded (see Chapter 40).
+Misuse can crash the process or corrupt memory. Only load libraries you trust, and use `ffi.allow`/`ffi.deny` to restrict which libraries can be loaded (see Chapter 40).
 
 ## 39.7 Quick reference
 

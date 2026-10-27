@@ -1,32 +1,29 @@
 # Chapter 41: sys Module
 
-The `sys` module provides low-level system operations: file descriptors,
-process control, signals, and direct syscalls. It's a thin wrapper over POSIX
-system calls.
+The `sys` module provides low-level system operations: file descriptors, process control, signals, and direct syscalls. It's a thin wrapper over POSIX system calls.
 
-> WARNING:️ `sys` is Linux/macOS only. On Windows, `sys_stub` provides limited
-> functionality. Use `fs`, `os`, and `process` for portable operations.
+> ⚠️ `sys` is Linux/macOS only. On Windows, `sys_stub` provides limited functionality. Use `fs`, `os`, and `process` for portable operations.
 
 ## 41.1 File descriptor operations
 
 ```zen
 import sys
 
-# Open a file
+// Open a file
 let fd = sys.open("data.txt", sys.O_RDONLY)
-print(fd)  # file descriptor integer
+print(fd)  // file descriptor integer
 
-# Read
+// Read
 let data = sys.read(fd, 1024)
 print(data)
 
-# Write
+// Write
 sys.write(fd, "hello")
 
-# Seek
+// Seek
 sys.lseek(fd, 0, sys.SEEK_SET)
 
-# Close
+// Close
 sys.close(fd)
 ```
 
@@ -54,15 +51,15 @@ sys.close(fd)
 ```zen
 import sys
 
-# Get process IDs
-print(sys.getpid())     # process ID
-print(sys.getppid())    # parent process ID
-print(sys.getuid())     # user ID
-print(sys.geteuid())    # effective user ID
-print(sys.getgid())     # group ID
-print(sys.getegid())    # effective group ID
+// Get process IDs
+print(sys.getpid())     // process ID
+print(sys.getppid())    // parent process ID
+print(sys.getuid())     // user ID
+print(sys.geteuid())    // effective user ID
+print(sys.getgid())     // group ID
+print(sys.getegid())    // effective group ID
 
-# Fork (Unix only)
+// Fork (Unix only)
 let pid = sys.fork()
 if pid == 0 {
     print("in child")
@@ -71,8 +68,8 @@ if pid == 0 {
     sys.wait(pid)
 }
 
-# Kill a process
-sys.kill(pid, 15)  # SIGTERM
+// Kill a process
+sys.kill(pid, 15)  // SIGTERM
 ```
 
 ## 41.3 Pipes
@@ -84,7 +81,7 @@ let [read_fd, write_fd] = sys.pipe()
 
 sys.write(write_fd, "hello through pipe")
 let msg = sys.read(read_fd, 1024)
-print(msg)  # hello through pipe
+print(msg)  // hello through pipe
 
 sys.close(read_fd)
 sys.close(write_fd)
@@ -95,13 +92,12 @@ sys.close(write_fd)
 ```zen
 import sys
 
-# Make a raw syscall by number
+// Make a raw syscall by number
 let result = sys.syscall(sys.SYS_write, 1, "hello\n", 6)
 print(result)
 ```
 
-Syscall numbers are platform-specific (see `/usr/include/asm/unistd.h` on
-Linux).
+Syscall numbers are platform-specific (see `/usr/include/asm/unistd.h` on Linux).
 
 ## 41.5 Signal handling (limited)
 
@@ -142,7 +138,7 @@ import sys
 
 let fd = sys.open("file.txt", sys.O_RDONLY)
 let fd2 = sys.dup(fd)
-# fd2 refers to the same file
+// fd2 refers to the same file
 sys.close(fd)
 sys.close(fd2)
 ```
@@ -155,7 +151,7 @@ import process
 
 let [rfd, wfd] = sys.pipe()
 
-# Fork and have child write, parent read
+// Fork and have child write, parent read
 let pid = sys.fork()
 if pid == 0 {
     sys.close(rfd)
@@ -175,30 +171,27 @@ if pid == 0 {
 ```zen
 import sys
 
-sys.open(path, flags)          # file descriptor
-sys.read(fd, n)                # read bytes
-sys.write(fd, data)            # write bytes
-sys.close(fd)                  # close
-sys.lseek(fd, offset, whence)  # seek
-sys.dup(fd)                    # duplicate fd
-sys.pipe()                     # [read_fd, write_fd]
-sys.getpid()                   # process ID
-sys.getppid()                  # parent PID
-sys.fork()                     # fork (Unix)
-sys.kill(pid, sig)             # send signal
-sys.wait(pid)                  # wait for child
-sys.syscall(num, args...)      # raw syscall
+sys.open(path, flags)          // file descriptor
+sys.read(fd, n)                // read bytes
+sys.write(fd, data)            // write bytes
+sys.close(fd)                  // close
+sys.lseek(fd, offset, whence)  // seek
+sys.dup(fd)                    // duplicate fd
+sys.pipe()                     // [read_fd, write_fd]
+sys.getpid()                   // process ID
+sys.getppid()                  // parent PID
+sys.fork()                     // fork (Unix)
+sys.kill(pid, sig)             // send signal
+sys.wait(pid)                  // wait for child
+sys.syscall(num, args...)      // raw syscall
 ```
 
 ## 41.8 Common pitfalls
 
-- **`sys` is Unix-only.** On Windows, many functions are stubs or raise
-  errors.
-- **File descriptors are integers.** Track them yourself; Zen won't close
-  them automatically.
+- **`sys` is Unix-only.** On Windows, many functions are stubs or raise errors.
+- **File descriptors are integers.** Track them yourself; Zen won't close them automatically.
 - **`sys.read` may return fewer bytes** than requested. Loop to read all.
-- **Forked processes share file descriptors.** Close what you don't need in
-  each process.
+- **Forked processes share file descriptors.** Close what you don't need in each process.
 - **Raw syscalls are dangerous.** Wrong arguments can crash the process.
 
 ## 41.9 Exercises
