@@ -1,151 +1,265 @@
 # Chapter 26: Networking Fundamentals
 
-Before diving into Zen's networking modules, it's important to understand the basics of computer networking, protocols, and how they work.
+Zen's networking stack provides sockets, DNS, HTTP, TLS, and raw packet crafting. This chapter covers the fundamentals: IP addressing, TCP vs UDP, ports, the OSI model mapping, and how Zen's networking modules fit together.
 
-## What is Networking?
+## 26.1 Networking module map
 
-Networking allows computers to communicate with each other over a network (like the internet). In Zen, you can build clients, servers, and work with various protocols.
+Zen's networking is split across several modules, each at a different layer:
 
-## The OSI Model (Simplified)
+| Module | Layer | Purpose |
+|--------|-------|---------|
+| `socket` | Transport (L4) | TCP/UDP sockets, `connect`, `bind`, `listen`, `accept`, `send`, `recv` |
+| `net` | Transport (L4) | Higher-level TCP/UDP helpers (`tcp_connect`, `tcp_send`, etc.) |
+| `net.dns` | Application (L7) | DNS resolution (`resolve`, `gethostbyname`) |
+| `requests` | Application (L7) | HTTP client (GET/POST/etc., sessions, TLS) |
+| `http` | Application (L7) | Low-level HTTP client |
+| `http.server` | Application (L7) | Static file HTTP server |
+| `tls` | Security (L4.5) | TLS connections with certificate pinning |
+| `raw` / `net_raw` | Network (L3) | Raw IP sockets, packet crafting (`pack_ip`, `pack_tcp`) |
+| `sys` | System | File descriptors, pipes, syscalls |
 
-Understanding layers helps when working with networking:
+## 26.2 IP addressing
 
-| Layer | Name | What it does | Examples |
-|-------|------|--------------|----------|
-| 7 | Application | User-facing protocols | HTTP, HTTPS, DNS, FTP |
-| 6 | Presentation | Data formatting/encryption | SSL/TLS, JSON |
-| 5 | Session | Managing connections | Sessions, cookies |
-| 4 | Transport | Reliable delivery | TCP, UDP |
-| 3 | Network | Routing between networks | IP (IPv4/IPv6) |
-| 2 | Data Link | Local network delivery | Ethernet, WiFi |
-| 1 | Physical | Hardware transmission | Cables, radio |
+Zen works with IPv4 addresses (dotted-decimal strings like `"192.168.1.1"`). IPv6 support depends on the platform.
 
-## Key Networking Concepts
+```zen
+import socket
+import dns
 
-### IP Addresses
+// Resolve a hostname to IP addresses
+let addrs = dns.resolve("example.com")
+for addr in addrs {
+    print(addr)  # "93.184.216.34" or "2606:2800:220:1:248:1893:25c8:1946"
+}
 
-Unique identifiers for devices on a network:
-- **IPv4**: `192.168.1.1`, `8.8.8.8` (32-bit)
-- **IPv6**: `2001:4860:4860::8888` (128-bit)
-- **localhost/loopback**: `127.0.0.1`
+// localhost
+print(dns.resolve("localhost"))  # ["127.0.0.1", "::1"]
+```
 
-### Ports
+### Private IP ranges (RFC 1918)
 
-Ports identify specific services on a device (0-65535):
-- **Well-known ports** (0-1023): HTTP(80), HTTPS(443), SSH(22), FTP(21)
-- **Registered ports** (1024-49151): Application-specific
-- **Dynamic/private** (49152-65535): Temporary use
+| Range | Purpose |
+|-------|---------|
+| `10.0.0.0` – `10.255.255.255` | Private (class A) |
+| `172.16.0.0` – `172.31.255.255` | Private (class B) |
+| `192.168.0.0` – `192.168.255.255` | Private (class C) |
+| `127.0.0.0` – `127.255.255.255` | Loopback (localhost) |
+| `169.254.0.0` – `169.254.255.255` | Link-local (APIPA) |
 
-### Sockets
+```zen
+import dns
 
-A socket is an endpoint for communication - combination of IP address + port.
+// Localhost always resolves
+print(dns.resolve("127.0.0.1"))   # ["127.0.0.1"]
+print(dns.resolve("localhost"))   # ["127.0.0.1", ...]
+```
 
-### TCP vs UDP
+## 26.3 Ports
+
+Ports are 16-bit integers (0–65535). Ports 0–1023 are "well-known" and typically require root privileges to bind.
+
+| Port | Service |
+|------|---------|
+| 20 | FTP data |
+| 21 | FTP control |
+| 22 | SSH |
+| 23 | Telnet |
+| 25 | SMTP |
+| 53 | DNS |
+| 67/68 | DHCP |
+| 80 | HTTP |
+| 110 | POP3 |
+| 123 | NTP |
+| 143 | IMAP |
+| 161/162 | SNMP |
+| 389 | LDAP |
+| 443 | HTTPS |
+| 465 | SMTPS |
+| 587 | SMTP submission |
+| 636 | LDAPS |
+| 993 | IMAPS |
+| 995 | POP3S |
+| 1433 | MSSQL |
+| 3306 | MySQL |
+| 3389 | RDP |
+| 5432 | PostgreSQL |
+| 5900 | VNC |
+| 6379 | Redis |
+| 27017 | MongoDB |
+| 8080 | HTTP alternate |
+
+```zen
+import socket
+
+// Bind to port 80 typically requires root
+let server = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.bind(server, "0.0.0.0", 80)   # may fail without root
+socket.bind(server, "0.0.0.0", 8080)  # usually OK
+```
+
+## 26.4 TCP vs UDP
 
 | Feature | TCP | UDP |
 |---------|-----|-----|
-| Connection | Connection-oriented | Connectionless |
-| Reliability | Guaranteed delivery | No guarantee |
-| Ordering | Ordered delivery | No ordering |
-| Speed | Slower (overhead) | Faster |
-| Use cases | HTTP, HTTPS, FTP, Email | DNS, Streaming, Gaming |
-
-## Common Protocols
-
-### HTTP (HyperText Transfer Protocol)
-- Port 80
-- Request/Response model
-- Stateless
-- Used for web pages and APIs
-
-### HTTPS (HTTP Secure)
-- Port 443
-- HTTP over TLS/SSL encryption
-- Secure communication
-
-### DNS (Domain Name System)
-- Port 53
-- Translates domain names to IP addresses
-- `example.com` → `93.184.216.34`
-
-### FTP (File Transfer Protocol)
-- Ports 20, 21
-- File transfers
-
-## Client-Server Model
-
-Most network applications follow this model:
-- **Server**: Listens for connections, provides services
-- **Client**: Connects to server, requests services
+| Connection | Connection-oriented (handshake) | Connectionless |
+| Reliability | Reliable (retransmission, ACK) | Unreliable (no guarantee) |
+| Ordering | Ordered | Unordered |
+| Flow control | Yes | No |
+| Congestion control | Yes | No |
+| Header overhead | 20+ bytes | 8 bytes |
+| Use case | Web, file transfer, email | DNS, streaming, VoIP, games |
 
 ```zen
-# Conceptually
-# Server waits for connections on port 8080
-# Client connects to server:8080 and requests data
+import socket
+
+// TCP socket (stream)
+let tcp = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.connect(tcp, "example.com", 80)
+socket.send(tcp, "GET / HTTP/1.0\r\n\r\n")
+let resp = socket.recv(tcp, 4096)
+socket.close(tcp)
+
+// UDP socket (datagram)
+let udp = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
+socket.send_to(udp, "query", "8.8.8.8", 53)
+let [data, addr] = socket.recv_from(udp, 4096)
+socket.close(udp)
 ```
 
-## URLs (Uniform Resource Locators)
+## 26.5 The OSI model and Zen
 
-Structure: `scheme://host:port/path?query#fragment`
+| OSI Layer | Name | Zen module | Example |
+|-----------|------|------------|---------|
+| 7 | Application | `requests`, `http`, `http.server`, `dns` | HTTP GET, DNS resolve |
+| 6 | Presentation | `base64`, `binascii`, `crypto` | Encoding, encryption |
+| 5 | Session | `requests.Session` | HTTP sessions |
+| 4 | Transport | `socket`, `net`, `tls` | TCP, UDP, TLS |
+| 3 | Network | `raw`, `net_raw` | IP packets, ICMP |
+| 2 | Data Link | — | (not exposed) |
+| 1 | Physical | — | (not exposed) |
 
-Example: `https://example.com:443/products?id=123#details`
-- scheme: `https`
-- host: `example.com`
-- port: `443`
-- path: `/products`
-- query: `id=123`
-- fragment: `details`
+Zen focuses on layers 3–7. Layers 1–2 (physical, data link) are handled by the OS/kernel.
 
-## Zen Networking Modules
+## 26.6 Sockets: file descriptors
 
-Zen provides several modules for networking:
+Zen sockets use integer file descriptors (handles) into an internal resource table:
 
-| Module | Purpose | Level |
-|--------|---------|-------|
-| `socket` | Low-level BSD sockets | Very low |
-| `http` | HTTP server | High-level |
-| `requests` | HTTP client | High-level |
-| `dns` | DNS lookups | Mid-level |
-| `url` | URL parsing | Utility |
-| `raw_socket` | Raw packet access | Very low |
+```zen
+import socket
 
-## Network Programming Workflow
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+print(sock)   # 3 (an integer handle)
+socket.connect(sock, "example.com", 80)
+socket.close(sock)   # release the handle
+```
 
-### For a Client (e.g., HTTP request)
-1. Resolve hostname to IP (DNS)
-2. Create socket
-3. Connect to server
-4. Send request
-5. Receive response
-6. Close connection
+Always close sockets when done to avoid resource leaks:
+```zen
+import socket
 
-### For a Server
-1. Create socket
-2. Bind to IP and port
-3. Listen for connections
-4. Accept connections
-5. Handle requests
-6. Send responses
-7. Close
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+try {
+    socket.connect(sock, "example.com", 80)
+    socket.send(sock, "GET / HTTP/1.0\r\n\r\n")
+    let resp = socket.recv(sock, 4096)
+    print(resp)
+} finally {
+    socket.close(sock)   # always close
+}
+```
 
-## Security Considerations
+## 26.6 Address families
 
-When doing network programming:
-- **Validate input** - Never trust network data
-- **Use HTTPS** - Encrypt sensitive data
-- **Check certificates** - Verify SSL/TLS certs
-- **Handle errors** - Network can fail
-- **Rate limiting** - Be respectful to servers
-- **Firewalls** - Consider network restrictions
+| Constant | Meaning |
+|----------|---------|
+| `socket.AF_INET` | IPv4 |
+| `socket.AF_INET6` | IPv6 (platform-dependent) |
+| `socket.AF_UNIX` | Unix domain sockets (platform-dependent) |
 
-## Chapter Summary
+### Socket types
 
-- Networking enables inter-computer communication
-- TCP is reliable, UDP is fast but unreliable
-- Ports identify services, IPs identify hosts
-- HTTP/HTTPS for web, DNS for name resolution
-- Zen has socket, http, requests, dns modules
-- Understand client-server model
-- Security is crucial in network programming
+| Constant | Meaning |
+|----------|---------|
+| `socket.SOCK_STREAM` | TCP (reliable stream) |
+| `socket.SOCK_DGRAM` | UDP (unreliable datagram) |
+| `socket.SOCK_RAW` | Raw IP (requires root) |
 
-**Next:** Chapter 27 - socket Module
+```zen
+import socket
+
+let tcp = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+let udp = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
+let raw = socket.create(socket.AF_INET, socket.SOCK_RAW)  # may need root
+```
+
+## 26.6 Timeouts
+
+Socket operations can block indefinitely. Always set timeouts:
+
+```zen
+import socket
+
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.settimeout(sock, 5000)   # 5 second timeout
+
+try {
+    socket.connect(sock, "slow.example.com", 80)
+    socket.send(sock, "GET / HTTP/1.0\r\n\r\n")
+    let resp = socket.recv(sock, 4096)
+    print(resp)
+} catch as e {
+    print(e.msg)  # timeout or connection error
+} finally {
+    socket.close(sock)
+}
+```
+
+## 26.6 Byte order
+
+Network byte order is big-endian. Zen's socket functions handle this internally. When crafting raw packets with `net_raw`, you must manually use big-endian:
+
+```zen
+import net_raw
+
+// pack_ip and pack_tcp handle byte order internally
+let pkt = net_raw.pack_ip("1.2.3.4", "5.6.7.8", 6)
+```
+
+## 26.7 Quick reference
+
+```zen
+import socket
+import dns
+import net_raw
+
+// Resolve
+let addrs = dns.resolve("example.com")
+
+// TCP client
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.settimeout(sock, 5000)
+socket.connect(sock, addrs[0], 80)
+socket.send(sock, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+let resp = socket.recv(sock, 4096)
+socket.close(sock)
+
+// UDP
+let udp = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
+socket.send_to(udp, "ping", "127.0.0.1", 9999)
+let [data, addr] = socket.recv_from(udp, 4096)
+socket.close(udp)
+
+// Raw IP packet
+let ip_pkt = net_raw.pack_ip("1.2.3.4", "5.6.7.8", 6)
+let tcp_pkt = net_raw.pack_tcp(12345, 80, "SYN")
+```
+
+## 26.8 Exercises
+
+1. Write a function `resolve_all(host)` that prints all IP addresses for a hostname.
+2. Write a TCP echo client that sends a line and prints the response.
+3. Write a UDP client that sends a datagram and waits for a reply.
+4. Write a port scanner for ports 1–1000 on localhost with a 100ms timeout per port.
+5. Create a raw IP packet with `net_raw.pack_ip` and inspect the first 20 bytes.
+6. Write a function `is_port_open(host, port, timeout)` that returns true if a TCP connect succeeds.
+7. Demonstrate that `socket.close` releases the file descriptor by opening and closing multiple sockets.

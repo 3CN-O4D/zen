@@ -1,261 +1,346 @@
 # Chapter 27: socket Module
 
-The `socket` module provides low-level BSD socket API access in Zen. This gives you full control over network connections but requires understanding socket programming concepts.
+The `socket` module provides low-level TCP/UDP/raw sockets. It's Tier 1 of Zen's networking stack — thin wrappers over the OS socket API with integer file descriptors (handles).
 
-## Importing the socket Module
-
-```zen
-import socket
-```
-
-## Socket Types
-
-### Socket Families
-- `socket.AF_INET` - IPv4
-- `socket.AF_INET6` - IPv6
-- `socket.AF_UNIX` - Unix domain sockets (local)
-
-### Socket Types
-- `socket.SOCK_STREAM` - TCP (reliable, connection-oriented)
-- `socket.SOCK_DGRAM` - UDP (unreliable, connectionless)
-- `socket.SOCK_RAW` - Raw sockets
-
-## Creating a Socket
-
-```zen
-# TCP socket
-let tcp_sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
-
-# UDP socket
-let udp_sock = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
-```
-
-## TCP Client Example
+## 27.1 Socket creation
 
 ```zen
 import socket
 
-# Create TCP socket
-let s = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+// TCP socket (IPv4)
+let tcp = socket.create(socket.AF_INET, socket.SOCK_STREAM)
 
-# Connect to server
-socket.connect(s, "example.com", 80)
+// UDP socket (IPv4)
+let udp = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
 
-# Send HTTP request
-let request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
-socket.send(s, request)
+// Raw socket (requires root on most OSes)
+let raw = socket.create(socket.AF_INET, socket.SOCK_RAW)
+```
 
-# Receive response
-let response = socket.recv(s, 4096)
+### Address families and socket types
+
+| Constant | Meaning |
+|----------|---------|
+| `socket.AF_INET` | IPv4 |
+| `socket.AF_INET6` | IPv6 (platform-dependent) |
+| `socket.AF_UNIX` | Unix domain sockets (platform-dependent) |
+| `socket.SOCK_STREAM` | TCP (reliable stream) |
+| `socket.SOCK_DGRAM` | UDP (unreliable datagram) |
+| `socket.SOCK_RAW` | Raw IP (requires root) |
+
+### Common combinations
+
+| Family | Type | Protocol | Use |
+|--------|------|----------|-----|
+| `AF_INET` | `SOCK_STREAM` | TCP | Web, file transfer, email |
+| `AF_INET` | `SOCK_DGRAM` | UDP | DNS, streaming, games |
+| `AF_INET` | `SOCK_RAW` | IP | Packet crafting, ping |
+| `AF_INET6` | `SOCK_STREAM` | TCP over IPv6 | IPv6 services |
+| `AF_UNIX` | `SOCK_STREAM` | Local | IPC on same machine |
+
+## 27.2 Socket handle operations
+
+| Function | Description |
+|----------|-------------|
+| `socket.create(domain, type)` | Create socket, returns handle (int) |
+| `socket.connect(sock, host, port)` | Connect TCP socket to remote |
+| `socket.bind(sock, host, port)` | Bind socket to local address |
+| `socket.listen(sock, backlog)` | Listen for incoming connections |
+| `socket.accept(sock)` | Accept incoming connection, returns new socket handle |
+| `socket.send(sock, data)` | Send data on connected socket |
+| `socket.recv(sock, n)` | Receive up to n bytes (returns bytes) |
+| `socket.recv_text(sock, n)` | Receive text |
+| `socket.recv_from(sock, n)` | Receive from address (UDP), returns `{data, addr}` |
+| `socket.send_to(sock, data, host, port)` | Send to address (UDP) |
+| `socket.settimeout(sock, ms)` | Set timeout in milliseconds |
+| `socket.close(sock)` | Close socket and release handle |
+| `socket.fileno(sock)` | Get raw file descriptor |
+
+## 27.3 TCP client
+
+```zen
+import socket
+
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.settimeout(sock, 5000)   // 5 second timeout
+
+socket.connect(sock, "example.com", 80)
+socket.send(sock, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+
+let response = ""
+while true {
+    let chunk = socket.recv(sock, 4096)
+    if len(chunk) == 0 {
+        break
+    }
+    response = response + chunk
+}
+
 print(response)
-
-# Close socket
-socket.close(s)
+socket.close(sock)
 ```
 
-## TCP Server Example
+### recv returns bytes
+
+`socket.recv` returns a byte list (list of ints 0–255), not a string. Use `socket.recv_text` for text, or convert:
 
 ```zen
 import socket
 
-# Create socket
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.connect(sock, "example.com", 80)
+socket.send(sock, "GET / HTTP/1.0\r\n\r\n")
+
+let bytes = socket.recv(sock, 1024)
+// bytes is a list like [72, 84, 84, 80, ...]
+
+let text = socket.recv_text(sock, 1024)
+// text is a string
+
+socket.close(sock)
+```
+
+To convert bytes to string manually:
+```zen
+import socket
+
+let bs = socket.recv(sock, 1024)
+let s = ""
+for b in bs {
+    s = s + chr(b)
+}
+print(s)
+```
+
+## 27.4 TCP server
+
+```zen
+import socket
+
 let server = socket.create(socket.AF_INET, socket.SOCK_STREAM)
-
-# Set socket options to reuse address
-socket.setsockopt(server, socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-# Bind to address and port
 socket.bind(server, "0.0.0.0", 8080)
-
-# Listen for connections (backlog of 5)
 socket.listen(server, 5)
 
-print("Server listening on port 8080...")
+print("Listening on 0.0.0.0:8080")
+
+let client = socket.accept(server)
+let req = socket.recv_text(client, 4096)
+print("Request: " + req)
+
+socket.send(client, "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nHello, Zen!")
+socket.close(client)
+socket.close(server)
+```
+
+### Accept loop
+
+```zen
+import socket
+
+let server = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.bind(server, "0.0.0.0", 8080)
+socket.listen(server, 5)
 
 while true {
-    # Accept connection
     let client = socket.accept(server)
-    print("Client connected")
-    
-    # Receive data
-    let data = socket.recv(client, 1024)
-    print("Received: " + data)
-    
-    # Send response
-    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello from Zen socket server!"
-    socket.send(client, response)
-    
-    # Close client connection
+    let req = socket.recv_text(client, 4096)
+    socket.send(client, "HTTP/1.0 200 OK\r\n\r\npong")
     socket.close(client)
 }
 ```
 
-## UDP Example
+## 27.5 UDP
 
-### UDP Client
+UDP is connectionless — no `connect`, `listen`, or `accept`. Use `send_to` and `recv_from`.
+
+### UDP client
 
 ```zen
 import socket
 
-let s = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
+let sock = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
+socket.settimeout(sock, 5000)
 
-let message = "Hello UDP Server"
-socket.sendto(s, message, "localhost", 9999)
+socket.send_to(sock, "ping", "127.0.0.1", 9999)
 
-let [data, addr] = socket.recvfrom(s, 1024)
-print("Received: " + data)
-print("From: " + addr)
+let [data, addr] = socket.recv_from(sock, 4096)
+print("Response from " + addr.addr + ": " + data)
 
-socket.close(s)
+socket.close(sock)
 ```
 
-### UDP Server
+`recv_from` returns a dict `{data: <bytes>, addr: <ip_string>}`.
+
+### UDP server
 
 ```zen
 import socket
 
-let s = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
-socket.bind(s, "0.0.0.0", 9999)
-
-print("UDP server listening on port 9999...")
+let sock = socket.create(socket.AF_INET, socket.SOCK_DGRAM)
+socket.bind(sock, "0.0.0.0", 9999)
 
 while true {
-    let [data, addr] = socket.recvfrom(s, 1024)
-    print("Received from " + addr + ": " + data)
-    
-    # Echo back
-    socket.sendto(s, "Echo: " + data, addr[0], addr[1])
+    let [data, addr] = socket.recv_from(sock, 4096)
+    print("From " + addr.addr + ": " + data)
+    socket.send_to(sock, "pong", addr.addr, 9999)
 }
 ```
 
-## Socket Options
+## 27.6 Socket options
 
 ```zen
 import socket
 
-let s = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
 
-# Allow address reuse
-socket.setsockopt(s, socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+// Set timeout
+socket.settimeout(sock, 5000)  // 5 seconds
 
-# Set timeout
-socket.settimeout(s, 5)  # 5 seconds
+// Get file descriptor (for raw operations)
+let fd = socket.fileno(sock)
+print(fd)  // integer
 
-# Get socket option
-let val = socket.getsockopt(s, socket.SOL_SOCKET, socket.SO_REUSEADDR)
+socket.close(sock)
 ```
 
-## Socket Methods Reference
+## 27.7 Common patterns
 
-| Method | Description |
-|--------|-------------|
-| `create(family, type)` | Create a new socket |
-| `bind(sock, addr, port)` | Bind socket to address/port |
-| `listen(sock, backlog)` | Listen for connections |
-| `accept(sock)` | Accept incoming connection |
-| `connect(sock, addr, port)` | Connect to remote host |
-| `send(sock, data)` | Send data on connected socket |
-| `recv(sock, size)` | Receive data from connected socket |
-| `sendto(sock, data, addr, port)` | Send data to address (UDP) |
-| `recvfrom(sock, size)` | Receive data with sender address (UDP) |
-| `close(sock)` | Close socket |
-| `setsockopt(sock, level, opt, value)` | Set socket option |
-| `getsockopt(sock, level, opt)` | Get socket option |
-| `settimeout(sock, seconds)` | Set timeout |
-
-## Error Handling
+### Read until connection closes
 
 ```zen
 import socket
 
-try {
-    let s = socket.create(socket.AF_INET, socket.SOCK_STREAM)
-    socket.connect(s, "invalid.host.example", 80)
-} catch (e) {
-    print("Socket error: " + e)
-    if e.contains("timeout") {
-        print("Connection timed out")
+func read_all(sock) {
+    let result = ""
+    while true {
+        let chunk = socket.recv_text(sock, 4096)
+        if len(chunk) == 0 {
+            break
+        }
+        result = result + chunk
+    }
+    return result
+}
+
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.connect(sock, "example.com", 80)
+socket.send(sock, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+let body = read_all(sock)
+print(body)
+socket.close(sock)
+```
+
+### Read exactly n bytes
+
+```zen
+import socket
+
+func recv_exact(sock, n) {
+    let buf = []
+    while len(buf) < n {
+        let chunk = socket.recv(sock, n - len(buf))
+        if len(chunk) == 0 {
+            break
+        }
+        for b in chunk {
+            buf.push(b)
+        }
+    }
+    return buf
+}
+```
+
+### Port scanner
+
+```zen
+import socket
+
+func scan_port(host, port, timeout) {
+    try {
+        let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+        socket.settimeout(sock, timeout)
+        socket.connect(sock, host, port)
+        socket.close(sock)
+        return true
+    } catch {
+        return false
+    }
+}
+
+for port in 1..1024 {
+    if scan_port("127.0.0.1", port, 100) {
+        print("Port " + str(port) + " is open")
     }
 }
 ```
 
-## Practical Example: Simple Chat Server
+### HTTP client (manual, no requests module)
 
 ```zen
 import socket
 
-let server = socket.create(socket.AF_INET, socket.SOCK_STREAM)
-socket.setsockopt(server, socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-socket.bind(server, "0.0.0.0", 9000)
-socket.listen(server, 10)
-
-print("Chat server on port 9000")
-
-let clients = []
-
-while true {
-    let client = socket.accept(server)
-    clients.push(client)
-    print("New client connected")
+func http_get(host, path) {
+    let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+    socket.connect(sock, host, 80)
     
-    # Handle client in separate thread
-    spawn(fn() {
-        while true {
-            try {
-                let msg = socket.recv(client, 1024)
-                if len(msg) == 0 {
-                    break
-                }
-                print("Broadcasting: " + msg)
-                # Broadcast to all clients
-                for c in clients {
-                    if c != client {
-                        try {
-                            socket.send(c, msg)
-                        } catch {}
-                    }
-                }
-            } catch {
-                break
-            }
+    let request = "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
+    socket.send(sock, request)
+    
+    let response = ""
+    while true {
+        let chunk = socket.recv_text(sock, 4096)
+        if len(chunk) == 0 {
+            break
         }
-        socket.close(client)
-    })
+        response = response + chunk
+    }
+    
+    socket.close(sock)
+    return response
 }
+
+print(http_get("example.com", "/"))
 ```
 
-## Best Practices
+## 27.8 Common pitfalls
 
-1. **Always close sockets** - Use try/finally or track closures
-2. **Handle errors** - Network operations can fail
-3. **Set timeouts** - Avoid hanging indefinitely
-4. **Reuse addresses** - Use SO_REUSEADDR for servers
-5. **Use threads** - Handle multiple clients concurrently
-6. **Validate data** - Don't trust received data
-7. **Consider using high-level APIs** - `requests` is easier for HTTP
+- **Always close sockets.** Unclosed sockets leak file descriptors.
+- **Set timeouts.** Without timeouts, `connect`/`recv` can block forever.
+- **TCP is a stream.** `recv` may return fewer bytes than requested — loop until you have all data.
+- **`recv` returns bytes**, not strings. Use `recv_text` or convert manually.
+- **UDP is connectionless.** Use `send_to`/`recv_from`, not `connect`/`send`/`recv`.
+- **`recv_from` returns `{data, addr}`**, not just data.
+- **Raw sockets (`SOCK_RAW`) require root** on most operating systems.
 
-## When to Use Low-Level Sockets
+## 27.8 Quick reference
 
-Use the `socket` module when:
-- You need custom protocols
-- Working with non-HTTP protocols
-- Need fine-grained control
-- Building custom servers/clients
-- Working with UDP/TCP directly
+```zen
+import socket
 
-Use higher-level modules (`requests`, `http`) when:
-- Working with HTTP/HTTPS
-- Simpler use cases
-- Less error-prone
+let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
+socket.settimeout(sock, 5000)
+socket.connect(sock, "example.com", 80)
+socket.send(sock, "GET / HTTP/1.0\r\n\r\n")
+let data = socket.recv(sock, 4096)
+let text = socket.recv_text(sock, 4096)
+socket.close(sock)
 
-## Chapter Summary
+// UDP
+socket.send_to(sock, "data", "127.0.0.1", 9999)
+let [data, addr] = socket.recv_from(sock, 4096)
 
-- `socket` module provides BSD socket API
-- TCP uses SOCK_STREAM, UDP uses SOCK_DGRAM
-- Client: create → connect → send/recv → close
-- Server: create → bind → listen → accept → send/recv → close
-- Use `sendto`/`recvfrom` for UDP
-- Handle errors and use threading for concurrent clients
-- Set socket options for flexibility
+// Server
+socket.bind(sock, "0.0.0.0", 8080)
+socket.listen(sock, 5)
+let client = socket.accept(sock)
+```
 
-**Next:** Chapter 28 - HTTP Protocol
+## 26.9 Exercises
+
+1. Write a TCP echo client that sends a line and prints the response.
+2. Write a UDP client that sends a datagram and waits for a reply.
+3. Write a port scanner for ports 1–1000 on localhost.
+4. Write a simple HTTP/0.9 client that fetches the root page.
+5. Write a TCP echo server that handles one connection at a time.
+6. Write a UDP server that echoes back datagrams.
+7. Combine client and server in one script (server in a thread, client in main).

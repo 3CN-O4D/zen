@@ -1,14 +1,13 @@
 # Chapter 30: http Server Module
 
-The `http.server` module provides a simple static file HTTP server. It's
-useful for serving files, directory listings, and quick local servers.
+The `http.server` module provides a simple static file HTTP server. It's useful for serving files, directory listings, and quick local servers.
 
 ## 30.1 Starting a server
 
 ```zen
 import http.server
 
-# Serve current directory on port 8000
+// Serve current directory on port 8000
 http.server.serve(".", 8000)
 ```
 
@@ -19,21 +18,27 @@ This blocks — the server runs until the process is interrupted.
 ```zen
 import http.server
 
-# Serve a specific directory on a specific host/port
+// Serve a specific directory on a specific host/port
 http.server.serve("/var/www", 8080, "127.0.0.1")
 
-# Serve once (single request) then return
+// Serve once (single request) then return
 let port = http.server.serve_once(".", 0)
 print("served on port " + str(port))
 ```
 
+### `serve(root, port, host?)`
+
+Blocks forever serving files from `root` on `port:host`.
+
+### `serve_once(root, port?)`
+
+Serves a single request then returns the port used. Port 0 means "pick a free port."
+
 ## 30.3 What it serves
 
-- **Files** — serves the file with appropriate `Content-Type` based on
-  extension.
+- **Files** — serves the file with appropriate `Content-Type` based on extension.
 - **Directories** — generates an HTML directory listing with links.
-- **MIME types** — common extensions mapped (`.html`, `.css`, `.js`, `.json`,
-  `.png`, `.jpg`, `.txt`, etc.).
+- **MIME types** — common extensions mapped (`.html`, `.css`, `.js`, `.json`, `.png`, `.jpg`, `.txt`, etc.).
 - **404** — returns a 404 page for missing files.
 
 ## 30.4 Example: serve a build directory
@@ -52,7 +57,7 @@ Then open `http://localhost:8000` in a browser.
 ```zen
 import http.server
 
-# Port 0 means "pick a free port"
+// Port 0 means "pick a free port"
 let port = http.server.serve_once(".", 0)
 print("One-shot server on port " + str(port))
 ```
@@ -62,12 +67,34 @@ print("One-shot server on port " + str(port))
 ```zen
 import http.server
 
-print(http.server.guess_type("index.html"))   # text/html
-print(http.server.guess_type("style.css"))    # text/css
-print(http.server.guess_type("app.js"))       # application/javascript
-print(http.server.guess_type("data.json"))    # application/json
-print(http.server.guess_type("image.png"))    # image/png
+print(http.server.guess_type("index.html"))   // text/html
+print(http.server.guess_type("style.css"))    // text/css
+print(http.server.guess_type("app.js"))       // application/javascript
+print(http.server.guess_type("data.json"))    // application/json
+print(http.server.guess_type("image.png"))    // image/png
 ```
+
+### Supported MIME types
+
+| Extension | MIME type |
+|-----------|-----------|
+| `.html` | `text/html` |
+| `.css` | `text/css` |
+| `.js` | `application/javascript` |
+| `.json` | `application/json` |
+| `.txt` | `text/plain` |
+| `.png` | `image/png` |
+| `.jpg`, `.jpeg` | `image/jpeg` |
+| `.gif` | `image/gif` |
+| `.svg` | `image/svg+xml` |
+| `.pdf` | `application/pdf` |
+| `.mp3` | `audio/mpeg` |
+| `.mp4` | `video/mp4` |
+| `.zip` | `application/zip` |
+| `.tar.gz` | `application/gzip` |
+| `.woff2` | `font/woff2` |
+| `.ico` | `image/x-icon` |
+| (unknown) | `application/octet-stream` |
 
 ## 30.7 Common pitfalls
 
@@ -76,7 +103,15 @@ print(http.server.guess_type("image.png"))    # image/png
 - **No HTTPS.** Use `tls` or a reverse proxy for production.
 - **Single-threaded.** One request at a time.
 
-## 30.8 Quick reference
+## 30.8 Directory traversal protection
+
+The server rejects paths containing `..` to prevent accessing files outside the root directory:
+
+```zen
+// Requesting GET /../../etc/passwd returns 403 or 404
+```
+
+## 30.9 Quick reference
 
 ```zen
 import http.server
@@ -86,7 +121,7 @@ let port = http.server.serve_once(root, port?)
 http.server.guess_type(filename)
 ```
 
-## 30.9 Exercises
+## 30.10 Exercises
 
 1. Serve a local directory and open it in a browser.
 2. Use `serve_once` to get a free port, then make a request to it.

@@ -1,7 +1,6 @@
 # Chapter 33: url Module
 
-The `url` module provides URL parsing, building, and percent-encoding:
-`urllib.parse` and `urllib.request` utilities.
+The `url` module provides URL parsing, building, and percent-encoding: `urllib.parse` utilities.
 
 ## 33.1 Parsing URLs
 
@@ -23,7 +22,38 @@ print(parts.hostname)  # example.com
 print(parts.port)      # 8080
 ```
 
-## 33.2 Building URLs
+### ParseResult fields
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `scheme` | URL scheme | `"https"` |
+| `netloc` | Network location | `"user:pass@example.com:8080"` |
+| `path` | Hierarchical path | `"/path/to/page"` |
+| `params` | Parameters | `""` |
+| `query` | Query string | `"q=1"` |
+| `fragment` | Fragment | `"section"` |
+| `username` | Username | `"user"` |
+| `password` | Password | `"pass"` |
+| `hostname` | Hostname | `"example.com"` |
+| `port` | Port | `8080` |
+
+```zen
+import urllib.parse
+
+let p = urllib.parse.urlparse("https://user:pass@example.com:8080/path?q=1#frag")
+print(p.scheme)     # "https"
+print(p.netloc)     # "user:pass@example.com:8080"
+print(p.path)       # "/path"
+print(p.params)     # ""
+print(p.query)      # "q=1"
+print(p.fragment)   # "frag"
+print(p.username)   # "user"
+print(p.password)   # "pass"
+print(p.hostname)   # "example.com"
+print(p.port)       # 8080
+```
+
+## 23.2 Building URLs
 
 ```zen
 import urllib.parse
@@ -39,19 +69,47 @@ let url = urllib.parse.urlunparse({
 print(url)  # https://example.com/search?q=zen
 ```
 
+`urlunparse` takes a dict with keys: `scheme`, `netloc`, `path`, `params`, `query`, `fragment`.
+
 ## 33.3 Query strings
 
 ```zen
 import urllib.parse
 
-# Encode query params
+// Encode query params
 let qs = urllib.parse.urlencode({"q": "zen lang", "page": 1})
-print(qs)  # q=zen+lang&page=1
+print(qs)  // q=zen+lang&page=1
 
-# Parse query string
+// Parse query string
 let params = urllib.parse.parse_qs("q=zen+lang&page=1")
-print(params)  # {"q": ["zen lang"], "page": ["1"]}
+print(params)  // {"q": ["zen lang"], "page": ["1"]}
 ```
+
+### urlencode
+
+```zen
+import urllib.parse
+
+print(urllib.parse.urlencode({"q": "hello world", "page": 2}))
+// q=hello+world&page=2
+
+print(urllib.parse.urlencode({"a": 1, "b": 2, "c": 3}))
+// a=1&b=2&c=3
+```
+
+### parse_qs
+
+```zen
+import urllib.parse
+
+print(urllib.parse.parse_qs("q=zen+lang&page=1"))
+// {"q": ["zen lang"], "page": ["1"]}
+
+print(urllib.parse.parse_qs("a=1&a=2&b=3"))
+// {"a": ["1", "2"], "b": ["3"]}
+```
+
+Values are always lists (to support repeated keys).
 
 ## 33.4 Joining URLs
 
@@ -59,10 +117,24 @@ print(params)  # {"q": ["zen lang"], "page": ["1"]}
 import urllib.parse
 
 let full = urllib.parse.urljoin("https://example.com/base/", "page.html")
-print(full)  # https://example.com/page.html
+print(full)  // https://example.com/page.html
 
 let full2 = urllib.parse.urljoin("https://example.com/base/", "/abs.html")
-print(full2)  # https://example.com/abs.html
+print(full2)  // https://example.com/abs.html
+```
+
+```zen
+import urllib.parse
+
+// Relative to base
+print(urllib.parse.urljoin("https://example.com/a/b/", "c.html"))  
+// https://example.com/a/b/c.html
+
+print(urllib.parse.urljoin("https://example.com/a/b/", "../c.html"))  
+// https://example.com/a/c.html
+
+print(urllib.parse.urljoin("https://example.com/", "page.html"))  
+// https://example.com/page.html
 ```
 
 ## 33.5 Percent encoding
@@ -71,10 +143,21 @@ print(full2)  # https://example.com/abs.html
 import urllib.parse
 
 let encoded = urllib.parse.quote("hello world")
-print(encoded)  # hello%20world
+print(encoded)  // hello%20world
 
 let decoded = urllib.parse.unquote("hello%20world")
-print(decoded)  # hello world
+print(decoded)  // hello world
+```
+
+```zen
+import urllib.parse
+
+print(urllib.parse.quote("hello world"))     # hello%20world
+print(urllib.parse.quote("a/b?c=d&e=f"))     # a%2Fb%3Fc%3De%26f
+print(urllib.parse.quote("中文"))             # %E4%B8%AD%E6%96%87
+
+print(urllib.parse.unquote("hello%20world"))   # hello world
+print(urllib.parse.unquote("%E4%B8%AD%E6%96%87"))  # 中文
 ```
 
 ## 33.6 Splitting and joining netloc
@@ -83,13 +166,13 @@ print(decoded)  # hello world
 import urllib.parse
 
 let parts = urllib.parse.splituser("user:pass@example.com:8080")
-print(parts)  # ["user:pass", "example.com:8080"]
+print(parts)  // ["user:pass", "example.com:8080"]
 
 let splitpass = urllib.parse.splitpasswd("user:pass@example.com:8080")
-print(splitpass)  # ["user", "pass@example.com:8080"]
+print(splitpass)  // ["user", "pass@example.com:8080"]
 
 let port = urllib.parse.splitport("example.com:8080")
-print(port)  # ["example.com", "8080"]
+print(port)  // ["example.com", "8080"]
 ```
 
 ## 33.6 Common patterns
@@ -102,7 +185,7 @@ import urllib.parse
 let base = "https://example.com/search"
 let qs = urllib.parse.urlencode({"q": "Zen language", "page": 2})
 let url = base + "?" + qs
-print(url)  # https://example.com/search?q=Zen+language&page=2
+print(url)  // https://example.com/search?q=Zen+language&page=2
 ```
 
 ### Extract domain from URL
@@ -111,7 +194,7 @@ print(url)  # https://example.com/search?q=Zen+language&page=2
 import urllib.parse
 
 let parts = urllib.parse.urlparse("https://sub.example.com/path")
-print(parts.hostname)  # sub.example.com
+print(parts.hostname)  // sub.example.com
 ```
 
 ### Add a query param to existing URL
@@ -140,22 +223,22 @@ print(new_url)
 ```zen
 import urllib.parse
 
-urllib.parse.urlparse(url)        # parse into parts
-urllib.parse.urlunparse(parts)    # build from parts
-urllib.parse.urljoin(base, ref)   # resolve relative URL
-urllib.parse.urlencode(params)    # encode query string
-urllib.parse.parse_qs(qs)         # parse query string
-urllib.parse.quote(s)             # percent-encode
-urllib.parse.unquote(s)           # percent-decode
+urllib.parse.urlparse(url)        // parse into parts
+urllib.parse.urlunparse(parts)    // build from parts
+urllib.parse.urljoin(base, ref)   // resolve relative URL
+urllib.parse.urlencode(params)    // encode query string
+urllib.parse.parse_qs(qs)         // parse query string
+urllib.parse.quote(s)             // percent-encode
+urllib.parse.unquote(s)           // percent-decode
 
 let p = urllib.parse.urlparse("https://example.com/path?q=1")
-p.scheme      # https
-p.netloc      # example.com
-p.path        # /path
-p.query       # q=1
-p.fragment    # (empty)
-p.hostname    # example.com
-p.port        # (none)
+p.scheme      // https
+p.netloc      // example.com
+p.path        // /path
+p.query       // q=1
+p.fragment    // (empty)
+p.hostname    // example.com
+p.port        // (none)
 ```
 
 ## 33.8 Exercises
@@ -165,3 +248,5 @@ p.port        # (none)
 3. Write `build_api_url(base, endpoint, params)` that constructs a full API URL.
 4. Write `decode_query(qs)` that returns a dict of query parameters.
 5. Write `normalize_url(url)` that ensures a scheme and trailing slash.
+6. Write `get_query_param(url, key)` that extracts a single query parameter value.
+7. Write `merge_url_params(url, params)` that merges new params into existing URL.

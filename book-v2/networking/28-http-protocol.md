@@ -1,363 +1,241 @@
 # Chapter 28: HTTP Protocol
 
-HTTP (HyperText Transfer Protocol) is the foundation of data communication on the web. This chapter explains HTTP in detail and how to work with it in Zen.
+Zen's `http` module provides a low-level HTTP/1.1 client. For a higher-level experience with sessions, cookies, and JSON, use the `requests` module (Chapter 29).
 
-## What is HTTP?
+## 28.1 HTTP basics
 
-HTTP is an application-layer protocol for transmitting hypermedia documents. It's:
-- **Stateless**: Each request is independent
-- **Client-Server**: Client requests, server responds
-- **Text-based**: Human-readable protocol (though can carry binary)
-- **Request-Response**: Follows this pattern
+HTTP (Hypertext Transfer Protocol) is the foundation of the web. A client sends a request; a server responds.
 
-## HTTP Versions
+### Request anatomy
 
-| Version | Status | Notes |
-|---------|--------|-------|
-| HTTP/1.0 | Legacy | Simple, one request per connection |
-| HTTP/1.1 | Widely used | Persistent connections, chunked transfer |
-| HTTP/2 | Modern | Multiplexing, binary, server push |
-| HTTP/3 | New | Uses QUIC over UDP |
-
-## HTTP Methods
-
-HTTP methods (verbs) indicate the action to perform:
-
-| Method | Purpose | Idempotent | Safe | Body |
-|--------|---------|------------|------|------|
-| GET | Retrieve resource | Yes | Yes | Usually no |
-| POST | Create resource / submit data | No | No | Yes |
-| PUT | Update/replace resource (full) | Yes | No | Yes |
-| PATCH | Partial update | No | No | Yes |
-| DELETE | Remove resource | Yes | No | Usually no |
-| HEAD | Same as GET but no body | Yes | Yes | No |
-| OPTIONS | Get supported methods | Yes | Yes | No |
-
-### Examples
-
-```zen
-# GET - retrieve data
-GET /users/123 HTTP/1.1
-Host: api.example.com
-
-# POST - create data
-POST /users HTTP/1.1
-Host: api.example.com
-Content-Type: application/json
-
-{"name": "Alice", "email": "alice@example.com"}
-
-# PUT - replace entire resource
-PUT /users/123 HTTP/1.1
-Host: api.example.com
-Content-Type: application/json
-
-{"name": "Alice Smith", "email": "alice@example.com", "age": 30}
-
-# DELETE - remove resource
-DELETE /users/123 HTTP/1.1
-Host: api.example.com
 ```
-
-## HTTP Status Codes
-
-Status codes indicate the result of the request:
-
-### 1xx Informational
-- 100 Continue
-- 101 Switching Protocols
-
-### 2xx Success
-- 200 OK - Request succeeded
-- 201 Created - Resource created
-- 204 No Content - Success but no body
-
-### 3xx Redirection
-- 301 Moved Permanently
-- 302 Found (temporary redirect)
-- 304 Not Modified - Use cached version
-
-### 4xx Client Errors
-- 400 Bad Request - Invalid syntax
-- 401 Unauthorized - Authentication required
-- 403 Forbidden - Not allowed
-- 404 Not Found - Resource doesn't exist
-- 405 Method Not Allowed
-- 422 Unprocessable Entity
-- 429 Too Many Requests
-
-### 5xx Server Errors
-- 500 Internal Server Error
-- 502 Bad Gateway
-- 503 Service Unavailable
-- 504 Gateway Timeout
-
-## HTTP Headers
-
-Headers provide additional information about the request/response.
-
-### Common Request Headers
-```http
+GET /index.html HTTP/1.1
 Host: example.com
 User-Agent: Zen/3.0
-Accept: text/html,application/json
-Content-Type: application/json
-Authorization: Bearer token123
-Cookie: session=abc123
+Accept: text/html
+
 ```
 
-### Common Response Headers
-```http
-Content-Type: text/html; charset=utf-8
-Content-Length: 1234
-Cache-Control: max-age=3600
-Set-Cookie: session=xyz789
-Server: nginx
-Access-Control-Allow-Origin: *
+- **Method**: GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH
+- **Path**: `/index.html`
+- **Version**: `HTTP/1.1`
+- **Headers**: `Host`, `User-Agent`, `Accept`, etc.
+- **Body**: empty for GET, present for POST/PUT
+
+### Response anatomy
+
+```
+HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Length: 137
+
+<html><body>Hello</body></html>
 ```
 
-## Making HTTP Requests with Zen's `requests` Module
+- **Status line**: `HTTP/1.1 200 OK`
+- **Headers**: `Content-Type`, `Content-Length`, etc.
+- **Body**: the actual content (may be empty)
 
-The easiest way to make HTTP requests:
+## 28.2 The `http` module
+
+Zen's `http` module provides low-level HTTP/1.1 client functions:
 
 ```zen
-import requests
+import http
 
-# GET request
-let resp = requests.get("https://httpbin.org/get")
-print("Status:", resp.status_code)
-print("Body:", resp.text)
+let resp = http.get("https://example.com")
+print(resp.status_code)   # 200
+print(resp.body)          # response body
+print(resp.headers)       # headers dict
 ```
 
-### GET with Query Parameters
+### http functions
+
+| Function | Description |
+|----------|-------------|
+| `http.get(url, headers?)` | GET request |
+| `http.post(url, body, headers?)` | POST request |
+| `http.put(url, body, headers?)` | PUT request |
+| `http.delete(url, headers?)` | DELETE request |
+| `http.head(url, headers?)` | HEAD request |
+| `http.options(url, headers?)` | OPTIONS request |
+| `http.patch(url, body, headers?)` | PATCH request |
+
+### Response object
+
+| Field | Description |
+|-------|-------------|
+| `status_code` | HTTP status code (int) |
+| `reason` | Reason phrase (string) |
+| `headers` | Response headers (dict) |
+| `body` | Response body (string) |
+| `ok` | True if 200–299 |
 
 ```zen
-import requests
+import http
 
-let resp = requests.get("https://httpbin.org/get", 
-    params={"name": "Alice", "age": "30"}
-)
-print(resp.text)
+let resp = http.get("https://example.com")
+print(resp.status_code)   # 200
+print(resp.reason)        # OK
+print(resp.body)          # HTML body
+print(resp.headers)       # headers dict
+print(resp.ok)            # true
+
+if resp.ok {
+    print("Success!")
+} else {
+    print("Error: " + str(resp.status_code) + " " + resp.reason)
+}
 ```
 
-### POST with JSON
+## 28.3 Making requests with headers
 
 ```zen
-import requests
-import json
+import http
 
-let data = {"username": "alice", "password": "secret"}
-let resp = requests.post("https://httpbin.org/post",
-    json=data,
-    headers={"User-Agent": "Zen-App/1.0"}
-)
+let resp = http.get("https://api.example.com/user/1", {
+    "User-Agent": "Zen/3.0",
+    "Accept": "application/json",
+    "Authorization": "Bearer token123"
+})
+
 print(resp.status_code)
-let body = json.parse(resp.text)
-print(body.json)
+print(resp.body)
 ```
 
-### POST with Form Data
+## 28.4 POST with body
 
 ```zen
-import requests
+import http
 
-let resp = requests.post("https://httpbin.org/post",
-    data={"key1": "value1", "key2": "value2"}
-)
-print(resp.text)
+let body = "name=Zen&version=3"
+let resp = http.post("https://example.com/api", body, {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Content-Length": str(len(body))
+})
+
+print(resp.status_code)
+print(resp.body)
 ```
 
-### Custom Headers
+## 28.5 Status codes
+
+| Code | Name | Meaning |
+|------|------|---------|
+| 200 | OK | Success |
+| 201 | Created | Resource created |
+| 204 | No Content | Success, no body |
+| 301 | Moved Permanently | Redirect |
+| 302 | Found | Temporary redirect |
+| 304 | Not Modified | Cache hit |
+| 400 | Bad Request | Client error |
+| 401 | Unauthorized | Authentication required |
+| 403 | Forbidden | Access denied |
+| 404 | Not Found | Resource not found |
+| 500 | Internal Server Error | Server error |
+| 502 | Bad Gateway | Upstream error |
+| 503 | Service Unavailable | Server overloaded |
 
 ```zen
-import requests
+import http
 
-let resp = requests.get("https://httpbin.org/headers",
-    headers={
-        "Authorization": "Bearer mytoken",
-        "X-Custom-Header": "hello"
-    }
-)
-print(resp.text)
+let resp = http.get("https://example.com/nonexistent")
+print(resp.status_code)   # 404
+print(resp.ok)            # false
 ```
 
-### Handling Response
+## 28.6 HTTP vs HTTPS
+
+Zen's `http` module supports both `http://` and `https://` URLs. HTTPS uses TLS under the hood (certificate validation via the platform root store).
 
 ```zen
-import requests
-import json
+import http
 
-let resp = requests.get("https://httpbin.org/status/200")
+// HTTP (port 80)
+let r1 = http.get("http://example.com")
 
-print("Status Code:", resp.status_code)
-print("Headers:", resp.headers)
-print("Text:", resp.text)
-print("URL:", resp.url)
+// HTTPS (port 443, TLS)
+let r2 = http.get("https://example.com")
+```
 
-# If JSON response
-if resp.headers["Content-Type"].contains("json") {
-    let data = resp.json()
-    print(data)
+For certificate pinning, use the `tls` module directly (Chapter 25) or `requests` with verify options (Chapter 29).
+
+## 28.7 Common patterns
+
+### Simple GET
+
+```zen
+import http
+
+let resp = http.get("https://example.com")
+if resp.ok {
+    print(resp.body)
+} else {
+    print("HTTP " + str(resp.status_code))
 }
 ```
 
-## Building an HTTP Server
-
-Use the `http` module to create servers:
+### POST JSON
 
 ```zen
 import http
 import json
 
-func handle_request(req) {
-    let path = req.path
-    let method = req.method
-    
-    if path == "/" && method == "GET" {
-        return {
-            "status": 200,
-            "headers": {"Content-Type": "text/html"},
-            "body": "<h1>Welcome to Zen HTTP Server</h1>"
-        }
-    }
-    
-    if path == "/api/data" && method == "GET" {
-        let data = {"message": "Hello", "count": 42}
-        return {
-            "status": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.stringify(data)
-        }
-    }
-    
-    if path == "/api/echo" && method == "POST" {
-        return {
-            "status": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.stringify({"echo": req.body})
-        }
-    }
-    
-    return {
-        "status": 404,
-        "headers": {"Content-Type": "text/html"},
-        "body": "<h1>404 Not Found</h1>"
-    }
-}
+let body = json.dumps({"name": "Zen", "version": 3})
+let resp = http.post("https://example.com/api", body, {
+    "Content-Type": "application/json",
+    "Content-Length": str(len(body))
+})
 
-print("Server starting on http://localhost:8080")
-http.serve("0.0.0.0", 8080, handle_request)
+print(resp.status_code)
+print(resp.body)
 ```
 
-## RESTful API Design
-
-```zen
-import http
-import json
-
-let users = [
-    {"id": 1, "name": "Alice"},
-    {"id": 2, "name": "Bob"}
-]
-
-func api_handler(req) {
-    if req.method == "GET" && req.path == "/api/users" {
-        return {
-            "status": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.stringify(users)
-        }
-    }
-    
-    if req.method == "GET" && req.path.starts_with("/api/users/") {
-        let id = int(req.path.split("/")[3])
-        for user in users {
-            if user.id == id {
-                return {
-                    "status": 200,
-                    "headers": {"Content-Type": "application/json"},
-                    "body": json.stringify(user)
-                }
-            }
-        }
-        return {"status": 404, "body": json.stringify({"error": "Not found"})}
-    }
-    
-    return {"status": 404, "body": "Not Found"}
-}
-
-http.serve("0.0.0.0", 3000, api_handler)
-```
-
-## HTTP Cookies
+### Check if resource exists (HEAD)
 
 ```zen
 import http
 
-func handler(req) {
-    # Read cookies
-    let cookies = req.cookies
-    if cookies.contains("session") {
-        return {"status": 200, "body": "Welcome back!"}
-    }
-    
-    # Set cookie in response
-    return {
-        "status": 200,
-        "headers": {
-            "Set-Cookie": "session=abc123; Path=/; HttpOnly"
-        },
-        "body": "Cookie set!"
-    }
+let resp = http.head("https://example.com/image.png")
+if resp.ok {
+    print("Resource exists, size: " + resp.headers["Content-Length"])
+} else {
+    print("Resource not found")
 }
 ```
 
-## CORS (Cross-Origin Resource Sharing)
+## 28.8 Common pitfalls
+
+- **`http` is low-level.** No automatic redirect following, no session cookies, no connection pooling. Use `requests` for those features.
+- **Always check `resp.ok`.** A non-200 response still returns a response object — it doesn't raise automatically.
+- **HTTPS requires TLS support.** If Zen is built without TLS, `https://` URLs will fail.
+- **`Content-Length` must match** the actual body length when sending POST/PUT.
+- **Redirects are not followed** automatically by `http`. Use `requests` for redirect following.
+
+## 28.9 Quick reference
 
 ```zen
-func handler(req) {
-    if req.method == "OPTIONS" {
-        return {
-            "status": 200,
-            "headers": {
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization"
-            },
-            "body": ""
-        }
-    }
-    
-    return {
-        "status": 200,
-        "headers": {
-            "Access-Control-Allow-Origin": "*",
-            "Content-Type": "application/json"
-        },
-        "body": json.stringify({"data": "hello"})
-    }
-}
+import http
+
+let resp = http.get("https://example.com", {
+    "User-Agent": "Zen/3.0"
+})
+
+resp.status_code   # 200
+resp.reason        # "OK"
+resp.headers       # headers dict
+resp.body          # response body
+resp.ok            # true if 200-299
+
+let resp2 = http.post("https://example.com/api", "data", {
+    "Content-Type": "application/json"
+})
 ```
 
-## Best Practices
+## 28.10 Exercises
 
-1. **Use appropriate methods** - GET for reads, POST for creates, etc.
-2. **Handle errors gracefully** - Check status codes
-3. **Set proper headers** - Content-Type, User-Agent
-4. **Use HTTPS** - For sensitive data
-5. **Validate input** - On both client and server
-6. **Use timeouts** - Don't wait forever
-7. **Respect rate limits** - Don't spam servers
-8. **Follow REST conventions** - For APIs
-
-## Chapter Summary
-
-- HTTP is stateless request-response protocol
-- Methods: GET, POST, PUT, PATCH, DELETE
-- Status codes indicate success/failure
-- Headers carry metadata
-- Use `requests` module for clients, `http` module for servers
-- Handle JSON with `json` module
-- Follow RESTful patterns for APIs
-
-**Next:** Chapter 29 - requests Module
+1. Write a function `fetch_title(url)` that fetches a page and extracts the `<title>` tag.
+2. Write a script that checks if a list of URLs return 200 or 404.
+3. Write a `head_check(url)` that returns the `Content-Length` header without downloading the body.
+4. Write a POST script that sends form data (`application/x-www-form-urlencoded`).
+5. Compare `http.get` vs `requests.get` — note the differences in convenience features.

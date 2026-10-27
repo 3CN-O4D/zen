@@ -1,36 +1,34 @@
 # Chapter 29: requests Module
 
-The `requests` module is a Python-requests-parity HTTP client. It supports
-GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS, sessions with cookies and headers,
-timeouts, redirects, JSON, TLS, and more.
+The `requests` module is a Python-requests-parity HTTP client. It supports GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS, sessions with cookies and headers, timeouts, redirects, JSON, TLS, and more.
 
 ## 29.1 Quick requests
 
 ```zen
 import requests
 
-# GET
+// GET
 let resp = requests.get("https://example.com")
-print(resp.status_code)   # 200
-print(resp.text)          # response body
-print(resp.headers)       # headers dict
+print(resp.status_code)   // 200
+print(resp.text)          // response body
+print(resp.headers)       // headers dict
 
-# GET with query params
+// GET with query params
 let resp = requests.get("https://example.com/search", {"params": {"q": "zen"}})
 
-# POST with JSON
+// POST with JSON
 let resp = requests.post("https://example.com/api", {
     "json": {"name": "Zen", "version": 3},
     "headers": {"Content-Type": "application/json"}
 })
 print(resp.status_code)
 
-# POST with form data
+// POST with form data
 let resp = requests.post("https://example.com/api", {
     "data": {"name": "Zen", "version": "3"}
 })
 
-# PUT / PATCH / DELETE / HEAD / OPTIONS
+// PUT / PATCH / DELETE / HEAD / OPTIONS
 requests.put("https://example.com/api/1", {"json": {"name": "Zen"}})
 requests.patch("https://example.com/api/1", {"json": {"version": 4}})
 requests.delete("https://example.com/api/1")
@@ -47,7 +45,7 @@ requests.options("https://example.com")
 | `text` | Body as string |
 | `content` | Body as bytes |
 | `headers` | Headers dict |
-| `ok` | True if 200-299 |
+| `ok` | True if 200–299 |
 | `url` | Final URL (after redirects) |
 | `elapsed` | Request time |
 | `cookies` | Cookies dict |
@@ -125,21 +123,34 @@ requests.session_close(sess)
 | `requests.session_cookies(sess, opts?)` | Get/update cookies |
 | `requests.session_close(sess)` | Close session |
 
+```zen
+import requests
+
+let sess = requests.Session()
+sess.headers = {"Authorization": "Bearer token123"}
+sess.cookies = {"session": "abc123"}
+
+let r1 = requests.sess_get(sess, "https://api.example.com/me")
+print(r1.json()["username"])
+
+requests.session_close(sess)
+```
+
 ## 29.4 JSON helpers
 
 ```zen
 import requests
 
-# POST JSON
+// POST JSON
 let resp = requests.post("https://example.com/api", {
     "json": {"name": "Zen", "version": 3}
 })
 
-# Parse response JSON
+// Parse response JSON
 let data = resp.json()
 print(data["id"])
 
-# Raise on error status
+// Raise on error status
 requests.raise_for_status(resp)
 ```
 
@@ -149,10 +160,10 @@ requests.raise_for_status(resp)
 import requests
 
 let codes = requests.codes
-print(codes.ok)      # 200
-print(codes.created) # 201
-print(codes.not_found) # 404
-print(codes.server_error) # 500
+print(codes.ok)      // 200
+print(codes.created) // 201
+print(codes.not_found) // 404
+print(codes.server_error) // 500
 ```
 
 ## 29.5 URL encoding utilities
@@ -161,10 +172,10 @@ print(codes.server_error) # 500
 import requests
 
 let encoded = requests.utils_quote("hello world")
-print(encoded)  # hello%20world
+print(encoded)  // hello%20world
 
 let decoded = requests.utils_unquote("hello%20world")
-print(decoded)  # hello world
+print(decoded)  // hello world
 
 print(requests.default_user_agent())
 ```
@@ -192,7 +203,7 @@ let resp = requests.post("https://example.com/api", {
 })
 ```
 
-### With timeout and retries
+### With timeout and error handling
 
 ```zen
 import requests
@@ -201,7 +212,17 @@ let resp = requests.get("https://example.com", {
     "timeout": 30
 })
 if !resp.ok {
-    print("request failed: " + str(resp.status_code))
+    print("HTTP " + str(resp.status_code))
+} else {
+    print(resp.text)
+}
+
+// Catch network errors
+try {
+    let resp = requests.get("https://example.com", {"timeout": 5})
+    print(resp.text)
+} catch as e {
+    print("request error: " + e.msg)
 }
 ```
 
@@ -272,3 +293,5 @@ requests.raise_for_status(resp)
 3. Use a session to make two requests that share cookies.
 4. Download an image and save it with `fs.write_binary`.
 5. Add basic auth and custom headers to a request.
+6. Write a function `get_json(url)` that fetches and parses JSON, returning `nil` on failure.
+7. Write a retry function that retries a GET up to 3 times on failure.

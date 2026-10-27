@@ -1,7 +1,6 @@
 # Chapter 32: dns Module
 
-The `dns` module provides DNS resolution: forward lookups (name → address),
-reverse lookups (address → name), and hostname information.
+The `dns` module provides DNS resolution: forward lookups (name → address), reverse lookups (address → name), and hostname information.
 
 ## 32.1 Resolve a hostname
 
@@ -12,8 +11,8 @@ let addrs = dns.resolve("example.com")
 for addr in addrs {
     print(addr)
 }
-# 93.184.216.34
-# 2606:2800:220:1:248:1893:25c8:1946
+// 93.184.216.34
+// 2606:2800:220:1:248:1893:25c8:1946
 ```
 
 `dns.resolve(host, port?)` returns a list of socket addresses.
@@ -78,7 +77,7 @@ func is_resolvable(host) {
     }
 }
 
-print(is_resolvable("example.com"))  # true
+print(is_resolvable("example.com"))          # true
 print(is_resolvable("nonexistent.invalid"))  # false
 ```
 
@@ -90,7 +89,7 @@ import dns
 func first_ipv4(host) {
     let addrs = dns.resolve(host)
     for addr in addrs {
-        if addr.contains(".") {  # IPv4 has dots
+        if addr.contains(".") {  // IPv4 has dots
             return addr
         }
     }
@@ -111,7 +110,7 @@ if len(addrs) > 0 {
     let addr = addrs[0]
     let sock = socket.create(socket.AF_INET, socket.SOCK_STREAM)
     socket.connect(sock, addr, 443)
-    # ... use socket ...
+    // ... use socket ...
     socket.close(sock)
 }
 ```
