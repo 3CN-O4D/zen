@@ -90,6 +90,10 @@ This comprehensive guide is organized into detailed sections covering every aspe
 69. [Task Queue with Worker Pool](reference/69-reference-task-queue.md) - channels, threads, mutexes
 70. [Password Generator & Strength Checker](reference/70-reference-password-tool.md) - crypto, argon2id
 71. [HTTP Key-Value REST Server](reference/71-reference-http-kv-server.md) - http.server, JSON, routing
+72. [File Backup / Synchronizer](reference/72-reference-file-backup.md) - content-addressed copying
+73. [CSV to JSON Converter](reference/73-reference-csv-json.md) - tabular data conversion
+74. [Task Scheduler (cron-like)](reference/74-reference-scheduler.md) - interval-based background tasks
+75. [DNS Lookup Tool](reference/75-reference-dns-tool.md) - A/AAAA/MX/TXT/NS/PTR records
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
