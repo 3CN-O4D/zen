@@ -98,6 +98,10 @@ This comprehensive guide is organized into detailed sections covering every aspe
 77. [Static File HTTP Server](reference/77-reference-static-file-server.md) - serve files with MIME types
 78. [grep Tool](reference/78-reference-grep-tool.md) - regex pattern search in files
 79. [Test Runner](reference/79-reference-test-runner.md) - minimal test framework
+80. [URL Shortener](reference/80-reference-url-shortener.md) - secure random codes + HTTP redirect
+81. [Tail -f (File Watcher)](reference/81-reference-tail-follow.md) - watch files for appended lines
+82. [HTTP Load Tester](reference/82-reference-http-load-tester.md) - concurrent load + latency stats
+83. [Host Availability Monitor](reference/83-reference-host-monitor.md) - concurrent TCP port checks
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
