@@ -1,9 +1,7 @@
 # Chapter 37: Mutexes & Synchronization
 
 Zen provides two synchronization primitives for concurrent programming:
-`shared` (atomic shared values) and `channel` (message passing between
-threads). Together they let you write safe multi-threaded programs without
-manual locks.
+`shared` (atomic shared values) and `channel` (message passing between threads). Together they let you write safe multi-threaded programs without manual locks.
 
 ## 37.1 The `shared` module — atomic shared values
 
@@ -37,13 +35,39 @@ print(shared.get(counter))   # 16
 | `shared.set(shared, value)` | Set a new value | `shared.set(counter, 5)` |
 | `shared.increment(shared, delta)` | Add delta, return new value | `shared.increment(counter, 1)` |
 
-Shared values are safe to read and write from multiple threads — operations
-are atomic, so there are no torn reads or races on the value itself.
+Shared values are safe to read and write from multiple threads — operations are atomic, so there are no torn reads or races on the value itself.
+
+```zen
+import shared
+import thread
+
+let counter = shared.create(0)
+
+func worker(id) {
+    for i in 1..100 {
+        shared.increment(counter, 1)
+    }
+    print("worker " + str(id) + " done")
+}
+
+let threads = []
+for i in 1..5 {
+    let t = thread.spawn(worker(i))
+    threads.push(t)
+}
+
+for t in threads {
+    thread.join(t)
+}
+
+print(shared.get(counter))  # 500 (5 workers × 100 increments)
+```
+
+Because `shared.increment` is atomic, the final count is exactly 500 — no lost updates even with 5 threads incrementing concurrently.
 
 ## 37.2 The `channel` module — message passing
 
-Channels send values between threads. A channel is created, values are sent
-into it, and received from it on the other end.
+Channels send values between threads. A channel is created, values are sent into it, and received from it on the other end.
 
 ```zen
 import channel
@@ -67,8 +91,7 @@ print(channel.recv(ch))  # true
 | `channel.send(ch, value)` | Send a value | `channel.send(ch, 42)` |
 | `channel.recv(ch)` | Receive a value (blocks) | `channel.recv(ch)` |
 
-`recv` blocks until a value is available, making channels useful for
-coordinating work between threads.
+`recv` blocks until a value is available, making channels useful for coordinating work between threads.
 
 ## 37.3 Threads: `thread` module
 
@@ -108,7 +131,7 @@ func producer() {
         channel.send(ch, i)
         print("produced: " + str(i))
     }
-    channel.send(ch, nil)  # sentinel: done
+    channel.send(ch, nil)  // sentinel: done
 }
 
 func consumer() {
@@ -156,8 +179,7 @@ for t in threads {
 print(shared.get(counter))  # 500 (5 workers × 100 increments)
 ```
 
-Because `shared.increment` is atomic, the final count is exactly 500 — no
-lost updates even with 5 threads incrementing concurrently.
+Because `shared.increment` is atomic, the final count is exactly 500 — no lost updates even with 5 threads incrementing concurrently.
 
 ## 37.6 Common patterns
 
@@ -177,7 +199,7 @@ func worker() {
 }
 
 let t = thread.spawn(worker)
-# ... later ...
+// ... later ...
 shared.set(running, false)
 thread.join(t)
 ```
@@ -194,7 +216,7 @@ func dispatcher(jobs) {
     for job in jobs {
         channel.send(queue, job)
     }
-    channel.send(queue, nil)  # done
+    channel.send(queue, nil)  // done
 }
 
 func worker(queue) {
@@ -216,15 +238,10 @@ thread.join(tw2)
 
 ## 37.8 Common pitfalls
 
-- **`recv` blocks forever** if no value is ever sent. Always ensure a sender
-  exists, or use a sentinel value (like `nil`) to signal completion.
-- **`shared` values are atomic individually**, but compound operations
-  (read-then-write) are not atomic. Use `increment` instead of
-  `get`+`set`+counter when you need to add.
-- **`join` blocks** until the thread finishes. Join all threads before your
-  program exits, or their work may be cut short.
-- **Channels are unbuffered.** `send` blocks until a `recv` is waiting, and
-  `recv` blocks until a `send` happens.
+- **`recv` blocks forever** if no value is ever sent. Always ensure a sender exists, or use a sentinel value (like `nil`) to signal completion.
+- **`shared` values are atomic individually**, but compound operations (read-then-write) are not atomic. Use `increment` instead of `get`+`set`+counter when you need to add.
+- **`join` blocks** until the thread finishes. Join all threads before your program exits, or their work may be cut short.
+- **Channels are unbuffered.** `send` blocks until a `recv` is waiting, and `recv` blocks until a `send` happens.
 
 ## 37.9 Quick reference
 
@@ -252,11 +269,8 @@ thread.current()
 
 ## 37.10 Exercises
 
-1. Write a program that spawns 5 threads, each incrementing a shared counter
-   1000 times, and verify the final count is 5000.
-2. Use a channel to implement a producer-consumer with 2 producers and 1
-   consumer.
-3. Write a `parallel_map(func, items)` that runs `func` on each item in a
-   separate thread and collects results via a channel.
+1. Write a program that spawns 5 threads, each incrementing a shared counter 1000 times, and verify the final count is 5000.
+2. Use a channel to implement a producer-consumer with 2 producers and 1 consumer.
+3. Write a `parallel_map(func, items)` that runs `func` on each item in a separate thread and collects results via a channel.
 4. Use a shared boolean flag to gracefully stop a background thread.
 5. Write a thread-safe counter class using `shared.create` and methods.

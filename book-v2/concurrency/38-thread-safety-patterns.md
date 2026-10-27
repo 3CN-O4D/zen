@@ -1,7 +1,6 @@
 # Chapter 38: Thread Safety & Patterns
 
-This chapter covers practical thread-safe patterns: worker pools, reader-writer
-scenarios, producer-consumer pipelines, and avoiding common concurrency bugs.
+This chapter covers practical thread-safe patterns: worker pools, reader-writer scenarios, producer-consumer pipelines, and avoiding common concurrency bugs.
 
 ## 38.1 Worker pool pattern
 
@@ -35,7 +34,7 @@ func dispatcher(jobs) {
     }
 }
 
-# Start 4 workers
+// Start 4 workers
 for i in 1..4 {
     thread.spawn(worker(i))
 }
@@ -43,7 +42,7 @@ for i in 1..4 {
 let jobs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 thread.spawn(dispatcher(jobs))
 
-# Collect results
+// Collect results
 let completed = 0
 while completed < len(jobs) {
     let r = channel.recv(results)
@@ -93,7 +92,6 @@ func stage3() {
 thread.spawn(stage1)
 thread.spawn(stage2)
 thread.spawn(stage3)
-# main thread waits implicitly; add joins if needed
 ```
 
 ## 38.3 Reader-writer pattern with shared flag
@@ -134,29 +132,25 @@ Deadlocks happen when two threads each wait for the other. Prevention rules:
 4. **Keep critical sections small.**
 
 Bad (potential deadlock):
-
-```zen
-# Thread A: lock A, then wait for B
-# Thread B: lock B, then wait for A
+```
+// Thread A: lock A, then wait for B
+// Thread B: lock B, then wait for A
 ```
 
 Good (consistent order):
-
-```zen
-# Both threads: lock A, then lock B
+```
+// Both threads: lock A, then lock B
 ```
 
 ## 38.5 Avoiding race conditions
 
 A race condition is when the outcome depends on thread timing. Prevention:
 
-1. **Use `shared` for atomic counters** — `shared.increment` instead of
-   `get`+`set`.
+1. **Use `shared` for atomic counters** — `shared.increment` instead of `get`+`set`.
 2. **Use channels to hand off ownership** — send a value, don't share it.
 3. **Don't share mutable state** between threads unless protected.
 
 Bad (race):
-
 ```zen
 let count = 0  # not shared — each thread may see its own copy
 func bad_worker() {
@@ -167,7 +161,6 @@ func bad_worker() {
 ```
 
 Good (atomic):
-
 ```zen
 import shared
 let count = shared.create(0)
@@ -180,9 +173,7 @@ func good_worker() {
 
 ## 38.6 Thread-local data
 
-Each thread has its own stack and locals. Variables created inside a thread
-function are not visible to other threads unless shared via `shared` or
-`channel`:
+Each thread has its own stack and locals. Variables created inside a thread function are not visible to other threads unless shared via `shared` or `channel`:
 
 ```zen
 import thread
@@ -194,7 +185,7 @@ func worker() {
 
 let t = thread.spawn(worker)
 thread.join(t)
-# print(local)  # error: local not defined here
+// print(local)  # error: local not defined here
 ```
 
 ## 38.7 Common patterns summary
@@ -235,5 +226,4 @@ for t in threads { thread.join(t) }
 2. Implement a 3-stage pipeline: generate → transform → print.
 3. Write a `parallel_map` that runs a function on each item concurrently.
 4. Use a shared flag to stop all workers when one encounters an error.
-5. Write a program that counts lines across multiple "files" (lists) in
-   parallel threads and sums the total.
+5. Write a program that counts lines across multiple "files" (lists) in parallel threads and sums the total.

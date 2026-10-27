@@ -1,288 +1,209 @@
 # Chapter 36: Channels
 
-Channels provide a safe way for threads to communicate by sending and receiving values. They help avoid race conditions by synchronizing access to data.
+Channels send values between threads. A channel is created, values are sent into it, and received from it on the other end. Channels are unbuffered — `send` blocks until a `recv` is waiting, and vice versa.
 
-## What are Channels?
-
-Channels are like pipes - one thread can send data, another can receive it. They handle synchronization automatically.
-
-## Creating Channels
+## 36.1 The `channel` module
 
 ```zen
-let ch = channel()
+import channel
+
+let ch = channel.make()
+
+channel.send(ch, "hello")
+channel.send(ch, 42)
+channel.send(ch, true)
+
+print(channel.recv(ch))  # hello
+print(channel.recv(ch))  # 42
+print(channel.recv(ch))  # true
 ```
 
-## Sending and Receiving
+### Channel functions
 
-### Basic Communication
+| Function | Description | Example |
+|----------|-------------|---------|
+| `channel.make()` | Create a new channel | `channel.make()` |
+| `channel.send(ch, value)` | Send a value (blocks until received) | `channel.send(ch, 42)` |
+| `channel.recv(ch)` | Receive a value (blocks until sent) | `channel.recv(ch)` |
 
 ```zen
-let ch = channel()
+import channel
 
-spawn(fn() {
-    ch.send("Hello from thread!")
-    print("Message sent")
+let ch = channel.make()
+
+channel.send(ch, "first")
+channel.send(ch, "second")
+channel.send(ch, "third")
+
+print(channel.recv(ch))  # first
+print(channel.recv(ch))  # second
+print(channel.recv(ch))  # third
+```
+
+## 36.2 Blocking semantics
+
+Channels are unbuffered and synchronous:
+
+- `send(ch, v)` blocks until some thread calls `recv(ch)`.
+- `recv(ch)` blocks until some thread calls `send(ch, v)`.
+- The value is handed directly from sender to receiver.
+
+```zen
+import channel
+import thread
+
+let ch = channel.make()
+
+// Sender thread
+thread.spawn(fn() {
+    channel.send(ch, "ping")
+    print("sent")
 })
 
-let msg = ch.recv()
-print("Received: " + msg)
+// Receiver (main thread)
+let msg = channel.recv(ch)
+print("received: " + msg)  // received: ping
 ```
 
-### Bidirectional Communication
+## 36.3 Producer-consumer
 
 ```zen
-let ch1 = channel()
-let ch2 = channel()
+import channel
+import thread
 
-spawn(fn() {
-    let msg = ch1.recv()
-    print("Worker received: " + msg)
-    ch2.send("Response from worker")
-})
+let ch = channel.make()
 
-ch1.send("Request from main")
-let response = ch2.recv()
-print("Main received: " + response)
-```
-
-## Blocking Behavior
-
-`send()` and `recv()` are blocking by default:
-- `send()` blocks if channel is full (for buffered channels)
-- `recv()` blocks until a value is available
-
-```zen
-let ch = channel()
-
-spawn(fn() {
-    # This will block until main receives
-    ch.send("data")
-    print("Send completed")
-})
-
-print("Main about to receive")
-let data = ch.recv()
-print("Main received: " + data)
-```
-
-## Producer-Consumer Pattern
-
-This is the most common use case for channels:
-
-```zen
-let ch = channel()
-
-# Producer
-spawn(fn() {
-    let i = 1
-    while i <= 5 {
-        print("Producing: " + i)
-        ch.send(i)
-        i = i + 1
+func producer() {
+    for i in 1..5 {
+        channel.send(ch, i)
+        print("produced: " + str(i))
     }
-    ch.close()
-    print("Producer done")
-})
+    channel.send(ch, nil)  // sentinel: done
+}
 
-# Consumer
-spawn(fn() {
+func consumer() {
     while true {
-        let val = ch.recv()
-        if val == null {
-            break  # Channel closed
-        }
-        print("Consuming: " + val)
-    }
-    print("Consumer done")
-})
-```
-
-## Multiple Producers, Multiple Consumers
-
-```zen
-let ch = channel()
-
-# Producer 1
-spawn(fn() {
-    let i = 0
-    while i < 3 {
-        ch.send("P1: " + i)
-        i = i + 1
-    }
-})
-
-# Producer 2
-spawn(fn() {
-    let i = 0
-    while i < 3 {
-        ch.send("P2: " + i)
-        i = i + 1
-    }
-})
-
-# Consumer
-let i = 0
-while i < 6 {
-    print(ch.recv())
-    i = i + 1
-}
-```
-
-## Closing Channels
-
-Close a channel when no more values will be sent:
-
-```zen
-let ch = channel()
-
-spawn(fn() {
-    ch.send(1)
-    ch.send(2)
-    ch.send(3)
-    ch.close()  # Signal no more data
-})
-
-# Receive until closed
-while true {
-    let v = ch.recv()
-    if v == null {
-        break
-    }
-    print(v)
-}
-```
-
-## Buffered vs Unbuffered Channels
-
-**Unbuffered (default):** Sender blocks until receiver is ready
-```zen
-let ch = channel()  # Unbuffered
-```
-
-**Buffered:** Can hold multiple values without blocking
-```zen
-let ch = channel(10)  # Buffer size of 10
-```
-
-```zen
-let ch = channel(3)
-
-spawn(fn() {
-    ch.send(1)
-    ch.send(2)
-    ch.send(3)
-    print("Sent 3 items")
-    ch.send(4)  # Blocks if buffer full and no receiver
-    print("Sent 4th item")
-})
-
-# Consumer reads later
-let i = 0
-while i < 4 {
-    print("Received: " + ch.recv())
-    i = i + 1
-}
-```
-
-## Select/Multiplexing Pattern
-
-While Zen may not have a built-in `select`, you can use patterns:
-
-```zen
-let ch1 = channel()
-let ch2 = channel()
-
-spawn(fn() {
-    ch1.send("from ch1")
-})
-
-spawn(fn() {
-    ch2.send("from ch2")
-})
-
-# Check which channel has data
-# Use non-blocking patterns or just receive in order
-```
-
-## Practical Example: Work Queue
-
-```zen
-let jobs = channel()
-let results = channel()
-
-# Worker pool
-func worker(id) {
-    while true {
-        let job = jobs.recv()
-        if job == null {
+        let v = channel.recv(ch)
+        if v == nil {
             break
         }
-        print("Worker " + id + " processing job " + job)
-        # Simulate work
-        let result = job * 2
-        results.send(result)
+        print("consumed: " + str(v))
     }
-    print("Worker " + id + " done")
 }
 
-spawn(fn() { worker(1) })
-spawn(fn() { worker(2) })
-spawn(fn() { worker(3) })
-
-# Send jobs
-let i = 1
-while i <= 10 {
-    jobs.send(i)
-    i = i + 1
-}
-jobs.close()
-
-# Collect results
-let i = 0
-while i < 10 {
-    print("Result: " + results.recv())
-    i = i + 1
-}
+let t1 = thread.spawn(producer)
+let t2 = thread.spawn(consumer)
+thread.join(t1)
+thread.join(t2)
+print("all done")
 ```
 
-## Practical Example: Timeout Pattern
+Output:
+```
+produced: 1
+consumed: 1
+produced: 2
+consumed: 2
+...
+produced: 5
+consumed: 5
+all done
+```
+
+## 36.4 Multiple producers and consumers
 
 ```zen
-let ch = channel()
-let timeout_ch = channel()
+import channel
+import thread
 
-spawn(fn() {
-    # Simulate slow operation
-    # Would sleep here if sleep exists
-    ch.send("slow result")
-})
+let ch = channel.make()
 
-spawn(fn() {
-    # Simulate timeout
-    timeout_ch.send("timeout")
-})
+func producer(id, count) {
+    for i in 1..count {
+        channel.send(ch, #(id, i))
+    }
+}
 
-# Race between result and timeout
-let result = ch.recv()
-print(result)  # Gets whichever comes first
+func consumer(id) {
+    while true {
+        let v = channel.recv(ch)
+        if v == nil {
+            break
+        }
+        print("consumer " + str(id) + " got: " + str(v[1]))
+    }
+}
+
+// Start 2 producers
+thread.spawn(producer(1, 3))
+thread.spawn(producer(2, 3))
+
+// Send 2 sentinels (one per consumer)
+channel.send(ch, nil)
+channel.send(ch, nil)
+
+// Start 2 consumers
+thread.spawn(consumer(1))
+thread.spawn(consumer(2))
 ```
 
-## Best Practices
+## 36.5 Channels and shared values
 
-1. **Close channels from sender side** - Only senders should close
-2. **Don't send on closed channels** - Will cause errors
-3. **Use channels for communication, mutexes for shared state** - Prefer channels
-4. **Buffer appropriately** - Use buffered channels to reduce blocking
-5. **Handle channel closure** - Always check for null when receiving
-6. **One direction per channel** - Keeps design simple
+Use `shared` for counters, `channel` for message passing:
 
-## Chapter Summary
+```zen
+import channel
+import shared
+import thread
 
-- Channels enable safe thread communication
-- Use `channel()` to create, `send()` to send, `recv()` to receive
-- Close with `close()`, check for null on receive
-- Support buffered channels with `channel(size)`
-- Perfect for producer-consumer and worker pool patterns
-- Automatically handle synchronization
+let ch = channel.make()
+let counter = shared.create(0)
 
-**Next:** Chapter 37 - Mutexes & Locks
+func worker(id) {
+    for i in 1..10 {
+        shared.increment(counter, 1)
+        channel.send(ch, #(id, i))
+    }
+}
+
+let t1 = thread.spawn(worker(1))
+let t2 = thread.spawn(worker(2))
+
+// Collect results
+for i in 1..20 {
+    let v = channel.recv(ch)
+    print("got: " + str(v))
+}
+
+thread.join(t1)
+thread.join(t2)
+print("counter: " + str(shared.get(counter)))  # 20
+```
+
+## 36.6 Common pitfalls
+
+- **`recv` blocks forever** if no value is ever sent. Always ensure a sender exists, or use a sentinel value (like `nil`) to signal completion.
+- **`send` blocks forever** if no receiver is waiting.
+- **Channels are unbuffered.** There's no queue — sender and receiver must rendezvous.
+- **Forgetting to join threads.** The program may exit before threads finish sending.
+
+## 36.7 Quick reference
+
+```zen
+import channel
+
+let ch = channel.make()
+channel.send(ch, "msg")
+let v = channel.recv(ch)
+
+// Producer-consumer pattern
+channel.send(ch, nil)  // sentinel to signal completion
+```
+
+## 36.8 Exercises
+
+1. Write a program with 1 producer and 1 consumer using a channel.
+2. Write a program with 2 producers and 1 consumer.
+3. Write `parallel_map(func, items)` that runs `func` on each item in a thread and sends results via a channel.
+4. Write a pipeline: stage1 generates numbers, stage2 squares them, stage3 prints them. Connect stages with channels.
+5. Write a program where multiple workers pull jobs from a channel channel and send results to another channel.

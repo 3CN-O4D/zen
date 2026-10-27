@@ -1,191 +1,146 @@
 # Chapter 35: Threading Fundamentals
 
-Zen supports multi-threaded programming, allowing your programs to execute multiple tasks concurrently. This chapter covers the fundamentals of threading in Zen.
+Zen supports OS threads via the `thread` module. Threads run concurrently (subject to the OS scheduler) and communicate through `shared` atomic values and `channel` message passing.
 
-## Understanding Concurrency vs Parallelism
-
-- **Concurrency**: Dealing with many things at once (structure)
-- **Parallelism**: Doing many things at once (execution)
-
-Threads enable both concurrent and parallel execution depending on your system's CPU cores.
-
-## Creating Threads with `spawn()`
-
-The `spawn()` function creates a new OS thread to execute a function.
-
-### Basic Thread Creation
+## 35.1 The `thread` module
 
 ```zen
+import thread
+
+func worker(name) {
+    print("Worker " + name + " starting")
+    return "done: " + name
+}
+
+let t = thread.spawn(worker("A"))
+let result = thread.join(t)
+print(result)  # done: A
+
+print(thread.current())  # current thread info (nil or handle)
+```
+
+### Thread functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `thread.spawn(func)` | Start `func` in a new thread | `thread.spawn(worker)` |
+| `thread.join(thread)` | Wait for thread, get return value | `thread.join(t)` |
+| `thread.current()` | Current thread info | `thread.current()` |
+
+```zen
+import thread
+
+func count(n) {
+    let total = 0
+    for i in 1..n {
+        total = total + i
+    }
+    return total
+}
+
+let t = thread.spawn(count(100))
+let result = thread.join(t)
+print(result)  # 5050
+```
+
+## 35.2 Thread lifecycle
+
+```zen
+import thread
+
+func slow() {
+    // simulate work
+    return "finished"
+}
+
+let t = thread.spawn(slow)
+
+// Do other work in main thread...
+
+let result = thread.join(t)  // blocks until slow() returns
+print(result)
+```
+
+`thread.join` blocks the calling thread until the target thread completes, then returns the target's return value. If the target raised an error, `join` propagates it.
+
+```zen
+import thread
+
+func failing() {
+    throw "boom"
+}
+
+let t = thread.spawn(failing)
+try {
+    thread.join(t)
+} catch as e {
+    print(e.msg)  # boom
+}
+```
+
+## 35.3 Thread-local data
+
+Variables created inside a thread function are local to that thread:
+
+```zen
+import thread
+
 func worker() {
-    print("Hello from worker thread!")
+    let local = "only in this thread"
+    print(local)
 }
 
-spawn(worker)
-print("Hello from main thread!")
+let t = thread.spawn(worker)
+thread.join(t)
+// local is not accessible here
 ```
 
-The order of output is non-deterministic - threads run concurrently.
+To share data between threads, use `shared` (atomic values) or `channel` (message passing).
 
-### Spawning with Anonymous Functions
-
-```zen
-spawn(fn() {
-    print("Anonymous thread running")
-    let i = 0
-    while i < 3 {
-        print("Thread: " + i)
-        i = i + 1
-    }
-})
-
-print("Main thread continues")
-```
-
-### Passing Data to Threads
-
-Since threads have separate execution contexts, you need to be careful about sharing data:
+## 35.3 Multiple threads
 
 ```zen
-func print_message(msg, count) {
-    let i = 0
-    while i < count {
-        print(msg + ": " + i)
-        i = i + 1
-    }
+import thread
+
+func worker(id) {
+    print("Worker " + str(id) + " started")
+    return "worker " + str(id) + " done"
 }
 
-spawn(fn() { print_message("Worker1", 5) })
-spawn(fn() { print_message("Worker2", 5) })
-```
-
-## Thread Lifecycle
-
-1. **Spawn**: Thread created and scheduled
-2. **Running**: Executing code
-3. **Finished**: Function returns, thread terminates
-
-```zen
-func task() {
-    print("Task started")
-    # Do work
-    let i = 0
-    while i < 1000000 {
-        i = i + 1
-    }
-    print("Task finished")
+let threads = []
+for i in 1..5 {
+    let t = thread.spawn(worker(i))
+    threads.push(t)
 }
 
-spawn(task)
-print("Main continues immediately")
+for t in threads {
+    let result = thread.join(t)
+    print(result)
+}
+print("All workers done")
 ```
 
-## Multiple Threads
+## 35.4 Common pitfalls
+
+- **`thread.join` blocks.** Join all threads before your program exits, or their work may be cut short.
+- **Exceptions propagate.** If a thread function raises, `thread.join` re-raises it in the joining thread.
+- **No shared state by default.** Each thread has its own stack and locals. Use `shared` or `channel` to communicate.
+- **Thread count.** Don't spawn more threads than necessary; OS threads are relatively heavyweight.
+
+## 35.5 Quick reference
 
 ```zen
-func countdown(name, start) {
-    let i = start
-    while i > 0 {
-        print(name + ": " + i)
-        i = i - 1
-    }
-    print(name + ": Done!")
-}
+import thread
 
-spawn(fn() { countdown("A", 3) })
-spawn(fn() { countdown("B", 3) })
-spawn(fn() { countdown("C", 3) })
+let t = thread.spawn(func() { return "result" })
+let result = thread.join(t)
+let cur = thread.current()
 ```
 
-## Thread Safety Considerations
+## 35.6 Exercises
 
-Threads share:
-- Global variables (need synchronization)
-- Heap objects (be careful with mutable state)
-- Native modules
-
-Each thread has its own:
-- Stack
-- Local variables
-- Register file
-
-## Practical Example: Parallel Computation
-
-```zen
-let results = []
-let lock = mutex.new(null)
-
-func compute_square(n) {
-    let result = n * n
-    # Add to shared results with lock
-    let m = mutex.lock(lock)
-    results.push({n: n, square: result})
-    mutex.unlock(m)
-    print("Computed square of " + n)
-}
-
-# Spawn threads for parallel computation
-spawn(fn() { compute_square(1) })
-spawn(fn() { compute_square(2) })
-spawn(fn() { compute_square(3) })
-spawn(fn() { compute_square(4) })
-spawn(fn() { compute_square(5) })
-```
-
-## Best Practices for Threading
-
-1. **Minimize shared mutable state** - Use channels for communication
-2. **Use synchronization primitives** - Mutexes when sharing is necessary
-3. **Keep threads short-lived** - Or design for long-running workers
-4. **Avoid race conditions** - Always protect shared data
-5. **Consider thread pool** - Don't spawn too many threads
-6. **Handle errors** - Threads can have errors too
-
-## Common Pitfalls
-
-### Race Condition Example
-
-```zen
-let counter = 0
-
-func increment() {
-    let i = 0
-    while i < 1000 {
-        counter = counter + 1  # NOT thread-safe!
-        i = i + 1
-    }
-}
-
-spawn(increment)
-spawn(increment)
-# counter may not be 2000 due to race condition
-```
-
-Use mutex to fix:
-
-```zen
-let counter = 0
-let lock = mutex.new(counter)
-
-func increment_safe() {
-    let i = 0
-    while i < 1000 {
-        let m = mutex.lock(lock)
-        let val = mutex.get(m)
-        mutex.set(m, val + 1)
-        counter = mutex.get(m)
-        mutex.unlock(m)
-        i = i + 1
-    }
-}
-```
-
-## Chapter Summary
-
-- Use `spawn(func)` to create threads
-- Threads run concurrently and independently
-- Be careful with shared mutable state
-- Use channels or mutexes for synchronization
-- Thread order is non-deterministic
-- Each thread has its own stack and local variables
-
-**Next:** Chapter 36 - Channels
+1. Write a program that spawns 5 threads, each printing its ID, and joins them all.
+2. Write `parallel_sum(nums)` that splits a list into chunks, sums each chunk in a thread, and combines results.
+3. Write a thread that sleeps for 1 second then prints "done".
+4. Demonstrate that `thread.join` propagates errors from the child thread.
+5. Write a function `run_concurrent(funcs)` that runs a list of zero-arg functions in threads and returns their results in order.
