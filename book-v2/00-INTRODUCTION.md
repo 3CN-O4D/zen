@@ -139,6 +139,7 @@ This comprehensive guide is organized into detailed sections covering every aspe
 - [Appendix H: Troubleshooting & FAQ](appendix/h-troubleshooting.md)
 - [Appendix I: Platform Differences](appendix/i-platform-differences.md)
 - [Appendix J: Standard Library Complete API Reference](appendix/j-stdlib-api-reference.md)
+- [Appendix K: Where to Go Next](appendix/k-where-to-go-next.md)
 
 ## About This Book
 
