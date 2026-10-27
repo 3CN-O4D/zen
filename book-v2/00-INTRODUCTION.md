@@ -114,6 +114,8 @@ This comprehensive guide is organized into detailed sections covering every aspe
 93. [Batch File Renamer](reference/93-reference-batch-rename.md) - bulk rename with dry-run
 94. [Static Blog Engine](reference/94-reference-static-blog.md) - Markdown posts + sorted index
 95. [Markdown Slides Generator](reference/95-reference-slides.md) - single-file HTML slideshow
+96. [HTTP Health Dashboard](reference/96-reference-health-dashboard.md) - concurrent endpoint checks + status board
+97. [Text Resume Generator](reference/97-reference-resume.md) - markdown to printable HTML resume
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
