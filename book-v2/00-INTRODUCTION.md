@@ -102,6 +102,8 @@ This comprehensive guide is organized into detailed sections covering every aspe
 - [Appendix E: Quick Reference Card](appendix/e-quick-reference.md)
 - [Appendix F: Complete Language Reference](appendix/f-complete-reference.md)
 - [Appendix G: Exercise Solutions](appendix/g-exercise-solutions.md)
+- [Appendix H: Troubleshooting & FAQ](appendix/h-troubleshooting.md)
+- [Appendix I: Platform Differences](appendix/i-platform-differences.md)
 
 ## About This Book
 
