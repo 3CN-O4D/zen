@@ -112,6 +112,8 @@ This comprehensive guide is organized into detailed sections covering every aspe
 91. [Log Rotator](reference/91-reference-log-rotator.md) - size-based log rotation
 92. [HTTP Response Cache (TTL)](reference/92-reference-http-cache.md) - cached origin fetches
 93. [Batch File Renamer](reference/93-reference-batch-rename.md) - bulk rename with dry-run
+94. [Static Blog Engine](reference/94-reference-static-blog.md) - Markdown posts + sorted index
+95. [Markdown Slides Generator](reference/95-reference-slides.md) - single-file HTML slideshow
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
