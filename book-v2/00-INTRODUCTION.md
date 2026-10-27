@@ -118,6 +118,7 @@ This comprehensive guide is organized into detailed sections covering every aspe
 97. [Text Resume Generator](reference/97-reference-resume.md) - markdown to printable HTML resume
 98. [Personal API Dashboard (Full-Stack)](reference/98-reference-personal-dashboard.md) - static + JSON API + health checks
 99. [Sitemap & Robots Generator](reference/99-reference-sitemap.md) - SEO files for static sites
+100. [Client-Side Search Index Generator](reference/100-reference-search-index.md) - inverted word index for static search
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
