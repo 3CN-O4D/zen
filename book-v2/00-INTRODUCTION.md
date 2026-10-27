@@ -49,6 +49,7 @@ This comprehensive guide is organized into detailed sections covering every aspe
 32. [DNS Module](networking/32-dns.md) - Domain name resolution
 33. [url Module](networking/33-url.md) - URL parsing and manipulation
 34. [Raw Sockets](networking/34-raw-sockets.md) - Packet-level networking
+34b. [Networking Deep Dive](networking/68-networking-deep-dive.md) - Full OSI packet trace + socket labs
 
 ### Part 6: Concurrency & Threading
 35. [Threading Fundamentals](concurrency/35-threading-fundamentals.md) - Threads, spawning, execution
@@ -104,6 +105,7 @@ This comprehensive guide is organized into detailed sections covering every aspe
 - [Appendix G: Exercise Solutions](appendix/g-exercise-solutions.md)
 - [Appendix H: Troubleshooting & FAQ](appendix/h-troubleshooting.md)
 - [Appendix I: Platform Differences](appendix/i-platform-differences.md)
+- [Appendix J: Standard Library Complete API Reference](appendix/j-stdlib-api-reference.md)
 
 ## About This Book
 
