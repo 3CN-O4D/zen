@@ -102,6 +102,10 @@ This comprehensive guide is organized into detailed sections covering every aspe
 81. [Tail -f (File Watcher)](reference/81-reference-tail-follow.md) - watch files for appended lines
 82. [HTTP Load Tester](reference/82-reference-http-load-tester.md) - concurrent load + latency stats
 83. [Host Availability Monitor](reference/83-reference-host-monitor.md) - concurrent TCP port checks
+84. [JSON Pretty Printer](reference/84-reference-json-pretty.md) - validate, pretty-print, minify
+85. [Base64 Tool](reference/85-reference-base64-tool.md) - encode/decode files and strings
+86. [Word Frequency Analyzer](reference/86-reference-word-frequency.md) - top-N word counts
+87. [Env Template Expander](reference/87-reference-env-template.md) - ${VAR} from environment
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
