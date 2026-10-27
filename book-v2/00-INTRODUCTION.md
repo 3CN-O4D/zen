@@ -87,6 +87,9 @@ This comprehensive guide is organized into detailed sections covering every aspe
 65. [HTTP Uptime Monitor](reference/65-reference-http-monitor.md) - endpoint checks with response times
 66. [File Encryptor (AES-GCM)](reference/66-reference-file-encryptor.md) - PBKDF2 + authenticated encryption
 67. [Website Link Checker](reference/67-reference-link-checker.md) - fetch, extract, verify links
+69. [Task Queue with Worker Pool](reference/69-reference-task-queue.md) - channels, threads, mutexes
+70. [Password Generator & Strength Checker](reference/70-reference-password-tool.md) - crypto, argon2id
+71. [HTTP Key-Value REST Server](reference/71-reference-http-kv-server.md) - http.server, JSON, routing
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
