@@ -1,9 +1,6 @@
 # Chapter 15: math Module
 
-The `math` module provides mathematical functions and constants. It ships as
-a pure-Zen implementation (`std/math.z`) with a native Rust tier reachable
-via `math.native`. Set `ZEN_PURE = true` to prefer the pure tier; set
-`ZEN_NATIVE_ONLY=math` to force the native tier.
+The `math` module provides mathematical functions and constants. It ships as a pure-Zen implementation (`std/math.z`) with a native Rust tier reachable via `math.native`. Set `ZEN_PURE = true` to prefer the pure tier; set `ZEN_NATIVE_ONLY=math` to force the native tier.
 
 ## 15.1 Constants
 
@@ -14,6 +11,12 @@ print(math.pi)     # 3.141592653589793
 print(math.e)      # 2.718281828459045
 print(math.tau)    # 6.283185307179586
 ```
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `math.pi` | 3.141592653589793 | π, ratio of circumference to diameter |
+| `math.e` | 2.718281828459045 | Euler's number, base of natural logarithm |
+| `math.tau` | 6.283185307179586 | τ = 2π |
 
 ## 15.2 Rounding
 
@@ -32,18 +35,26 @@ print(math.ceil(3.1))    # 4
 print(math.trunc(-3.9))  # -3
 print(math.round(3.5))   # 4
 print(math.round(2.5))   # 2 (banker's rounding)
+print(math.floor(-3.9))  # -4 (floor toward −inf)
+print(math.ceil(-3.9))   # -3 (ceil toward +inf)
+```
+
+`floor` and `ceil` always return an integer-valued float:
+```zen
+print(typeof(math.floor(3.9)))  # "float"
+print(math.floor(3.9) == 3)     # true
 ```
 
 ## 15.3 Powers and logarithms
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `pow(x, y)` | x raised to y | `math.pow(2, 3)` → `8` |
-| `sqrt(x)` | Square root | `math.sqrt(16)` → `4` |
-| `exp(x)` | e raised to x | `math.exp(1)` → `2.718...` |
-| `log(x)` | Natural log | `math.log(math.e)` → `1` |
-| `log10(x)` | Base-10 log | `math.log10(100)` → `2` |
-| `log2(x)` | Base-2 log | `math.log2(8)` → `3` |
+| Function | Description | Example | Result |
+|----------|-------------|---------|--------|
+| `pow(x, y)` | x raised to y | `math.pow(2, 3)` | `8` |
+| `sqrt(x)` | Square root | `math.sqrt(16)` | `4` |
+| `exp(x)` | e raised to x | `math.exp(1)` | `2.718...` |
+| `log(x)` | Natural log | `math.log(math.e)` | `1` |
+| `log10(x)` | Base-10 log | `math.log10(100)` | `2` |
+| `log2(x)` | Base-2 log | `math.log2(8)` | `3` |
 
 ```zen
 import math
@@ -54,7 +65,16 @@ print(math.exp(0))       # 1
 print(math.log(1))       # 0
 print(math.log10(1000))  # 3
 print(math.log2(1024))   # 10
+print(math.exp(1))       # 2.718281828459045
+print(math.pow(4, 0.5))  # 2
 ```
+
+Edge cases:
+- `math.sqrt(-1)` → ValueError (negative sqrt)
+- `math.log(0)` → −infinity
+- `math.log(-1)` → nan
+- `math.pow(0, 0)` → 1
+- `math.pow(-1, 0.5)` → nan (fractional power of negative)
 
 ## 15.4 Trigonometry
 
@@ -65,9 +85,9 @@ All angles in radians:
 | `sin(x)` | Sine |
 | `cos(x)` | Cosine |
 | `tan(x)` | Tangent |
-| `asin(x)` | Arcsine |
-| `acos(x)` | Arccosine |
-| `atan(x)` | Arctangent |
+| `asin(x)` | Arcsine (returns radians) |
+| `acos(x)` | Arccosine (returns radians) |
+| `atan(x)` | Arctangent (returns radians) |
 | `atan2(y, x)` | Arctangent of y/x (correct quadrant) |
 | `degrees(x)` | Radians → degrees |
 | `radians(x)` | Degrees → radians |
@@ -79,8 +99,17 @@ print(math.sin(math.pi / 2))   # 1
 print(math.cos(0))             # 1
 print(math.tan(math.pi / 4))   # 1
 print(math.degrees(math.pi))   # 180
-print(math.radians(180))       # 3.14159...
+print(math.radians(180))       # 3.141592653589793
+print(math.asin(1))            # 1.5707963267948966 (π/2)
+print(math.acos(1))            # 0
+print(math.atan(1))            # 0.7853981633974483 (π/4)
+print(math.atan2(1, 1))        # 0.7853981633974483 (π/4)
+print(math.atan2(1, -1))       # 2.356194490192345 (3π/4, correct quadrant)
 ```
+
+Domain:
+- `asin(x)`, `acos(x)` require −1 ≤ x ≤ 1, else nan
+- `atan2(0, 0)` → 0 (implementation-defined)
 
 ## 15.5 Hyperbolic functions
 
@@ -93,27 +122,37 @@ print(math.radians(180))       # 3.14159...
 | `acosh(x)` | Inverse hyperbolic cosine |
 | `atanh(x)` | Inverse hyperbolic tangent |
 
+```zen
+import math
+
+print(math.sinh(0))     # 0
+print(math.cosh(0))     # 1
+print(math.tanh(0))     # 0
+print(math.asinh(0))    # 0
+print(math.acosh(1))    # 0
+print(math.atanh(0))    # 0
+```
+
+`acosh(x)` requires x ≥ 1; `atanh(x)` requires −1 < x < 1.
+
 ## 15.6 Other functions
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `abs(x)` | Absolute value | `math.abs(-5)` → `5` |
-| `fsum(items)` | Accurate float sum | `math.fsum([0.1, 0.2, 0.3])` |
-| `prod(items)` | Product of items | `math.prod([1, 2, 3, 4])` → `24` |
-| `min(a, b)` | Minimum of two | `math.min(3, 7)` → `3` |
-| `max(a, b)` | Maximum of two | `math.max(3, 7)` → `7` |
-| `hypot(x, y)` | Euclidean distance | `math.hypot(3, 4)` → `5` |
-| `gcd(a, b)` | Greatest common divisor | `math.gcd(48, 18)` → `6` |
-| `lcm(a, b)` | Least common multiple | `math.lcm(12, 8)` → `24` |
-| `isclose(a, b)` | Approximate equality | `math.isclose(0.1+0.2, 0.3)` |
-
-> Note: In the pure-Zen tier, `min`/`max`/`fsum`/`prod`/`hypot` accept up to
-> two arguments (each may be a number or a list). Calls like
-> `math.min(1, 2, 3)` are unsupported in the pure tier.
+| Function | Description | Example | Result |
+|----------|-------------|---------|--------|
+| `abs(x)` | Absolute value | `math.abs(-5)` | `5` |
+| `fsum(items)` | Accurate float sum | `math.fsum([0.1, 0.2, 0.3])` | `0.6` |
+| `prod(items)` | Product of items | `math.prod([1, 2, 3, 4])` | `24` |
+| `min(a, b)` | Minimum of two | `math.min(3, 7)` | `3` |
+| `max(a, b)` | Maximum of two | `math.max(3, 7)` | `7` |
+| `hypot(x, y)` | Euclidean distance | `math.hypot(3, 4)` | `5` |
+| `gcd(a, b)` | Greatest common divisor | `math.gcd(48, 18)` | `6` |
+| `lcm(a, b)` | Least common multiple | `math.lcm(12, 8)` | `24` |
+| `isclose(a, b)` | Approximate equality | `math.isclose(0.1+0.2, 0.3)` | `true` |
 
 ```zen
 import math
 
+print(math.abs(-5))       # 5
 print(math.fsum([0.1, 0.2, 0.3]))  # 0.6
 print(math.prod([1, 2, 3, 4]))     # 24
 print(math.min(3, 7))              # 3
@@ -122,6 +161,22 @@ print(math.hypot(3, 4))            # 5
 print(math.gcd(48, 18))            # 6
 print(math.lcm(12, 8))             # 24
 print(math.isclose(0.1 + 0.2, 0.3)) # true
+print(math.gcd(0, 5))              # 5
+print(math.lcm(0, 5))              # 0
+```
+
+> Note: In the pure-Zen tier, `min`/`max`/`fsum`/`prod`/`hypot` accept up to two arguments (each may be a number or a list). Calls like `math.min(1, 2, 3)` are unsupported in the pure tier.
+
+```zen
+# Pure tier: two args only
+print(math.min([1, 2, 3]))   # 1 (list as single arg)
+print(math.max([1, 2, 3]))   # 3
+
+# But this fails in pure tier:
+# math.min(1, 2, 3)  # ArgumentCount error
+
+# Native tier may accept variadic:
+ZEN_NATIVE_ONLY=math zen run app.z
 ```
 
 ## 15.7 Using the native tier
@@ -137,9 +192,13 @@ print(math.native.pi)
 ```
 
 Force native tier:
-
 ```bash
 ZEN_NATIVE_ONLY=math zen run app.z
+```
+
+Force pure-Zen tier (set at top of std/math.z):
+```zen
+ZEN_PURE = true
 ```
 
 ## 15.8 Quick reference
@@ -158,12 +217,18 @@ math.pow(2, 10)  # 1024
 math.sin(math.pi / 2)  # 1
 math.gcd(48, 18) # 6
 math.hypot(3, 4) # 5
+math.fsum([0.1, 0.2, 0.3])  # 0.6
 ```
 
 ## 15.9 Exercises
 
-1. Write a function `distance(x1, y1, x2, y2)` using `math.hypot`.
-2. Write a function `celsius_to_fahrenheit(c)` and `fahrenheit_to_celsius(f)`.
+1. Write `distance(x1, y1, x2, y2)` using `math.hypot`.
+2. Write `celsius_to_fahrenheit(c)` and `fahrenheit_to_celsius(f)`.
 3. Use `math.gcd` to simplify a fraction `a/b` to lowest terms.
 4. Compute the hypotenuse of a right triangle given legs `a` and `b`.
 5. Use `math.log10` to compute the number of digits in an integer `n`.
+6. Write `degrees_to_dms(degrees)` that converts decimal degrees to degrees-minutes-seconds.
+7. Write `compound_interest(principal, rate, years)` using `math.pow`.
+8. Demonstrate `math.fsum` is more accurate than naive sum for `[0.1, 0.2, 0.3]`.
+9. Write `is_perfect_square(n)` using `math.sqrt`.
+10. Write `greatest_common_divisor_list(nums)` using `math.gcd` repeatedly.

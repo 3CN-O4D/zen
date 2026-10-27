@@ -1,27 +1,57 @@
 # Chapter 16: random Module
 
-The `random` module provides pseudo-random number generation and random
-selection utilities.
+The `random` module provides pseudo-random number generation and random selection utilities.
 
 ## 16.1 Random numbers
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `random()` | Random float [0.0, 1.0) | `math.random()` |
-| `randint(a, b)` | Random int [a, b] inclusive | `math.randint(1, 6)` |
-| `randbelow(n)` | Random int [0, n) | `math.randbelow(10)` |
-| `uniform(a, b)` | Random float [a, b] | `math.uniform(1.0, 10.0)` |
+| `random()` | Random float [0.0, 1.0) | `random.random()` |
+| `randint(a, b)` | Random int [a, b] inclusive | `random.randint(1, 6)` |
+| `randbelow(n)` | Random int [0, n) | `random.randbelow(10)` |
+| `uniform(a, b)` | Random float [a, b] | `random.uniform(1.0, 10.0)` |
 | `gauss(mu, sigma)` | Gaussian random | `math.gauss(0, 1)` |
-| `seed(n)` | Seed the RNG | `math.seed(42)` |
+| `seed(n)` | Seed the RNG | `random.seed(42)` |
 
 ```zen
 import random
 
-print(random.random())   # 0.374... (varies)
+print(random.random())   # 0.374... (varies each run)
 print(random.randint(1, 6))  # 1-6
 print(random.randbelow(10))  # 0-9
 print(random.uniform(1.0, 10.0))  # 1.0-10.0
-print(random.gauss(0, 1))  # bell curve
+print(random.gauss(0, 1))   # bell curve
+```
+
+### Result ranges
+
+| Function | Range | Inclusive? |
+|----------|-------|------------|
+| `random()` | [0.0, 1.0) | lower inclusive, upper exclusive |
+| `randint(a, b)` | [a, b] | both inclusive |
+| `randbelow(n)` | [0, n) | lower inclusive, upper exclusive |
+| `uniform(a, b)` | [a, b] | both inclusive (may include endpoint) |
+
+```zen
+import random
+
+# randint is inclusive on both ends
+for i in 1..1000 {
+    let r = random.randint(1, 6)
+    if r < 1 or r > 6 {
+        print("out of range!")
+        break
+    }
+}
+
+# randbelow is [0, n)
+for i in 1..1000 {
+    let r = random.randbelow(10)
+    if r < 0 or r >= 10 {
+        print("out of range!")
+        break
+    }
+}
 ```
 
 ## 16.2 Random sequences
@@ -48,6 +78,45 @@ random.shuffle(deck)
 print(deck)  # shuffled
 ```
 
+### choice
+Picks one random element from a non-empty sequence. Raises if the sequence is empty.
+
+```zen
+try {
+    random.choice([])
+} catch as e {
+    print(e.msg)  # IndexError or ValueError
+}
+```
+
+### choices (with replacement)
+Returns `k` elements, each independently chosen. Duplicates are possible.
+
+```zen
+print(random.choices(["a", "b"], 5))   # ["a", "b", "a", "a", "b"]
+```
+
+### sample (without replacement)
+Returns `k` unique elements. Raises if `k > len(seq)`.
+
+```zen
+try {
+    random.sample([1, 2], 5)
+} catch as e {
+    print(e.msg)  # sample larger than population
+}
+```
+
+### shuffle (in place)
+Shuffles the list in place using Fisher-Yates. Returns `nil`.
+
+```zen
+let deck = [1, 2, 3, 4, 5]
+random.shuffle(deck)
+print(deck)  # e.g. [3, 1, 5, 2, 4]
+print(len(deck))  # 5 (same length, reordered)
+```
+
 ## 16.3 Deterministic randomness (seed)
 
 ```zen
@@ -61,7 +130,103 @@ print(random.randint(1, 100))  # same as above
 
 Use `seed` for reproducibility in tests, simulations, and games.
 
-## 16.4 Quick reference
+```zen
+import random
+
+random.seed(12345)
+let a = random.randint(1, 1000)
+random.seed(12345)
+let b = random.randint(1, 1000)
+print(a == b)  # true
+```
+
+## 16.4 Common patterns
+
+### Roll dice
+
+```zen
+import random
+
+func roll_dice(sides, count) {
+    let total = 0
+    for i in 1..count {
+        total = total + random.randint(1, sides)
+    }
+    return total
+}
+
+print(roll_dice(6, 2))   # 2-12
+```
+
+### Pick a random element
+
+```zen
+func pick_winner(entries) {
+    if len(entries) == 0 {
+        return nil
+    }
+    return random.choice(entries)
+}
+
+print(pick_winner(["Alice", "Bob", "Carol"]))
+```
+
+### Shuffle and deal
+
+```zen
+func deal(deck, hand_size) {
+    random.shuffle(deck)
+    let hand = deck[0:hand_size]
+    let remaining = deck[hand_size:]
+    return #(hand, remaining)
+}
+
+let deck = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] * 4
+let #(hand, rest) = deal(deck, 5)
+print(hand)   # 5 cards
+print(len(rest))  # 47
+```
+
+### Generate a random password
+
+```zen
+import random
+
+let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%"
+
+func random_password(length) {
+    let pw = []
+    for i in 1..length {
+        pw.push(random.choice(chars))
+    }
+    return "".join(pw)
+}
+
+print(random_password(12))
+```
+
+### Simulate coin flips
+
+```zen
+import random
+
+func flip_coin() {
+    return random.randint(0, 1) == 0 ? "heads" : "tails"
+}
+
+let heads = 0
+let tails = 0
+for i in 1..1000 {
+    if flip_coin() == "heads" {
+        heads = heads + 1
+    } else {
+        tails = tails + 1
+    }
+}
+print("heads: " + str(heads) + ", tails: " + str(tails))
+```
+
+## 16.5 Quick reference
 
 ```zen
 import random
@@ -78,10 +243,12 @@ random.shuffle(my_list)  # in-place shuffle
 random.seed(42)        # deterministic
 ```
 
-## 16.5 Exercises
+## 16.6 Exercises
 
 1. Simulate rolling two dice 1000 times and count the frequency of each sum.
 2. Write a function `pick_winner(entries)` that picks a random entry.
 3. Shuffle a deck of cards and deal 5 cards.
 4. Generate a random password of 12 characters from letters and digits.
 5. Use `random.seed` to make a simulation reproducible.
+6. Write `weighted_choice(items, weights)` that picks an item with probability proportional to its weight.
+7. Write `bootstrap_sample(data, k)` that samples `k` elements with replacement from `data`.
