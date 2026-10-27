@@ -1,7 +1,6 @@
 # Appendix D: Standard Library Index
 
-Zen's standard library includes pure-Zen modules (`std/*.z`) and native
-(Rust) modules. This appendix indexes every module.
+Zen's standard library includes pure-Zen modules (`std/*.z`) and native (Rust) modules. This appendix indexes every module.
 
 ## D.1 Pure-Zen modules (std/*.z)
 
@@ -22,7 +21,7 @@ Zen's standard library includes pure-Zen modules (`std/*.z`) and native
 | `json` | `std/json.z` | JSON parse/serialize (see Chapter 19) |
 | `logging` | `std/logging.z` | Logging framework |
 | `math` | `std/math.z` | Mathematical functions (see Chapter 15) |
-| `nmap` | `std/nmap.z` | Network scanner (see Chapter 44) |
+| `nmap` | `std/nmap.z` | Network scanner |
 | `operator` | `std/operator.z` | Operators as functions |
 | `pathlib` | `std/pathlib.z` | Object-oriented paths (see Chapter 21) |
 | `random` | `std/random.z` | Random numbers (see Chapter 16) |
@@ -35,45 +34,44 @@ Zen's standard library includes pure-Zen modules (`std/*.z`) and native
 
 ## D.2 Native modules (Rust)
 
-| Module | Description |
-|--------|-------------|
-| `fs` | File system operations (Chapter 13) |
-| `os` | OS operations, env, process info (Chapter 21) |
-| `time` | Time operations (Chapter 20) |
-| `json` | JSON native tier |
-| `socket` | TCP/UDP/raw sockets (Chapter 34) |
-| `ffi` | Foreign function interface (Chapters 39-40) |
-| `channel` | Message-passing channels (Chapter 37) |
-| `thread` | Threading (Chapter 37) |
-| `shared` | Atomic shared values (Chapter 37) |
-| `process` | Process spawn/control |
-| `net` | TCP/UDP helpers |
-| `net.dns` | DNS resolution (Chapter 32) |
-| `requests` | HTTP client (Chapter 29) |
-| `http` | HTTP client |
-| `http.server` | HTTP static server (Chapter 30) |
-| `urllib` | URL utilities |
-| `urllib.parse` | URL parsing (Chapter 33) |
-| `urllib.request` | URL fetching |
-| `html` | HTML parsing |
-| `html.parser` | HTML parser |
-| `lxml` | lxml compatibility |
-| `lxml.etree` | XML element tree |
-| `lxml.html` | HTML parsing |
-| `raw` | Raw socket/packet crafting (Chapter 34) |
-| `crypto` | Cryptography (Chapter 25) |
-| `tls` | TLS with cert pinning |
-| `sqlite` | SQLite database |
-| `qr` | QR code generation |
-| `wa` | WebAssembly |
-| `ffmpeg` | FFmpeg |
-| `hydra` | Hydra |
-| `sys` | Low-level syscalls (Chapter 41) |
+| Module | Description | Chapter |
+|--------|-------------|---------|
+| `fs` | File system operations | 13 |
+| `os` | OS operations, env, process info | 21 |
+| `time` | Time operations | 20 |
+| `json` | JSON native tier | 19 |
+| `socket` | TCP/UDP/raw sockets | 27 |
+| `ffi` | Foreign function interface | 39-40 |
+| `sys` | Low-level syscalls | 41 |
+| `process` | Process spawn/control | 41 |
+| `thread` | Threading | 35 |
+| `channel` | Message-passing channels | 36 |
+| `shared` | Atomic shared values | 37 |
+| `net` | TCP/UDP helpers | 26 |
+| `net.dns` | DNS resolution | 32 |
+| `requests` | HTTP client | 29 |
+| `http` | HTTP client | 28 |
+| `http.server` | HTTP static server | 30 |
+| `urllib` | URL utilities | 33 |
+| `urllib.parse` | URL parsing | 33 |
+| `urllib.request` | URL fetching | 33 |
+| `html` | HTML parsing | - |
+| `html.parser` | HTML parser | - |
+| `lxml` | lxml compatibility | - |
+| `lxml.etree` | XML element tree | - |
+| `lxml.html` | HTML parsing | - |
+| `raw` | Raw socket/packet crafting | 34 |
+| `crypto` | Cryptography | 25 |
+| `tls` | TLS with cert pinning | 31 |
+| `sqlite` | SQLite database | - |
+| `qr` | QR code generation | - |
+| `wa` | WebAssembly | - |
+| `ffmpeg` | FFmpeg | - |
+| `hydra` | Hydra | - |
 
 ## D.3 Module tiers
 
-Modules with both pure-Zen and native implementations expose the native tier
-under `<name>.native`:
+Modules with both pure-Zen and native implementations expose the native tier under `<name>.native`:
 
 ```zen
 import math
@@ -83,11 +81,12 @@ print(math.native.pi)    # native tier
 
 Force tiers with:
 - `ZEN_NATIVE_ONLY=math` — force native
-- `ZEN_PURE = true` — force pure-Zen
+- `ZEN_PURE = true` — force pure-Zen (set at top of `.z` module)
 
 ## D.4 Built-ins (always available)
 
-`print`, `input`, `open`, `exit`, `len`, `str`, `int`, `float`, `bool`,
-`list`, `dict`, `set`, `tuple`, `range`, `enumerate`, `zip`, `sorted`,
-`reversed`, `any`, `all`, `sum`, `min`, `max`, `map`, `filter`,
-`typeof`, `id`, `callable`. See Appendix A.
+`print`, `input`, `open`, `exit`, `len`, `str`, `int`, `float`, `bool`, `list`, `dict`, `set`, `tuple`, `range`, `enumerate`, `zip`, `sorted`, `reversed`, `any`, `all`, `sum`, `min`, `max`, `map`, `filter`, `typeof`, `id`, `callable`. See Appendix A.
+
+## D.5 Error codes
+
+`Z01xx`–Z05xx`. See Appendix B.

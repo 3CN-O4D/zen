@@ -85,7 +85,7 @@ Everything is truthy except `nil` and `false`.
 | `+ - * / // % **` | Arithmetic |
 | `== != < <= > >=` | Comparison |
 | `and or not !` | Logic |
-| `+ -` (string) | Concatenation / repeat (`"a" * 3`) |
+| `+ -` (string) | Concatenation / repeat (`"a"*3`) |
 | `?.` | Safe member access |
 | `??` | Nullish coalescing |
 | `is` | Type check |
