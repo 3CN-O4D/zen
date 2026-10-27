@@ -208,3 +208,254 @@ surprise type guards are present.
 
 '''
 print('bytecode done')
+
+## 17.12 Instruction encoding
+
+Zen uses a **register machine** with fixed-width 32-bit instructions:
+
+```
+ Bit  31      24 23       16 15        8 7         0
+      +----------+-----------+-----------+-----------+
+      |    c     |     b     |     a     |    op     |
+      byte 3      byte 2      byte 1      byte 0
+```
+
+- `op` (u8): opcode. 104 core opcodes + 6 gated superinstructions = 110.
+- `a` (u8): destination register in nearly every opcode. 256 registers per
+  function max (~250 usable).
+- `b` (u8): first source — register index, constant-pool index, name id, or
+  jump target, depending on `op`.
+- `c` (u8): second source — same overload.
+
+Jump targets are pc-relative, ±127 instructions; wider targets use `JMP_FAR`.
+Constant indices are 8-bit (256 per function); wider use `LOAD_CONST_W`.
+
+## 17.13 Full opcode table
+
+### Category A — Constants and immediates
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x00 | NOP | — | — | — | No-op; alignment padding / jump target. Never removed. |
+| 0x01 | LOAD_CONST | dst | const idx | — | R[a] = K[b] (constant pool). |
+| 0x02 | LOAD_NIL | dst | — | — | R[a] = nil. |
+| 0x03 | LOAD_TRUE | dst | — | — | R[a] = true. |
+| 0x04 | LOAD_FALSE | dst | — | — | R[a] = false. |
+| 0x05 | LOAD_SMALL_INT | dst | signed imm (i8) | — | R[a] = i48(sext(b)); for 0, 1, -1, small n. |
+| 0x06 | LOAD_DEFAULT | dst | param idx | — | R[a] = pre-evaluated default for param b. |
+
+### Category B — Moves and conversions
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x10 | MOVE | dst | src | — | R[a] = R[b]; consumes R[b] (source dead after). |
+| 0x11 | DUP | dst | src | — | R[a] = R[b]; R[b] stays live. |
+| 0x12 | CONV | dst | src | type id | R[a] = coerce(R[b], TypeId(c)); int/float/str/bytes/bool. |
+| 0x13 | TO_BOOL | dst | src | — | R[a] = truthy(R[b]); canonical truthiness. |
+
+### Category C — Arithmetic
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x18 | ADD | dst | lhs | rhs | R[a] = R[b] + R[c]; int+int→int (overflow→float), str+str, list+list. |
+| 0x19 | SUB | dst | lhs | rhs | R[a] = R[b] − R[c]. |
+| 0x1A | MUL | dst | lhs | rhs | int×int, str×int (repeat), list×int. |
+| 0x1B | DIV | dst | lhs | rhs | int/int→float (10/4==2.5); ÷0 raises ZeroDivisionError. |
+| 0x1C | MOD | dst | lhs | rhs | R[b] % R[c], sign of dividend; ÷0 raises. |
+| 0x1D | POW | dst | lhs | rhs | R[b] ** R[c]; overflow→OverflowError. |
+| 0x1E | NEG | dst | src | — | R[a] = −R[b]. |
+| 0x1F | BIT_AND | dst | lhs | rhs | int & int. |
+| 0x20 | BIT_OR | dst | lhs | rhs | int \| int. |
+| 0x21 | BIT_XOR | dst | lhs | rhs | int ^ int. |
+| 0x22 | BIT_NOT | dst | src | — | ~R[b]. |
+| 0x23 | SHL | dst | lhs | rhs | R[b] << R[c]; count ≥48 or negative → ValueError. |
+| 0x24 | SHR | dst | lhs | rhs | arithmetic (sign-extending) right shift. |
+| 0x25 | CONCAT | dst | lhs | rhs | string/bytes/list concat (compile-time-proven str side). |
+| 0x26 | BUILD_STRING | dst | template idx | count | string interpolation from template K[b] + registers R[c..]. |
+
+### Category D — Comparison
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x28 | EQ | dst | lhs | rhs | R[b] == R[c]; total, never raises. |
+| 0x29 | NE | dst | lhs | rhs | R[b] != R[c]; total, never raises. |
+| 0x2A | LT | dst | lhs | rhs | R[b] < R[c]; ordered pairs only, else TypeError. |
+| 0x2B | LE | dst | lhs | rhs | <= |
+| 0x2C | GT | dst | lhs | rhs | > |
+| 0x2D | GE | dst | lhs | rhs | >= |
+| 0x2E | IS | dst | lhs | rhs | pointer compare for heap; value compare for scalars. |
+| 0x2F | IDENTICAL | dst | lhs | rhs | deep_equal recursive over containers. |
+| 0x30 | NOT | dst | src | — | R[a] = !truthy(R[b]). |
+| 0x31 | IN | dst | needle | haystack | R[b] in R[c] (string/bytes/list/tuple/set/dict-key). |
+
+### Category E — Jumps
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x38 | JMP | — | rel (i8) | — | Unconditional jump, relative to next instruction. |
+| 0x39 | JMP_BACK | — | rel (i8, negative) | — | Backward jump; helps branch predictors. |
+| 0x3A | JMP_IF_FALSE | tested | rel | — | if !truthy(R[a]) { pc += b }. |
+| 0x3B | JMP_IF_NIL | tested | rel | — | if R[a] is nil { pc += b }. (x?.y, x ?? y primitive) |
+| 0x3C | JMP_IF_NOT_NIL | tested | rel | — | if R[a] is not nil { pc += b }. |
+| 0x3D | JUMP_TABLE | scratch | const idx | default | idx=R[a]; if in table range jump K[b][idx] else default. |
+
+### Category F — Fused compare-and-branch
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x40 | JMP_IF_LT | lhs | rel | rhs | if R[a] < R[c] { pc += b }. |
+| 0x41 | JMP_IF_LE | lhs | rel | rhs | <= |
+| 0x42 | JMP_IF_GT | lhs | rel | rhs | > |
+| 0x43 | JMP_IF_GE | lhs | rel | rhs | >= |
+
+`b` sits between the two operand registers deliberately (hot regs low, cold
+target separate).
+
+### Category G — Calls and returns
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x48 | CALL | dst | proto idx | argc | R[a] = call(proto[b], R[a−1−c .. a)); direct call. |
+| 0x49 | CALL_KW | dst | proto idx | argc | + kwargs dict at R[a−2−c]. |
+| 0x4A | CALL_INDIRECT | dst | — | argc | R[a] = call_value(R[a−1−c], R[a−c .. a)). |
+| 0x4B | CALL_METHOD | dst | name id | argc | s.upper(); goes through M5 inline cache. |
+| 0x4C | CALL_NATIVE | dst | native idx | argc | natives[b].call(vm, &R[a−c .. a]); no copy. |
+| 0x4D | CALL_SUPER | dst | name id | argc | super_method(class_of(self), name, args); self = R[0]. |
+| 0x4E | TAIL_CALL | dst | proto idx | argc | replaces current frame; return f(x) is O(1) stack. |
+| 0x4F | TAIL_CALL_METHOD | dst | name id | argc | tail-call form of CALL_METHOD. |
+| 0x50 | RETURN | value | — | — | Return R[a]. |
+| 0x51 | RETURN_UNIT | — | — | — | Return nil (implicit returns are common). |
+| 0x52 | MAKE_KWARGS | dst | count | first | kwargs object at a call site. |
+
+### Category H — Containers and iteration
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x58 | MAKE_LIST | dst | count | first | R[a] = [R[c..c+b−1]]. Preallocates capacity b. |
+| 0x59 | MAKE_TUPLE | dst | count | first | Immutable, Arc-shared. |
+| 0x5A | MAKE_SET | dst | count | first | Deduplicated on insert. |
+| 0x5B | MAKE_DICT | dst | pair count | first | {R[c]:R[c+1], ...}; interns a shape if keys are string constants. |
+| 0x5C | MAKE_RANGE | dst | argc (1..3) | first | Lazy range object, never a materialised list. |
+| 0x5D | LIST_APPEND | list | value | — | Append to fresh list literal R[a]. |
+| 0x5E | LIST_INSERT | list | index | value | Insert at index. |
+| 0x5F | DICT_SET | dict | key | value | Insert or overwrite; records shape transition on IC site. |
+| 0x60 | SET_ADD | set | value | — | Insert into set. |
+| 0x61 | LEN | dst | src | — | R[a] = len(R[b]). |
+| 0x62 | SLICE | dst | src | argc (0..3) | R[a] = R[b][R[a−c .. a]]. |
+| 0x63 | UNPACK | dst | count | first | Destructuring; UnpackError on arity mismatch. |
+| 0x64 | ITER_INIT | iter | seq | — | Hidden 2-slot iterator state at R[a], R[a+1]. |
+| 0x65 | ITER_NEXT | iter | dst | — | Advance; R[b] = next item or nil when exhausted. |
+| 0x66 | ITER_DONE | iter | dst | — | R[b] = iterator_exhausted(R[a]); not fused into ITER_NEXT. |
+
+### Category I — Field and index access
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x6C | GET_INDEX | dst | container | key | R[a] = R[b][R[c]]; prime inline-cache site. |
+| 0x6D | SET_INDEX | container | key | value | R[a][R[b]] = R[c]; order: container, key, value. |
+| 0x6E | GET_FIELD | dst | obj | name id | R[a] = R[b].K_names[c]; dot form; IC site. |
+| 0x6F | SET_FIELD | obj | name id | value | R[a].K_names[b] = R[c]. |
+| 0x70 | GET_INDEX_DEFAULT | dst | container | key | if present R[a] = R[b][c], else R[a] unchanged (pre-loaded default). |
+| 0x71 | DELETE_INDEX | container | key | — | del R[a][R[b]]; KeyError/IndexError if absent. |
+| 0x72 | HAS_FIELD | dst | obj | name id | R[a] = K_names[c] in R[b]. |
+| 0x73 | TYPEOF | dst | src | — | R[a] = typeof_id(R[b]) as interned string id. |
+
+### Category J — Closures and upvalues
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x78 | MAKE_CLOSURE | dst | proto idx | upvalue count | R[a] = Closure{proto, upvalues from R[a+1..a+1+c]}. |
+| 0x79 | GET_UPVAL | dst | upvalue idx | — | R[a] = upvalue[b].load() (open or closed cell). |
+| 0x7A | SET_UPVAL | upvalue idx | value | — | upvalue[a].store(R[b]). |
+| 0x7B | OPEN_UPVAL | local reg | upvalue slot | — | Pin a local register as an open upvalue. |
+| 0x7C | CLOSE_UPVAL | — | first local | count | Box R[b..b+c−1] and repoint open upvalues. |
+
+### Category K — Errors and exceptions
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0x90 | TRY_PUSH | — | handler pc | finally pc | Push handler entry covering [pc, try_end); c=0 → no finally. |
+| 0x91 | TRY_POP | — | — | — | Pop innermost handler. |
+| 0x92 | THROW | value | — | — | Raise R[a]; never returns. |
+| 0x93 | RERAISE | — | — | — | Re-raise in-flight error after finally. |
+| 0x94 | CATCH_MATCH | dst (bool) | class name id | — | R[a] = thrown matches class K_names[b]. |
+| 0x95 | ERROR_NEW | dst | class name id | msg | R[a] = new_error(K_names[b], R[c]). |
+| 0x96 | ERROR_TYPE | dst | error | — | R[a] = class_name_of(R[b]). |
+| 0x97 | ERROR_MSG | dst | error | — | R[a] = message_of(R[b]). |
+
+### Category L — JIT / patch-point interface
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0xA0 | TYPE_GUARD | src | type id | deopt id | JIT: if typeof(R[a]) != TypeId(b), deopt to landing pad c. |
+| 0xA1 | DEOPT | deopt id | — | — | Interpreter: unreachable; JIT: landing-pad marker. |
+| 0xA2 | SAFEPOINT | — | reason name id | — | Debugger/signal/hotswap pause point. |
+| 0xA3 | IC_GET_FIELD | dst | IC site idx | name id | GET_FIELD with inline-cache handle at P.ic_sites[b]. |
+| 0xA4 | IC_SET_FIELD | obj | IC site idx | value | SET_FIELD with IC site. |
+| 0xA5 | IC_CALL | dst | IC site idx | argc | CALL_INDIRECT with IC on callee identity. |
+| 0xA6 | PATCH_POINT | — | IC site idx | kind | No-op; marks a site the M5/M11 patcher may rewrite. |
+| 0xA7 | IC_BUMP | — | IC site idx | — | Site exceeded monomorphic budget (patcher-emitted). |
+
+### Category M — Modules and globals
+
+| ID | Name | a | b | c | Description |
+|----|------|---|---|---|-------------|
+| 0xB0 | IMPORT | dst | module name id | flags | R[a] = import(K_names[b]); c bit0 = `from m import *`. |
+| 0xB1 | IMPORT_FROM | dst | module name id | symbol name id | R[a] = import(K_names[b]).K_names[c]. |
+| 0xB2 | DEFINE_GLOBAL | value | name id | flags | globals()[K_names[b]] = R[a]; c bit0 = const. |
+| 0xB3 | BIND_NAME | value | name id | flags | Bind in current scope; c bits0–1 = let/var/const, bit2 = export. |
+
+### Reserved IDs (never used in M4)
+
+| ID | Reserved for | Milestone |
+|----|--------------|-----------|
+| 0x07 | LOAD_CONST_W (16-bit const index) | M9 |
+| 0x08 | LOAD_LOCAL_FRAME (per-frame spill array) | M9 |
+| 0x09 | LOAD_UPVALUE_FRAME | M9 |
+| 0x0A | YIELD_FROM (coroutine) | M10 |
+| 0x0B | SPAWN (scheduler intercept) | M10 |
+
+## 17.14 Stack effect and register window
+
+Zen's calling convention is a **register window with no operand stack**:
+
+| Call form | Meaning |
+|-----------|---------|
+| `CALL a, proto, argc` | callee = R[a−1−c]; args = R[a−c .. a); result → R[a]. |
+| `CALL_METHOD a, name, argc` | receiver = R[a−1−c]; name = K_names[b]; args = R[a−c .. a); result → R[a]. |
+| `TAIL_CALL a, proto, argc` | same window; current frame replaced (O(1) stack depth). |
+
+Arguments are already in the right place: a call is a bounds check, a memcpy
+of `c × 8` bytes into the callee's register window, and `base += window_size`.
+No marshalling loop, no shuffling.
+
+## 17.15 Constant pool, local-slot table, upvalue table
+
+Each function carries:
+- a flat `Vec<Instruction>` of fixed-width 32-bit words,
+- a per-function **constant pool** (deduplicated immutable values),
+- a **local-slot table** (binding name → register index),
+- an **upvalue table** (what a closure captures and how),
+- a **line table** (diagnostics, REPL, differential harness),
+- an **exception table** (try/catch/finally),
+- a table of **inline-cache sites** (so the M5 patcher and M11 translator
+  find them without re-analysis).
+
+One bytecode, two consumers: the M4 VM interprets it directly; the M11
+Cranelift translator walks the same `FunctionProto`. Any disagreement is a
+translator bug, not a divergent lowering.
+
+## 17.16 Exercises
+
+1. Sketch the 32-bit instruction layout and name each field.
+2. What is the max number of registers per function, and what happens when it
+   is exceeded?
+3. How does `JMP_IF_NIL` implement `x?.y` and `x ?? y`?
+4. What is the difference between `MOVE` and `DUP`?
+5. Why is `CONCAT` a separate opcode from `ADD`?
+6. What does `MAKE_RANGE` produce — a list or a lazy object?
+7. How does `GET_INDEX_DEFAULT` implement `d.get(k, 0)` in two instructions?
+8. What does `TRY_PUSH` / `TRY_POP` / `THROW` implement?
+9. What is the `CodeSlot` / `TYPE_GUARD` / `DEOPT` mechanism for?
+10. Why must compiled code `retain` a value loaded from an object?
+

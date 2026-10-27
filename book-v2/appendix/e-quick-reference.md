@@ -78,8 +78,8 @@ cond ? a : b / a if c else b   ternary (right)
 = += -= *= ...     assignment (right)
 ```
 
-Truthiness: ONLY `false`, `nil`, `null` are falsy. Everything else (including
-`0`, `0.0`, `""`, `[]`, `#{}`, `%{}`, `#()`) is truthy.
+Truthiness: `false`, `nil`, `null`, `0`, `0.0`, `""`, `[]`, `#{}`, `%{}`, `#()`
+are falsy. Everything else is truthy.
 
 ## E.4 Control flow
 
@@ -168,7 +168,7 @@ everything else   true   (0, 0.0, "", [], #{}, %{}, #() all true)
 
 ## E.14 Common gotchas (one-liners)
 
-- `0` and `""` are **truthy** in Zen.
+- `0`, `0.0`, `""`, `[]`, `#{}` are **falsy** in Zen (like Python).
 - Strings are **immutable**: `s[0] = "X"` errors.
 - `b = a` shares a list; use `list(a)` to copy (shallow).
 - `and`/`or` return **booleans**, not operands; use `??` for defaults.

@@ -98,12 +98,15 @@ NaN: `nan == nan` is false; `nan != nan` is true.
 
 ## 3.5 Logic
 
-Zen truthiness: everything is truthy except `nil` and `false`. Notably `0`, `0.0`, `""`, `[]`, `{}` are **truthy**.
+Zen uses Python-like truthiness (see §3.13):
+
+> **Falsy:** `false`, `nil`, `null`, `0`, `0.0`, `""`, `[]`, `#{}`, `%{}`, `#()`.
+> **Truthy:** everything else.
 
 | Operator | Meaning | Short-circuits? |
 |----------|---------|-----------------|
-| `and` | logical and | yes — returns first falsy or last |
-| `or` | logical or | yes — returns first truthy or last |
+| `and` | logical and | yes — returns first falsy operand, else last |
+| `or` | logical or | yes — returns first truthy operand, else last |
 | `not` | logical not | prefix, returns bool |
 | `!` | logical not | alias for `not` |
 
@@ -121,8 +124,10 @@ print(true or error())    # true  — error() never called
 `and`/`or` return the operand value, not necessarily a bool:
 ```zen
 print("hello" and "world")   # "world"
-print("" or "fallback")      # "fallback"  (note: "" is truthy in Zen!)
+print("" or "fallback")      # "fallback"  ("" is falsy)
 print(nil or "fallback")     # "fallback"
+print(0 or "fallback")       # "fallback"  (0 is falsy)
+print(42 or "fallback")      # 42  (42 is truthy, short-circuits)
 ```
 
 ## 3.6 Safe member access: `?.` (optional chaining)
@@ -322,21 +327,32 @@ print(0 ?? "fallback")    # 0  (0 is not nullish)
 print(false ?? true)      # false
 ```
 
-## 3.13 Truthiness rules
+## 3.13 Truthiness rules (Zen 3.0 canonical)
 
-Zen's `if`, `while`, `and`, `or`, `!`, and filter predicates all use a single
-"truthy" rule. The canonical rule in Zen 3.0 is: **`false`, `nil`, and `null`
-are falsy; every other value is truthy.** In particular `0`, `0.0`, `""`,
-`[]`, `#{}`, and `%{}` are truthy. This differs from Python and surprises many
-beginners.
+Zen's `if`, `while`, `and`, `or`, `not`, `!`, and the `TO_BOOL` bytecode
+opcode all use a single "truthy" rule, matching the language spec
+(`docs/04-value-and-types.md`):
+
+> **Falsy:** `false`, `nil`, `null`, `0`, `0.0`, `""` (empty string),
+> `bytes([])`, `[]`, `#{}`, `%{}`, `#()`.
+> **Truthy:** every other value.
+
+This matches Python-like truthiness and surprises beginners coming from
+languages where `0` is falsy but collections are not — here both are falsy.
 
 ```zen
-if 0 { print("0 is truthy") }        # prints
-if "" { print("empty string truthy") } # prints
-if [] { print("empty list truthy") }   # prints
-if false { print("never") }            # does not print
-if nil { print("never") }              # does not print
+if 0 { print("never") }              # does not print — 0 is falsy
+if "" { print("never") }             # does not print
+if [] { print("never") }             # does not print
+if #{} { print("never") }            # does not print
+if false { print("never") }          # does not print
+if nil { print("never") }            # does not print
+if 42 { print("42 is truthy") }      # prints
+if "hi" { print("non-empty truthy")} # prints
+if [1] { print("non-empty truthy") } # prints
 ```
+
+Use `bool(x)` for an explicit conversion; it follows the same rule.
 
 If you want Python-style emptiness checks, be explicit:
 
@@ -629,7 +645,7 @@ print(a ?? "x")    # "x"
 1. **Assuming `and` returns an operand.** It returns `bool`.
 2. **Using `/` when integer division is intended.** Use `//`.
 3. **Confusing `==` and `is`.** Containers compare by value with `==`.
-4. **Forgetting that `0` and `""` are truthy.**
+4. **Forgetting that `0`, `0.0`, `""`, `[]`, `#{}` are falsy** (like Python).
 5. **Precedence of `??` vs `or`.** `??` binds tighter than `or`, looser than `and`.
 6. **Chained assignment.** `a = b = 1` is not supported; assign separately.
 7. **Modulo of negatives.** Check the sign convention for your use case.

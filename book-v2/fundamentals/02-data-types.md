@@ -274,31 +274,43 @@ try {
 }
 ```
 
-## 2.4 Truthiness
+## 2.4 Truthiness (Zen 3.0 canonical)
 
-Zen truthiness: everything is truthy except `nil` and `false`.
+Zen uses Python-like truthiness. The falsy values are exactly:
 
-| Value | Truthy? |
-|-------|---------|
-| `nil` | false |
-| `false` | false |
-| `0` | **true** (unlike Python) |
-| `0.0` | **true** |
-| `""` | **true** (unlike Python) |
-| `[]` | **true** (unlike Python) |
-| `{}` | **true** (unlike Python) |
-| `42` | true |
-| `"hello"` | true |
-| `[1, 2]` | true |
+`nil`, `false`, `null`, `0`, `0.0`, `""` (empty string), `bytes([])`, `[]`,
+`#{}`, `%{}`, `#()`.
+
+Everything else is truthy (non-zero numbers, non-empty strings, non-empty
+collections, non-nil values).
+
+| Value | Truthy? | Reason |
+|-------|---------|--------|
+| `nil` | false | explicitly falsy |
+| `false` | false | explicitly falsy |
+| `0` | false | zero is falsy |
+| `0.0` | false | zero float is falsy |
+| `""` | false | empty string is falsy |
+| `[]` | false | empty collection is falsy |
+| `#{}` | false | empty dict is falsy |
+| `42` | true | non-zero |
+| `"hello"` | true | non-empty |
+| `[1, 2]` | true | non-empty |
 
 Use `bool(x)` to coerce explicitly:
 
 ```zen
-print(bool(0))    # true
-print(bool(""))   # true
-print(bool(nil))  # false
-print(bool(false)) # false
+print(bool(0))      # false
+print(bool(""))     # false
+print(bool(nil))    # false
+print(bool(false))  # false
+print(bool(42))     # true
+print(bool("hi"))   # true
+print(bool([1]))    # true
 ```
+
+Note the contrast with `??` (nullish coalescing): `??` only triggers on `nil`/`null`,
+not on falsy values, so `0 ?? "default"` yields `0`, not `"default"`.
 
 ## 2.5 Equality vs identity
 
@@ -378,9 +390,9 @@ str(nil)            # "nil"
 bool(0)             # false
 bool(1)             # true
 bool(0.0)           # false
-bool("")            # true
-bool([])            # true
-bool({})            # true
+bool("")            # false
+bool([])            # false
+bool({})            # false
 bool(nil)           # false
 bool(false)         # false
 
@@ -393,7 +405,7 @@ dict([["a", 1]])    # {"a": 1}
 
 ## 2.8 Common pitfalls
 
-- **`0` and `""` are truthy** in Zen (unlike Python). Use `x == 0` or `x == ""` for emptiness checks, not `if x`.
+- **`0`, `0.0`, `""`, `[]`, `#{}` are falsy** in Zen (like Python). Use `if x:` to test truthiness; `x == 0` only tests the value zero.
 - **`nan != nan`**. Use `x != x` to detect NaN.
 - **`{}` is an empty dict**, not a set. Use `{1}` or `set()` for sets.
 - **Strings are immutable**. `s[0] = "X"` raises `TypeError`. Build new strings with concatenation.
@@ -432,7 +444,7 @@ x == "42"      # false
 
 1. Write `is_nan(x)` that returns true only for NaN (hint: `x != x`).
 2. Write `safe_int(s)` that parses a string to int, returning `nil` on failure instead of raising.
-3. Demonstrate that `0` is truthy: print a message if `if 0 { ... }` executes.
+3. Demonstrate that `0` is falsy: confirm `if 0 { ... }` does NOT execute.
 4. Create a list, slice it, mutate the slice, and confirm the original is unchanged.
 5. Show that `{"a": 1, "b": 2} == {"b": 2, "a": 1}` (dict order-insensitive equality).
 6. Compute `-7 // 2` and `-7 % 2` and explain the results (floor division).
@@ -442,18 +454,19 @@ x == "42"      # false
 
 | From | To int | To float | To string | To bool | Notes |
 |---|---|---|---|---|---|
-| int | identity | widen | decimal | 0→false else true |  |
-| float | trunc toward zero? | identity | repr | 0.0/NaN? false if 0.0, else true (NaN is true) | check implementation |
-| string | parse int (base 10) or error | parse float or error | identity | non-empty string is true | whitespace? |
+| int | identity | widen | decimal | 0→false, else true |  |
+| float | trunc toward zero | identity | repr | 0.0→false, NaN→true, else true | NaN is truthy |
+| string | parse int (base 10) or error | parse float or error | identity | ""→false, else true |  |
 | bool | true→1, false→0 | true→1.0,false→0.0 | "true"/"false" | identity |  |
 | nil | error | error | "nil" | false |  |
-| list | error | error | repr | empty false else true |  |
-| dict | error | error | repr | empty false else true |  |
-| set | error | error | repr | empty false else true |  |
-| tuple | error | error | repr | empty false else true |  |
-| bytes | error | error | repr or utf8? | non-empty true |  |
+| list | error | error | repr | empty→false, else true |  |
+| dict | error | error | repr | empty→false, else true |  |
+| set | error | error | repr | empty→false, else true |  |
+| tuple | error | error | repr | empty→false, else true |  |
+| bytes | error | error | repr | empty→false, else true |  |
 
-**Note:** In Zen, truthiness follows common rules: `false` and `nil` are falsy; everything else is truthy (including `0`, `0.0`, empty strings `""` are truthy in Python-like languages? Wait - check Zen behavior. In Python empty collections/strings/numbers-zero are falsy; in some languages 0 is falsy. Let us verify.) 
+**Note:** Falsy values are `nil`, `false`, `null`, `0`, `0.0`, `""`, `bytes([])`,
+`[]`, `#{}`, `%{}`, `#()`. Everything else is truthy (including `nan`).
 
 ## 2.12 Bytes and buffers (deep dive)
 

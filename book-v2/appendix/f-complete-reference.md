@@ -372,23 +372,23 @@ TIME_WAIT → CLOSED (normal close); also RST transitions at any error.
 ```zen
 print(1 == 1.0)     # true  (numeric promotion)
 print(1 === 1.0)    # false (strict: different types)
-print(bool(0))      # true  (0 is truthy in Zen)
-print(bool(""))     # true  (empty string truthy)
+print(bool(0))      # false  (0 is falsy in Zen)
+print(bool(""))     # false  (empty string falsy)
 print(bool(nil))    # false
 print(nil ?? "d")   # "d"
-print(0 ?? "d")     # 0     (0 is not nil)
+print(0 ?? "d")     # 0     (0 is not nil, so ?? keeps it)
 ```
 
 ## F.21 Exercises (reference drill)
 
 1. Look up `zen explain Z0304` and summarize the fix.
-2. Name the three falsy values in Zen.
+2. Name ten falsy values in Zen (e.g. nil, false, 0, "", []...).
 3. List the HTTP methods that are idempotent.
 4. Name the socket option to disable Nagle's algorithm.
 5. List the DNS record types.
 6. Name the exit code for "command not found" (127).
 7. Name the environment variable for module search paths.
-8. List the falsy values that are nonetheless truthy in Zen (0, "", []...).
+8. Name a value that is truthy in Zen but falsy in some other languages (or vice versa).
 9. Name the function to parse JSON: `json.parse`.
 10. Name the crypto function for time-based one-time passwords: `crypto.totp`.
 

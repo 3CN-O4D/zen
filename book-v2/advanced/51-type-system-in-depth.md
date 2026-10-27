@@ -230,3 +230,206 @@ mitigates this with inline caches for hot call sites. For performance:
 
 '''
 print('type system done')
+
+## 16.12 The machine-tag view of every type
+
+Zen is dynamically typed: types travel with values, not variables. Every
+runtime `Value` is a NaN-boxed 64-bit word (see Chapter 50). The machine tag
+decides the fast path; heap objects add a `ObjHeader.kind` discriminant.
+
+### Immediate (in-`Value`) types
+
+| Type | Tag | Payload | `typeof()` | Falsy? |
+|------|-----|---------|------------|--------|
+| `nil` / `null` | `0b000` | none | `"nil"` | yes |
+| `false` | `0b001` | none | `"bool"` | yes |
+| `true` | `0b010` | none | `"bool"` | yes |
+| `int` | `0b011` | i48, sign-extended | `"int"` | `0` only |
+| `float` | `0b100` | raw f64 bits | `"float"` | `0.0` only (NaN is truthy) |
+
+### Thin-pointer types (no `ObjHeader`)
+
+| Type | Tag | Payload | `typeof()` | Falsy? |
+|------|-----|---------|------------|--------|
+| `string` | `0b101` | `*const u8` (first byte) | `"string"` | `""` only |
+| `bytes` | `0b110` | `*const u8` (first byte) | `"bytes"` | empty only |
+
+Length and refcount live behind the thin pointer (`ptr − 8` for length), so
+`is_string()` / `is_bytes()` is a tag compare with **zero loads**.
+
+### Heap types (tag `0b111`, `ObjHeader.kind` discriminates)
+
+| Type | `ObjHeader.kind` | `typeof()` | Falsy? |
+|------|------------------|------------|--------|
+| `list` | 0 List | `"list"` | empty |
+| `dict` | 1 Dict | `"dict"` | empty |
+| `set` | 2 Set | `"set"` | empty |
+| `tuple` | 3 Tuple | `"tuple"` | empty |
+| `func` | 4 Func | `"func"` | no |
+| `instance` | 5 Instance | `"instance"` | no |
+| `error` | 6 Error | `"error"` | no |
+| `channel` | 7 Channel | `"channel"` | no |
+| `mutex` | 8 Mutex | `"mutex"` | no |
+| `handle` | 9 Handle | `"handle"` | no |
+
+### Honest types (ADR-0004)
+
+A `handle` reports `"handle"`, never `"int"`. The old blueprint's
+`typeof(handle) == "int"` was wrong and was corrected. `typeof(x)` returns
+the honest language-level name.
+
+## 16.13 Truthiness — canonical rule
+
+Falsy: `nil`, `false`, `null`, `0`, `0.0`, `""`, `bytes([])`, `[]`, `#{}`,
+`%{}`, `#()`.
+Truthy: everything else — including `nan`, non-zero numbers, non-empty
+strings, non-empty collections.
+
+This matches Python-like truthiness. `if x:`, `and`, `or`, `not`, and the
+`TO_BOOL` opcode all use this rule.
+
+Important contrast with `??` (nullish coalescing): `??` triggers only on
+`nil`/`null`, not on falsy values. So `0 ?? "default"` yields `0`, and
+`"" ?? "default"` yields `""`.
+
+```zen
+print(bool(0))        # false
+print(bool(0.0))      # false
+print(bool(""))       # false
+print(bool([]))       # false
+print(bool(#{}))      # false
+print(bool(false))    # false
+print(bool(nil))      # false
+print(bool(float("nan")))   # true   (NaN is truthy)
+print(0 ?? "default") # 0        (? is a nil-default, not a falsy-default)
+```
+
+## 16.14 Type coercion
+
+### Explicit conversion builtins
+
+| Expression | Meaning | Example | Result |
+|------------|---------|---------|--------|
+| `int(x)` | parse/truncate to int | `int("42")` | `42` |
+| `int(3.9)` | truncate toward zero | `int(3.9)` | `3` |
+| `float(x)` | to float | `float(42)` | `42.0` |
+| `str(x)` | to string | `str(42)` | `"42"` |
+| `bool(x)` | truthiness | `bool(0)` | `false` |
+| `list(x)` | to list | `list("ab")` | `["a","b"]` |
+| `tuple(x)` | to tuple | `tuple([1,2])` | `#(1,2)` |
+| `set(x)` | to set | `set([1,1,2])` | `{1,2}` |
+| `dict(x)` | from pairs | `dict([["a",1]])` | `{"a":1}` |
+
+String→number parse failures raise `ValueError` (Z0305).
+
+### Implicit coercion in operators
+
+| Context | Rule |
+|---------|------|
+| `+` with a string | other operand stringified via `str()` |
+| `*` string × int | string repetition (`"x" * 3 == "xxx"`) |
+| `*` list × int | list repetition |
+| `==` int vs float | numeric promotion (`1 == 1.0` is true) |
+| truthiness (`if`, `and`, `or`) | canonical rule above |
+
+```zen
+print("age: " + 25)     # "age: 25"
+print("hi" * 3)         # "hihihi"
+print(1 == 1.0)         # true
+print(1 === 1.0)        # false (strict: types differ)
+```
+
+## 16.15 Equality: `==`, `===`, `is`
+
+| Operator | Semantics | `1 == 1.0` | `[1] == [1]` | `[1] is [1]` |
+|----------|-----------|------------|--------------|--------------|
+| `==` | value equality, numeric promotion | true | true | — |
+| `===` | strict equality (type + value) | false | — | — |
+| `is` | identity (same object / pointer) | true (scalars) | false | false |
+
+Container equality rules:
+- lists/tuples: order-sensitive, element-wise
+- dicts: order-insensitive, key/value match
+- sets: order-insensitive, element match
+
+For heap values `is` compares pointers. Two separately constructed equal
+lists are `==` but not `is`. For scalars (`int`, `float`, `bool`, `nil`) `is`
+behaves like `==`.
+
+## 16.16 Numeric semantics in depth
+
+### Integers
+
+- i48, sign-extended, range ±140,737,488,355,327.
+- Overflow promotes to float; never wraps.
+- `10 / 4 == 2.5` (true division). `10 // 4 == 2` (floor, toward −∞).
+- `-7 // 2 == -4`, `-7 % 3 == -1` (modulo follows the dividend sign, legacy
+  `fmod` behaviour).
+- `%` by zero raises `ZeroDivisionError` (Z0304), checked before the op.
+
+### Floats
+
+- IEEE-754 double precision.
+- `nan == nan` is false; `nan != nan` is true. Detect NaN with `x != x`.
+- `inf = 1.0 / 0.0`, `-inf = -1.0 / 0.0`.
+- `math.isnan`, `math.isfinite`, `math.isinf` for classification.
+
+```zen
+print(nan == nan)      # false
+print(nan != nan)      # true
+print(0.0 / 0.0 != nan)  # depends on canonicalisation; use math.isnan
+```
+
+## 16.17 String semantics
+
+Strings are immutable sequences of Unicode code points. Indexing/slicing
+operate on characters, not bytes.
+
+```zen
+let s = "Zën"
+print(len(s))   # 3 (code points), not the UTF-8 byte count
+print(s[1])     # "ë"
+```
+
+Convert explicitly: `s.encode("utf-8")` → bytes; `b.decode("utf-8")` → string.
+
+String comparison is lexicographic by code point; uppercase sorts before
+lowercase. For case-insensitive: `a.lower() == b.lower()`.
+
+## 16.18 Type stability and JIT performance
+
+Dynamic typing means every op pays a type-dispatch cost. The JIT (Chapter 54)
+mitigates this with inline caches guarded by `TYPE_GUARD`. For performance:
+
+- Keep types stable at a call site (don't alternate int/string in one
+  variable).
+- Avoid `typeof()` in hot loops; prefer `is`.
+- Prefer homogeneous containers (a list of all ints).
+- A monomorphic `d.a` on a shaped instance is a load + compare + predicted
+  branch; a polymorphic or dynamic-key `d[k]` is a hash probe with no IC help.
+
+## 16.19 Common type mistakes
+
+1. `0`, `0.0`, `""`, `[]`, `#{}` are falsy (like Python), not truthy.
+2. `nan == nan` is false; use `math.isnan(x)` or `x != x`.
+3. Dict keys must be strings: `d[42]` raises TypeError; use `d["42"]`.
+4. `int` literals beyond i48 are a lexer error (Z0106).
+5. `int / int` → float; use `//` for integer division.
+6. `b = a` shares a heap object; use `list(a)` / `deep_copy` to copy.
+7. `==` is value, `is` is identity — don't confuse them for lists.
+8. Strings are immutable; `s[i] = x` errors.
+
+## 16.20 Exercises
+
+1. Write `type_name(x)` returning a human-readable string for any value.
+2. Detect NaN with `x != x`; confirm `math.isnan` agrees.
+3. Show `1 == 1.0` but `1 === 1.0` is false; `true == 1` is false.
+4. Prove two equal lists are `==` but not `is`.
+5. Confirm `0`, `0.0`, `""`, `[]`, `#{}` are falsy; `nan` is truthy.
+6. Show `0 ?? "default"` yields `0` (nil-default, not falsy-default).
+7. Implement `safe_int(s)` returning nil on parse failure.
+8. Show `-7 // 2 == -4` (floor) and `-7 % 3 == -1` (dividend sign).
+9. `typeof()` on each of: int, float, string, bool, nil, list, dict, set,
+   tuple, func, instance, error, channel, mutex, handle.
+10. Implement `deep_equals(a, b)` handling nested containers.
+

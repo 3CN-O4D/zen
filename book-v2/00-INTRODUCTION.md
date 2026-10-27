@@ -77,6 +77,16 @@ This comprehensive guide is organized into detailed sections covering every aspe
 58. [Concurrency & System](cookbook/58-cookbook-concurrency-system.md) - threads, channels, mutexes, sys
 59. [Crypto & Security](cookbook/59-cookbook-crypto-security.md) - hash, encrypt, sign, JWT, passwords, TOTP
 
+### Part 11: Reference Implementations (complete programs)
+60. [Static Site Generator](reference/60-reference-static-site-generator.md) - Markdown to HTML site builder
+61. [Multi-Room Chat Server](reference/61-reference-chat-server.md) - concurrent TCP chat with rooms
+62. [Persistent Key-Value Store](reference/62-reference-keyvalue-store.md) - TCP store with JSON snapshots
+63. [TCP Port Scanner](reference/63-reference-port-scanner.md) - educational scanner with timeouts
+64. [Log Analyzer](reference/64-reference-log-analyzer.md) - level counts, errors, reports
+65. [HTTP Uptime Monitor](reference/65-reference-http-monitor.md) - endpoint checks with response times
+66. [File Encryptor (AES-GCM)](reference/66-reference-file-encryptor.md) - PBKDF2 + authenticated encryption
+67. [Website Link Checker](reference/67-reference-link-checker.md) - fetch, extract, verify links
+
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
 51. [Type System In Depth](advanced/51-type-system-in-depth.md) - types, coercion, equality
