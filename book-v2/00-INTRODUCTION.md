@@ -94,6 +94,10 @@ This comprehensive guide is organized into detailed sections covering every aspe
 73. [CSV to JSON Converter](reference/73-reference-csv-json.md) - tabular data conversion
 74. [Task Scheduler (cron-like)](reference/74-reference-scheduler.md) - interval-based background tasks
 75. [DNS Lookup Tool](reference/75-reference-dns-tool.md) - A/AAAA/MX/TXT/NS/PTR records
+76. [TCP Chat Client](reference/76-reference-chat-client.md) - concurrent socket client
+77. [Static File HTTP Server](reference/77-reference-static-file-server.md) - serve files with MIME types
+78. [grep Tool](reference/78-reference-grep-tool.md) - regex pattern search in files
+79. [Test Runner](reference/79-reference-test-runner.md) - minimal test framework
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
