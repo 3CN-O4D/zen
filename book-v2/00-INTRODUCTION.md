@@ -70,6 +70,13 @@ This comprehensive guide is organized into detailed sections covering every aspe
 47. [Network Security Tools](projects/47-security-tools.md) - Ethical hacking utilities
 48. [Capstone Projects](projects/48-capstone.md) - Full applications
 
+### Part 10: Cookbook — Complete Recipes
+55. [Strings & Text](cookbook/55-cookbook-strings-text.md) - case, slugify, acronym, email, wrap, cipher
+56. [Files & Data](cookbook/56-cookbook-files-data.md) - read/write, CSV, JSON, find files, hashing
+57. [Networking & Web](cookbook/57-cookbook-networking-web.md) - HTTP, sockets, DNS, URL, server
+58. [Concurrency & System](cookbook/58-cookbook-concurrency-system.md) - threads, channels, mutexes, sys
+59. [Crypto & Security](cookbook/59-cookbook-crypto-security.md) - hash, encrypt, sign, JWT, passwords, TOTP
+
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
 51. [Type System In Depth](advanced/51-type-system-in-depth.md) - types, coercion, equality
@@ -84,6 +91,7 @@ This comprehensive guide is organized into detailed sections covering every aspe
 - [Appendix D: Standard Library Index](appendix/d-stdlib-index.md)
 - [Appendix E: Quick Reference Card](appendix/e-quick-reference.md)
 - [Appendix F: Complete Language Reference](appendix/f-complete-reference.md)
+- [Appendix G: Exercise Solutions](appendix/g-exercise-solutions.md)
 
 ## About This Book
 
