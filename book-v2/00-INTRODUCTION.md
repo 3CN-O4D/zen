@@ -116,6 +116,7 @@ This comprehensive guide is organized into detailed sections covering every aspe
 95. [Markdown Slides Generator](reference/95-reference-slides.md) - single-file HTML slideshow
 96. [HTTP Health Dashboard](reference/96-reference-health-dashboard.md) - concurrent endpoint checks + status board
 97. [Text Resume Generator](reference/97-reference-resume.md) - markdown to printable HTML resume
+98. [Personal API Dashboard (Full-Stack)](reference/98-reference-personal-dashboard.md) - static + JSON API + health checks
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
