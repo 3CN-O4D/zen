@@ -109,6 +109,9 @@ This comprehensive guide is organized into detailed sections covering every aspe
 88. [File Deduplicator](reference/88-reference-file-dedup.md) - content-addressed duplicate detection
 89. [JSON API Mock Server](reference/89-reference-mock-api.md) - canned HTTP responses
 90. [Settings Manager](reference/90-reference-settings.md) - INI-style config read/write
+91. [Log Rotator](reference/91-reference-log-rotator.md) - size-based log rotation
+92. [HTTP Response Cache (TTL)](reference/92-reference-http-cache.md) - cached origin fetches
+93. [Batch File Renamer](reference/93-reference-batch-rename.md) - bulk rename with dry-run
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
