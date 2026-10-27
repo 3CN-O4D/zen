@@ -15,7 +15,10 @@ cd book-v2/tests
 ./setup.sh
 ```
 
-`setup.sh` does three things:\n1. builds Zen with the Python bridge (`cargo build --release --features python`);\n2. creates `.venv/` beside the tests;\n3. installs [`requirements.txt`](../tests/requirements.txt).
+`setup.sh` does three things:
+1. builds Zen with the Python bridge (`cargo build --release --features python`);
+2. creates `.venv/` beside the tests;
+3. installs [`requirements.txt`](../tests/requirements.txt).
 
 Then, in the shell you use for the examples:
 
@@ -26,7 +29,12 @@ export ZEN_NO_PY_BOOTSTRAP=1
 ZEN=../../../target/release/zen
 ```
 
-Requirements:\n- Zen built with `--features python`\n- Python 3.9+ with `venv`\n- `chromium` for Selenium and CDP\n- `chromedriver` matching Chromium for Selenium\n- Network access
+Requirements:
+- Zen built with `--features python`
+- Python 3.9+ with `venv`
+- `chromium` for Selenium and CDP
+- `chromedriver` matching Chromium for Selenium
+- Network access
 
 Alternatively, let Zen manage a project environment: this directory has its own `requirements.txt`, so `zen py-sync` creates `.zen_venv/` and `zen run` uses it automatically. See [Chapter 42](../interop/42-pymport-python-interoperability.md).
 
@@ -363,7 +371,10 @@ Chromedriver must match the Chromium major version. On Debian/Ubuntu: `apt insta
 
 This example uses no automation library. Zen launches Chromium with `--remote-debugging-port`, discovers the page target over HTTP (`/json/list`), upgrades to a WebSocket, sends masked CDP frames through `sys.write_bytes` on the socket fd, and parses unmasked server frames byte by byte.
 
-Key protocol details:\n- **HTTP**: parse headers and stop at `Content-Length`. Chrome may keep the connection open despite `Connection: close`; waiting for EOF produces a timeout (`EAGAIN`).\n- **WebSocket**: client frames must be masked. Extended lengths are 126 + 16-bit or 127 + 64-bit. Server frames are not masked.\n- **Binary writes**: `socket.send` takes a string and would UTF-8 re-encode masked bytes. `sys.write_bytes(fd, hex)` writes raw bytes, so the frame is built as a byte list, hex-encoded, and written to `socket.fileno(sock)`.
+Key protocol details:
+- **HTTP**: parse headers and stop at `Content-Length`. Chrome may keep the connection open despite `Connection: close`; waiting for EOF produces a timeout (`EAGAIN`).
+- **WebSocket**: client frames must be masked. Extended lengths are 126 + 16-bit or 127 + 64-bit. Server frames are not masked.
+- **Binary writes**: `socket.send` takes a string and would UTF-8 re-encode masked bytes. `sys.write_bytes(fd, hex)` writes raw bytes, so the frame is built as a byte list, hex-encoded, and written to `socket.fileno(sock)`.
 
 `cdp_tiktok.z` helpers:
 
