@@ -106,6 +106,9 @@ This comprehensive guide is organized into detailed sections covering every aspe
 85. [Base64 Tool](reference/85-reference-base64-tool.md) - encode/decode files and strings
 86. [Word Frequency Analyzer](reference/86-reference-word-frequency.md) - top-N word counts
 87. [Env Template Expander](reference/87-reference-env-template.md) - ${VAR} from environment
+88. [File Deduplicator](reference/88-reference-file-dedup.md) - content-addressed duplicate detection
+89. [JSON API Mock Server](reference/89-reference-mock-api.md) - canned HTTP responses
+90. [Settings Manager](reference/90-reference-settings.md) - INI-style config read/write
 
 ### Part 9: Runtime Internals
 50. [Zen VM and Runtime Internals](advanced/50-vm-runtime-internals.md) - interpreter, JIT, GC, memory
